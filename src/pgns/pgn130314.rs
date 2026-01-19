@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct ActualPressure {
+    pub pgn: u32,
     sid: u8,
     pub instance: u8,
     pub source: u8,
@@ -31,6 +32,7 @@ impl ActualPressure {
         let pressure = pressure_raw as f64;
         
         Some(Self {
+            pgn: 130314,
             sid: data[0],
             instance: data[1],
             source: data[2],

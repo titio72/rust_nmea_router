@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct Temperature {
+    pub pgn: u32,
     sid: u8,
     pub instance: u8,
     pub source: u8,
@@ -20,6 +21,7 @@ impl Temperature {
             None
         };
         Some(Self {
+            pgn: 130312,
             sid: data[0],
             instance: data[1],
             source: data[2],
