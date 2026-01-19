@@ -1,6 +1,7 @@
 # NMEA2000 Router
 
 A robust Rust application for monitoring NMEA2000 marine data networks, with intelligent database persistence and automatic time synchronization.
+This is a new project spawned from https://github.com/titio72/nmearouter, mostly to learn rust and get familiar with my friend Claude.
 
 ## Features
 
