@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct RateOfTurn {
+    pub pgn: u32,
     sid: u8,
     pub rate: f64, // radians per second
 }
@@ -12,6 +13,7 @@ impl RateOfTurn {
             return None;
         }
         Some(Self {
+            pgn: 127251,
             sid: data[0],
             rate: i32::from_le_bytes([data[1], data[2], data[3], data[4]]) as f64 * 1e-6,
         })

@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct PositionRapidUpdate {
+    pub pgn: u32,
     pub latitude: f64,  // degrees
     pub longitude: f64, // degrees
 }
@@ -12,6 +13,7 @@ impl PositionRapidUpdate {
             return None;
         }
         Some(Self {
+            pgn: 129025,
             latitude: i32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64 * 1e-7,
             longitude: i32::from_le_bytes([data[4], data[5], data[6], data[7]]) as f64 * 1e-7,
         })

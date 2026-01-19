@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct GnssPositionData {
+    pub pgn: u32,
     sid: u8,
     date: u16, // days since 1970-01-01
     time: f64, // seconds since midnight
@@ -46,6 +47,7 @@ impl GnssPositionData {
             return None;
         }
         Some(Self {
+            pgn: 129029,
             sid: data[0],
             date: u16::from_le_bytes([data[1], data[2]]),
             time: u32::from_le_bytes([data[3], data[4], data[5], data[6]]) as f64 * 0.0001,

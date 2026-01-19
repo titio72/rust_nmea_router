@@ -1,7 +1,10 @@
 use std::fmt;
 
+use chrono::DateTime;
+
 #[derive(Debug, Clone)]
 pub struct SystemTime {
+    pub pgn: u32,
     pub sid: u8,
     pub source: u8,
     pub date: u16,      // Days since January 1, 1970
@@ -20,6 +23,7 @@ impl SystemTime {
         let time = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
 
         Some(SystemTime {
+            pgn: 126992,
             sid,
             source,
             date,
@@ -39,11 +43,31 @@ impl SystemTime {
         seconds_from_date + seconds_since_midnight
     }
 
+    pub fn to_total_milliseconds(&self) -> i64 {
+        let unix_timestamp = self.to_unix_timestamp() as u64;
+        let total_ms = unix_timestamp * 1000 + self.milliseconds() as u64;
+        total_ms as i64
+    }
+
     /// Get milliseconds component
     pub fn milliseconds(&self) -> u32 {
         // Time is in units of 0.0001 seconds (100 microseconds)
         let total_ms = (self.time as f64 * 0.0001 * 1000.0) as u32;
         total_ms % 1000
+    }
+
+    pub fn to_date_time(&self) -> DateTime<chrono::Utc> {
+        let unix_timestamp = self.to_unix_timestamp();
+        let naive = chrono::NaiveDateTime::from_timestamp_opt(unix_timestamp, self.milliseconds() * 1_000_000)
+            .expect("Invalid timestamp");
+        DateTime::<chrono::Utc>::from_utc(naive, chrono::Utc)
+    }
+
+    pub fn to_system_time(&self) -> std::time::SystemTime {
+        let unix_timestamp = self.to_unix_timestamp();
+        let duration = std::time::Duration::from_secs(unix_timestamp as u64)
+            + std::time::Duration::from_millis(self.milliseconds() as u64);
+        std::time::UNIX_EPOCH + duration
     }
 }
 
@@ -96,6 +120,7 @@ mod tests {
     fn test_system_time_to_unix_timestamp_epoch() {
         // Day 0, time 0 should be Unix epoch
         let time = SystemTime {
+            pgn: 126992,
             sid: 0,
             source: 0,
             date: 0,
@@ -110,6 +135,7 @@ mod tests {
     fn test_system_time_to_unix_timestamp_one_day() {
         // Day 1, time 0 should be 86400 seconds
         let time = SystemTime {
+            pgn: 126992,
             sid: 0,
             source: 0,
             date: 1,
@@ -124,6 +150,7 @@ mod tests {
     fn test_system_time_to_unix_timestamp_with_time() {
         // Day 1, 1 hour (3600 seconds = 36000000 in 0.0001 units)
         let time = SystemTime {
+            pgn: 126992,
             sid: 0,
             source: 0,
             date: 1,
@@ -137,6 +164,7 @@ mod tests {
     #[test]
     fn test_system_time_milliseconds_zero() {
         let time = SystemTime {
+            pgn: 126992,
             sid: 0,
             source: 0,
             date: 0,
@@ -151,6 +179,7 @@ mod tests {
     fn test_system_time_milliseconds_extraction() {
         // 1.5 seconds = 15000 in 0.0001 second units
         let time = SystemTime {
+            pgn: 126992,
             sid: 0,
             source: 0,
             date: 0,
@@ -165,6 +194,7 @@ mod tests {
     fn test_system_time_milliseconds_full_second() {
         // Exactly 1 second = 10000 in 0.0001 second units
         let time = SystemTime {
+            pgn: 126992,
             sid: 0,
             source: 0,
             date: 0,
@@ -179,6 +209,7 @@ mod tests {
     fn test_system_time_milliseconds_complex() {
         // 3.75 seconds = 37500 in 0.0001 second units
         let time = SystemTime {
+            pgn: 126992,
             sid: 0,
             source: 0,
             date: 0,
@@ -194,6 +225,7 @@ mod tests {
         // January 1, 2024 00:00:00 UTC
         // Days since 1970-01-01: 19723 days (leap years included)
         let time = SystemTime {
+            pgn: 126992,
             sid: 0,
             source: 0,
             date: 19723,

@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct Humidity {
+    pub pgn: u32,
     sid: u8,
     pub instance: u8,
     pub source: u8,
@@ -31,6 +32,7 @@ impl Humidity {
         };
         
         Some(Self {
+            pgn: 130313,
             sid: data[0],
             instance: data[1],
             source: data[2],

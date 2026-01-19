@@ -1,5 +1,6 @@
+use nmea2000::Identifier;
 use socketcan::{CanSocket, EmbeddedFrame, ExtendedId, Frame, Socket};
-use std::error::Error;
+use std::{error::Error, time::Instant};
 
 mod pgns;
 mod stream_reader;
@@ -15,6 +16,8 @@ use time_monitor::TimeMonitor;
 use environmental_monitor::EnvironmentalMonitor;
 use db::VesselDatabase;
 use config::Config;
+
+use crate::pgns::SystemTime;
 
 // ========== Display & Utility Functions ==========
 /*
@@ -153,14 +156,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 
                 // Process the frame through the stream reader
                 if let Some(n2k_frame) = reader.process_frame(extended_id, data) {
-                    println!("Complete Msg: {}", n2k_frame.message);
+                    if n2k_frame.identifier.pgn() == 126992 {
+                        let sys_time: SystemTime = pgns::pgn126992::SystemTime::from_bytes(&n2k_frame.data).expect("msg");
+                        println!("System Time: {:?} {:?}", sys_time.to_date_time(), sys_time.to_total_milliseconds() - chrono::Utc::now().timestamp_millis());
+                    }
                     // Update monitors with incoming messages
                     match &n2k_frame.message {
                         pgns::N2kMessage::PositionRapidUpdate(pos) => {
                             vessel_monitor.process_position(pos);
                         }
                         pgns::N2kMessage::CogSogRapidUpdate(cog_sog) => {
-                            vessel_monitor.process_cog_sog(cog_sog);
+                            vessel_monitor.process_cog_sog(cog_sog);    
                         }
                         pgns::N2kMessage::SystemTime(sys_time) => {
                             time_monitor.process_system_time(sys_time);
@@ -179,6 +185,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                         }
                         pgns::N2kMessage::Attitude(attitude) => {
                             env_monitor.process_attitude(attitude);
+                        }
+                        pgns::N2kMessage::EngineRapidUpdate(engine) => {
+                            vessel_monitor.process_engine(engine);
                         }
                         _ => {}
                     }

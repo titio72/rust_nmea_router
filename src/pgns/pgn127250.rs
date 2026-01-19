@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct VesselHeading {
+    pub pgn: u32,
     sid: u8,
     pub heading: f64, // radians
     pub deviation: Option<f64>,
@@ -23,6 +24,7 @@ impl VesselHeading {
             return None;
         }
         Some(Self {
+            pgn: 127250,
             sid: data[0],
             heading: u16::from_le_bytes([data[1], data[2]]) as f64 * 0.0001,
             deviation: Some(i16::from_le_bytes([data[3], data[4]]) as f64 * 0.0001),

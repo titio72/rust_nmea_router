@@ -4,6 +4,7 @@ use super::pgn126992::SystemTime;
 use super::pgn127250::VesselHeading;
 use super::pgn127251::RateOfTurn;
 use super::pgn127257::Attitude;
+use super::pgn127488::EngineRapidUpdate;
 use super::pgn128259::SpeedWaterReferenced;
 use super::pgn128267::WaterDepth;
 use super::pgn129025::PositionRapidUpdate;
@@ -29,6 +30,7 @@ pub enum N2kMessage {
     VesselHeading(VesselHeading),
     RateOfTurn(RateOfTurn),
     Attitude(Attitude),
+    EngineRapidUpdate(EngineRapidUpdate),
     SpeedWaterReferenced(SpeedWaterReferenced),
     WaterDepth(WaterDepth),
     PositionRapidUpdate(PositionRapidUpdate),
@@ -56,6 +58,9 @@ impl N2kMessage {
                 .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
             127257 => Attitude::from_bytes(data)
                 .map(N2kMessage::Attitude)
+                .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
+            127488 => EngineRapidUpdate::from_bytes(data)
+                .map(N2kMessage::EngineRapidUpdate)
                 .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
             128259 => SpeedWaterReferenced::from_bytes(data)
                 .map(N2kMessage::SpeedWaterReferenced)
@@ -99,6 +104,7 @@ impl fmt::Display for N2kMessage {
             N2kMessage::VesselHeading(msg) => write!(f, "{}", msg),
             N2kMessage::RateOfTurn(msg) => write!(f, "{}", msg),
             N2kMessage::Attitude(msg) => write!(f, "{}", msg),
+            N2kMessage::EngineRapidUpdate(msg) => write!(f, "{}", msg),
             N2kMessage::SpeedWaterReferenced(msg) => write!(f, "{}", msg),
             N2kMessage::WaterDepth(msg) => write!(f, "{}", msg),
             N2kMessage::PositionRapidUpdate(msg) => write!(f, "{}", msg),

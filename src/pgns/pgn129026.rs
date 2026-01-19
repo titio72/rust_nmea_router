@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct CogSogRapidUpdate {
+    pub pgn: u32,
     sid: u8,
     pub cog_reference: bool, // true = True, false = Magnetic
     pub cog: f64, // radians
@@ -14,6 +15,7 @@ impl CogSogRapidUpdate {
             return None;
         }
         Some(Self {
+            pgn: 129026,
             sid: data[0],
             cog_reference: (data[1] & 0x03) == 0,
             cog: u16::from_le_bytes([data[2], data[3]]) as f64 * 0.0001,

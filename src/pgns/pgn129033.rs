@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct TimeDate {
+    pub pgn: u32,
     pub date: u16, // days since 1970-01-01
     pub time: f64, // seconds since midnight
 }
@@ -12,6 +13,7 @@ impl TimeDate {
             return None;
         }
         Some(Self {
+            pgn: 129033,
             date: u16::from_le_bytes([data[0], data[1]]),
             time: u32::from_le_bytes([data[2], data[3], data[4], data[5]]) as f64 * 0.0001,
         })

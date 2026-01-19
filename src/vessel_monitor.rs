@@ -14,6 +14,7 @@ pub struct VesselStatus {
     pub average_speed_30s: f64,  // m/s
     pub max_speed_30s: f64,       // m/s
     pub is_moored: bool,
+    pub engine_on: bool,
     pub timestamp: Instant,
 }
 
@@ -56,6 +57,7 @@ pub struct VesselMonitor {
     last_event_time: Instant,
     last_db_persist_time: Instant,
     current_position: Option<Position>,
+    engine_on: bool,
     config: VesselStatusConfig,
 }
 
@@ -67,6 +69,7 @@ impl VesselMonitor {
             last_event_time: Instant::now(),
             last_db_persist_time: Instant::now(),
             current_position: None,
+            engine_on: false,
             config,
         }
     }
@@ -116,6 +119,11 @@ impl VesselMonitor {
         }
     }
 
+    /// Process engine rapid update to determine engine status
+    pub fn process_engine(&mut self, engine_msg: &crate::pgns::EngineRapidUpdate) {
+        self.engine_on = engine_msg.is_engine_running();
+    }
+
     /// Check if it's time to generate a status event
     pub fn should_generate_event(&self) -> bool {
         Instant::now().duration_since(self.last_event_time) >= EVENT_INTERVAL
@@ -155,6 +163,7 @@ impl VesselMonitor {
             average_speed_30s: average_speed,
             max_speed_30s: max_speed,
             is_moored,
+            engine_on: self.engine_on,
             timestamp: now,
         })
     }
@@ -251,6 +260,8 @@ impl std::fmt::Display for VesselStatus {
                  self.max_speed_30s, self.max_speed_30s * 1.94384)?;
         writeln!(f, "║ Status:       {}                              ║", 
                  if self.is_moored { "⚓ MOORED  " } else { "⛵ UNDERWAY" })?;
+        writeln!(f, "║ Engine:       {}                                ║", 
+                 if self.engine_on { "🟢 ON  " } else { "⚫ OFF " })?;
         writeln!(f, "╚════════════════════════════════════════════════════╝")
     }
 }
@@ -306,6 +317,7 @@ mod tests {
         let mut monitor = VesselMonitor::new(config);
         
         let position_msg = PositionRapidUpdate {
+            pgn: 129025,
             latitude: 45.0,
             longitude: -122.0,
         };
@@ -383,6 +395,7 @@ mod tests {
         
         // Add multiple positions at the same location over time
         let position_msg = PositionRapidUpdate {
+            pgn: 129025,
             latitude: 45.0,
             longitude: -122.0,
         };
@@ -404,6 +417,7 @@ mod tests {
         
         // Add some data
         let position_msg = PositionRapidUpdate {
+            pgn: 129025,
             latitude: 45.0,
             longitude: -122.0,
         };

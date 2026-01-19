@@ -136,6 +136,7 @@ mod tests {
         let nmea_time_units = current_seconds * 10000;
         
         let nmea_time = SystemTime {
+            pgn: 126992,
             sid: 0,
             source: 0,
             date: current_days,
@@ -155,6 +156,7 @@ mod tests {
         // Create a system time far in the past (definitely beyond threshold)
         let old_date = 10000; // Days since 1970 (way in the past)
         let nmea_time = SystemTime {
+            pgn: 126992,
             sid: 0,
             source: 0,
             date: old_date,
@@ -172,6 +174,7 @@ mod tests {
         // Test a known date/time
         // January 2, 1970, 00:01:00 UTC
         let nmea_time = SystemTime {
+            pgn: 126992,
             sid: 0,
             source: 0,
             date: 1, // 1 day since epoch
@@ -187,6 +190,7 @@ mod tests {
     fn test_system_time_milliseconds() {
         // Test milliseconds extraction
         let nmea_time = SystemTime {
+            pgn: 126992,
             sid: 0,
             source: 0,
             date: 0,

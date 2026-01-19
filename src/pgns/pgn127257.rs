@@ -1,5 +1,6 @@
 #[derive(Debug, Clone)]
 pub struct Attitude {
+    pub pgn: u32,
     sid: u8,
     pub yaw: Option<f64>,   // radians
     pub pitch: Option<f64>, // radians
@@ -36,6 +37,7 @@ impl Attitude {
             };
             
             return Some(Attitude {
+                pgn: 127257,
                 sid,
                 yaw,
                 pitch,

@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct WaterDepth {
+    pub pgn: u32,
     sid: u8,
     pub depth: f64, // meters
     pub offset: f64, // meters
@@ -13,6 +14,7 @@ impl WaterDepth {
             return None;
         }
         Some(Self {
+            pgn: 128267,
             sid: data[0],
             depth: u32::from_le_bytes([data[1], data[2], data[3], data[4]]) as f64 * 0.01,
             offset: i16::from_le_bytes([data[5], data[6]]) as f64 * 0.001,

@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct WindData {
+    pub pgn: u32,
     sid: u8,
     pub speed: f64, // m/s
     pub angle: f64, // radians
@@ -23,6 +24,7 @@ impl WindData {
             return None;
         }
         Some(Self {
+            pgn: 130306,
             sid: data[0],
             speed: u16::from_le_bytes([data[1], data[2]]) as f64 * 0.01,
             angle: u16::from_le_bytes([data[3], data[4]]) as f64 * 0.0001,
