@@ -381,3 +381,219 @@ impl Default for EnvironmentalMonitor {
         Self::new(crate::config::EnvironmentalConfig::default())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_metric_id_as_u8() {
+        assert_eq!(MetricId::Pressure.as_u8(), 1);
+        assert_eq!(MetricId::CabinTemp.as_u8(), 2);
+        assert_eq!(MetricId::WaterTemp.as_u8(), 3);
+        assert_eq!(MetricId::Humidity.as_u8(), 4);
+        assert_eq!(MetricId::WindSpeed.as_u8(), 5);
+        assert_eq!(MetricId::WindDir.as_u8(), 6);
+        assert_eq!(MetricId::Roll.as_u8(), 7);
+    }
+
+    #[test]
+    fn test_metric_id_unit() {
+        assert_eq!(MetricId::Pressure.unit(), "Pa");
+        assert_eq!(MetricId::CabinTemp.unit(), "C");
+        assert_eq!(MetricId::WaterTemp.unit(), "C");
+        assert_eq!(MetricId::Humidity.unit(), "%");
+        assert_eq!(MetricId::WindSpeed.unit(), "m/s");
+        assert_eq!(MetricId::WindDir.unit(), "deg");
+        assert_eq!(MetricId::Roll.unit(), "deg");
+    }
+
+    #[test]
+    fn test_metric_id_name() {
+        assert_eq!(MetricId::Pressure.name(), "pressure");
+        assert_eq!(MetricId::CabinTemp.name(), "cabin_temp");
+        assert_eq!(MetricId::WaterTemp.name(), "water_temp");
+        assert_eq!(MetricId::Humidity.name(), "humidity");
+        assert_eq!(MetricId::WindSpeed.name(), "wind_speed");
+        assert_eq!(MetricId::WindDir.name(), "wind_dir");
+        assert_eq!(MetricId::Roll.name(), "roll");
+    }
+
+    #[test]
+    fn test_environmental_monitor_creation() {
+        let config = EnvironmentalConfig::default();
+        let monitor = EnvironmentalMonitor::new(config);
+        assert_eq!(monitor.pressure_samples.len(), 0);
+        assert_eq!(monitor.cabin_temp_samples.len(), 0);
+    }
+
+    #[test]
+    fn test_process_pressure() {
+        let config = EnvironmentalConfig::default();
+        let mut monitor = EnvironmentalMonitor::new(config);
+        
+        // Create pressure message using from_bytes: 101325 Pa (1 atm)
+        let data = vec![
+            0x01, // SID
+            0x00, // Instance
+            0x00, // Source
+            0x0D, 0x8B, 0x01, 0x00, // Pressure = 101325 Pa
+        ];
+        let pressure_msg = ActualPressure::from_bytes(&data).unwrap();
+        
+        monitor.process_actual_pressure(&pressure_msg);
+        assert_eq!(monitor.pressure_samples.len(), 1);
+    }
+
+    #[test]
+    fn test_process_temperature_cabin() {
+        let config = EnvironmentalConfig::default();
+        let mut monitor = EnvironmentalMonitor::new(config);
+        
+        // Create temperature message: 20.5°C = 293.65 K
+        // Source must be 4 (Inside Ambient) for cabin temp
+        let data = vec![
+            0x01, // SID
+            0x00, // Instance (cabin)
+            0x04, // Source = 4 (Inside Ambient)
+            0x25, 0x72, // Temperature = 29285 * 0.01 = 292.85 K ≈ 19.7°C
+            0x00, // Padding to reach 6 bytes
+        ];
+        let temp_msg = Temperature::from_bytes(&data).unwrap();
+        
+        monitor.process_temperature(&temp_msg);
+        assert_eq!(monitor.cabin_temp_samples.len(), 1);
+    }
+
+    #[test]
+    fn test_process_temperature_water() {
+        let config = EnvironmentalConfig::default();
+        let mut monitor = EnvironmentalMonitor::new(config);
+        
+        // Create temperature message: 15.5°C = 288.65 K
+        // Source must be 0 (Water) and instance=0 for water temp
+        let data = vec![
+            0x01, // SID
+            0x00, // Instance = 0
+            0x00, // Source = 0 (Water)
+            0xD9, 0x70, // Temperature = 28889 * 0.01 = 288.89 K ≈ 15.74°C
+            0x00, // Padding to reach 6 bytes
+        ];
+        let temp_msg = Temperature::from_bytes(&data).unwrap();
+        
+        monitor.process_temperature(&temp_msg);
+        assert_eq!(monitor.water_temp_samples.len(), 1);
+    }
+
+    #[test]
+    fn test_process_humidity() {
+        let config = EnvironmentalConfig::default();
+        let mut monitor = EnvironmentalMonitor::new(config);
+        
+        // Create humidity message: 65.0%
+        // Need at least 6 bytes for Humidity::from_bytes
+        let data = vec![
+            0x01, // SID
+            0x00, // Instance
+            0x00, // Source
+            0x22, 0x40, // Humidity = 16418 * 0.004 = 65.672% ≈ 65%
+            0x00, 0x00, // Padding to reach 6+ bytes
+        ];
+        let humidity_msg = Humidity::from_bytes(&data).unwrap();
+        
+        monitor.process_humidity(&humidity_msg);
+        assert_eq!(monitor.humidity_samples.len(), 1);
+    }
+
+    #[test]
+    fn test_process_wind() {
+        let config = EnvironmentalConfig::default();
+        let mut monitor = EnvironmentalMonitor::new(config);
+        
+        // Create wind message: 5.5 m/s, 180° (pi radians)
+        let data = vec![
+            0x01, // SID
+            0x26, 0x02, // Speed = 550 * 0.01 = 5.5 m/s
+            0x54, 0x7B, // Angle = 31572 * 0.0001 rad ≈ 180.9°
+            0x02, // Reference (Apparent)
+        ];
+        let wind_msg = WindData::from_bytes(&data).unwrap();
+        
+        monitor.process_wind(&wind_msg);
+        assert_eq!(monitor.wind_speed_samples.len(), 1);
+        assert_eq!(monitor.wind_dir_samples.len(), 1);
+    }
+
+    #[test]
+    fn test_process_attitude_roll() {
+        let config = EnvironmentalConfig::default();
+        let mut monitor = EnvironmentalMonitor::new(config);
+        
+        let attitude_msg = Attitude::from_bytes(&vec![
+            0x01,
+            0x00, 0x00,
+            0x00, 0x00,
+            0xE8, 0x03, // Roll = 1000 * 0.0001 = 0.1 rad ≈ 5.73°
+        ]).unwrap();
+        
+        monitor.process_attitude(&attitude_msg);
+        assert_eq!(monitor.roll_samples.len(), 1);
+    }
+
+    #[test]
+    fn test_mark_metrics_persisted() {
+        let config = EnvironmentalConfig::default();
+        let mut monitor = EnvironmentalMonitor::new(config);
+        
+        let metrics = vec![MetricId::Pressure, MetricId::CabinTemp];
+        monitor.mark_metrics_persisted(&metrics);
+        
+        assert!(monitor.last_db_persist.contains_key(&MetricId::Pressure));
+        assert!(monitor.last_db_persist.contains_key(&MetricId::CabinTemp));
+        assert!(!monitor.last_db_persist.contains_key(&MetricId::WindSpeed));
+    }
+
+    #[test]
+    fn test_get_metrics_to_persist_initial() {
+        let config = EnvironmentalConfig {
+            wind_speed_seconds: 10,
+            wind_direction_seconds: 10,
+            roll_seconds: 10,
+            pressure_seconds: 10,
+            cabin_temp_seconds: 10,
+            water_temp_seconds: 10,
+            humidity_seconds: 10,
+        };
+        let monitor = EnvironmentalMonitor::new(config);
+        
+        // Initially, all metrics should be ready to persist
+        let metrics = monitor.get_metrics_to_persist();
+        assert_eq!(metrics.len(), 7);
+    }
+
+    #[test]
+    fn test_metric_data_all_none() {
+        let data = MetricData {
+            avg: None,
+            max: None,
+            min: None,
+        };
+        
+        assert!(data.avg.is_none());
+        assert!(data.max.is_none());
+        assert!(data.min.is_none());
+    }
+
+    #[test]
+    fn test_metric_data_with_values() {
+        let data = MetricData {
+            avg: Some(20.5),
+            max: Some(25.0),
+            min: Some(18.0),
+        };
+        
+        assert_eq!(data.avg.unwrap(), 20.5);
+        assert_eq!(data.max.unwrap(), 25.0);
+        assert_eq!(data.min.unwrap(), 18.0);
+    }
+}

@@ -97,3 +97,104 @@ impl Default for TimeMonitor {
         Self::new(500)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pgns::SystemTime;
+
+    #[test]
+    fn test_time_monitor_default() {
+        let monitor = TimeMonitor::default();
+        assert_eq!(monitor.time_skew_threshold_ms, 500);
+        assert!(!monitor.has_time_skew);
+    }
+
+    #[test]
+    fn test_time_monitor_custom_threshold() {
+        let monitor = TimeMonitor::new(1000);
+        assert_eq!(monitor.time_skew_threshold_ms, 1000);
+    }
+
+    #[test]
+    fn test_is_time_synchronized_initially() {
+        let monitor = TimeMonitor::new(500);
+        assert!(monitor.is_time_synchronized());
+    }
+
+    #[test]
+    fn test_time_skew_detection_within_threshold() {
+        let mut monitor = TimeMonitor::new(500);
+        
+        // Create a system time close to current time (within threshold)
+        let now = StdSystemTime::now();
+        let duration = now.duration_since(UNIX_EPOCH).unwrap();
+        let current_days = (duration.as_secs() / 86400) as u16;
+        let current_seconds = (duration.as_secs() % 86400) as u32;
+        
+        // Convert to NMEA2000 units (0.0001 seconds)
+        let nmea_time_units = current_seconds * 10000;
+        
+        let nmea_time = SystemTime {
+            sid: 0,
+            source: 0,
+            date: current_days,
+            time: nmea_time_units,
+        };
+        
+        monitor.process_system_time(&nmea_time);
+        
+        // Time should be synchronized (skew within threshold)
+        assert!(monitor.is_time_synchronized());
+    }
+
+    #[test]
+    fn test_time_skew_detection_beyond_threshold() {
+        let mut monitor = TimeMonitor::new(500);
+        
+        // Create a system time far in the past (definitely beyond threshold)
+        let old_date = 10000; // Days since 1970 (way in the past)
+        let nmea_time = SystemTime {
+            sid: 0,
+            source: 0,
+            date: old_date,
+            time: 0,
+        };
+        
+        monitor.process_system_time(&nmea_time);
+        
+        // Time should NOT be synchronized (large skew)
+        assert!(!monitor.is_time_synchronized());
+    }
+
+    #[test]
+    fn test_system_time_to_unix_timestamp() {
+        // Test a known date/time
+        // January 2, 1970, 00:01:00 UTC
+        let nmea_time = SystemTime {
+            sid: 0,
+            source: 0,
+            date: 1, // 1 day since epoch
+            time: 600000, // 60 seconds * 10000 (0.0001 second units)
+        };
+        
+        let timestamp = nmea_time.to_unix_timestamp();
+        // 1 day (86400 seconds) + 60 seconds = 86460
+        assert_eq!(timestamp, 86460);
+    }
+
+    #[test]
+    fn test_system_time_milliseconds() {
+        // Test milliseconds extraction
+        let nmea_time = SystemTime {
+            sid: 0,
+            source: 0,
+            date: 0,
+            time: 12345, // 1.2345 seconds = 1234.5 ms
+        };
+        
+        let ms = nmea_time.milliseconds();
+        // 12345 * 0.0001 * 1000 = 1234.5 -> 1234 ms (integer part)
+        assert_eq!(ms, 234); // 234 ms within the current second
+    }
+}

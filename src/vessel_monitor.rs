@@ -254,3 +254,176 @@ impl std::fmt::Display for VesselStatus {
         writeln!(f, "╚════════════════════════════════════════════════════╝")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pgns::{PositionRapidUpdate, CogSogRapidUpdate};
+
+    #[test]
+    fn test_vessel_monitor_creation() {
+        let config = VesselStatusConfig {
+            interval_moored_seconds: 600,
+            interval_underway_seconds: 30,
+        };
+        let monitor = VesselMonitor::new(config);
+        assert_eq!(monitor.positions.len(), 0);
+        assert_eq!(monitor.speeds.len(), 0);
+        assert!(monitor.current_position.is_none());
+    }
+
+    #[test]
+    fn test_position_distance_calculation() {
+        // Test distance between two known positions
+        let pos1 = Position {
+            latitude: 0.0,
+            longitude: 0.0,
+        };
+        let pos2 = Position {
+            latitude: 0.0,
+            longitude: 0.001, // ~111 meters at equator
+        };
+        
+        let distance = pos1.distance_to(&pos2);
+        // Should be approximately 111 meters
+        assert!(distance > 100.0 && distance < 120.0);
+    }
+
+    #[test]
+    fn test_position_same_location() {
+        let pos = Position {
+            latitude: 45.0,
+            longitude: -122.0,
+        };
+        
+        let distance = pos.distance_to(&pos);
+        assert!(distance < 0.1); // Should be essentially zero
+    }
+
+    #[test]
+    fn test_process_position() {
+        let config = VesselStatusConfig::default();
+        let mut monitor = VesselMonitor::new(config);
+        
+        let position_msg = PositionRapidUpdate {
+            latitude: 45.0,
+            longitude: -122.0,
+        };
+        
+        monitor.process_position(&position_msg);
+        
+        assert!(monitor.current_position.is_some());
+        let pos = monitor.current_position.unwrap();
+        assert_eq!(pos.latitude, 45.0);
+        assert_eq!(pos.longitude, -122.0);
+        assert_eq!(monitor.positions.len(), 1);
+    }
+
+    #[test]
+    fn test_process_cog_sog() {
+        let config = VesselStatusConfig::default();
+        let mut monitor = VesselMonitor::new(config);
+        
+        // Create a valid COG/SOG message using from_bytes
+        let data = vec![
+            0x01, // SID
+            0x00, // COG reference (true)
+            0xB8, 0x22, // COG = 8888 * 0.0001 rad ≈ 50.9°
+            0xF4, 0x01, // SOG = 500 * 0.01 = 5.0 m/s
+            0x00, 0x00, // Reserved
+        ];
+        let cog_sog_msg = CogSogRapidUpdate::from_bytes(&data).unwrap();
+        
+        monitor.process_cog_sog(&cog_sog_msg);
+        
+        assert_eq!(monitor.speeds.len(), 1);
+    }
+
+    #[test]
+    fn test_should_persist_moored() {
+        let config = VesselStatusConfig {
+            interval_moored_seconds: 0, // Set to 0 so it always needs to persist
+            interval_underway_seconds: 5,
+        };
+        let monitor = VesselMonitor::new(config);
+        
+        // Should persist immediately with 0-second interval
+        assert!(monitor.should_persist_to_db(true));
+    }
+
+    #[test]
+    fn test_should_persist_underway() {
+        let config = VesselStatusConfig {
+            interval_moored_seconds: 10,
+            interval_underway_seconds: 0, // Set to 0 so it always needs to persist
+        };
+        let monitor = VesselMonitor::new(config);
+        
+        // Should persist immediately with 0-second interval
+        assert!(monitor.should_persist_to_db(false));
+    }
+
+    #[test]
+    fn test_mark_db_persisted() {
+        let config = VesselStatusConfig::default();
+        let mut monitor = VesselMonitor::new(config);
+        
+        let before = monitor.last_db_persist_time;
+        std::thread::sleep(Duration::from_millis(10));
+        monitor.mark_db_persisted();
+        let after = monitor.last_db_persist_time;
+        
+        assert!(after > before);
+    }
+
+    #[test]
+    fn test_mooring_detection_stationary() {
+        let config = VesselStatusConfig::default();
+        let mut monitor = VesselMonitor::new(config);
+        
+        // Add multiple positions at the same location over time
+        let position_msg = PositionRapidUpdate {
+            latitude: 45.0,
+            longitude: -122.0,
+        };
+        
+        for _ in 0..10 {
+            monitor.process_position(&position_msg);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        
+        let is_moored = monitor.is_vessel_moored();
+        // Should detect mooring (all positions within small radius)
+        assert!(is_moored);
+    }
+
+    #[test]
+    fn test_vessel_status_generation() {
+        let config = VesselStatusConfig::default();
+        let mut monitor = VesselMonitor::new(config);
+        
+        // Add some data
+        let position_msg = PositionRapidUpdate {
+            latitude: 45.0,
+            longitude: -122.0,
+        };
+        monitor.process_position(&position_msg);
+        
+        let data = vec![
+            0x01, 0x00,
+            0xB8, 0x22, // COG
+            0xC8, 0x00, // SOG = 200 * 0.01 = 2.0 m/s
+            0x00, 0x00,
+        ];
+        let cog_sog_msg = CogSogRapidUpdate::from_bytes(&data).unwrap();
+        monitor.process_cog_sog(&cog_sog_msg);
+        
+        // Wait for event interval
+        std::thread::sleep(Duration::from_millis(100));
+        
+        let status = monitor.generate_status();
+        if let Some(status) = status {
+            assert!(status.current_position.is_some());
+        }
+    }
+}

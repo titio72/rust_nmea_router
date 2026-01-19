@@ -82,6 +82,22 @@ fn decode_message(identifier: &Identifier, message: &pgns::N2kMessage, is_fast_p
 */
 // ========== Main Application ==========
 
+fn open_can_socket_with_retry(interface: &str) -> CanSocket {
+    loop {
+        match CanSocket::open(interface) {
+            Ok(socket) => {
+                println!("✓ Successfully opened CAN interface: {}", interface);
+                return socket;
+            }
+            Err(e) => {
+                eprintln!("⚠️  Failed to open CAN interface '{}': {}", interface, e);
+                eprintln!("   Retrying in 10 seconds...");
+                std::thread::sleep(std::time::Duration::from_secs(10));
+            }
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     println!("NMEA2000 Router - Starting...");
     
@@ -92,12 +108,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         Config::default()
     });
     
-    // Open CAN socket
+    // Open CAN socket with retry
     let interface = &config.can_interface;
     println!("Opening CAN interface: {}", interface);
     
-    let socket = CanSocket::open(interface)?;
-    println!("Successfully opened CAN interface");
+    let mut socket = open_can_socket_with_retry(interface);
     println!("Listening for NMEA2000 messages...\n");
     
     // Create database connection using config
@@ -219,7 +234,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             Err(e) => {
-                eprintln!("Error reading CAN frame: {}", e);
+                eprintln!("⚠️  Error reading CAN frame: {}", e);
+                eprintln!("⚠️  CAN bus connection lost. Attempting to reconnect...");
+                
+                // Try to reconnect
+                socket = open_can_socket_with_retry(interface);
+                eprintln!("✓ Reconnected to CAN bus. Resuming operation...\n");
             }
         }
     }

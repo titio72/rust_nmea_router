@@ -162,3 +162,143 @@ impl EnvironmentalConfig {
         Duration::from_secs(self.humidity_seconds)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_time_config_default() {
+        let config = TimeConfig::default();
+        assert_eq!(config.skew_threshold_ms, 500);
+    }
+
+    #[test]
+    fn test_database_connection_config_default() {
+        let config = DatabaseConnectionConfig::default();
+        assert_eq!(config.host, "localhost");
+        assert_eq!(config.port, 3306);
+        assert_eq!(config.username, "nmea");
+        assert_eq!(config.password, "nmea");
+        assert_eq!(config.database_name, "nmea_router");
+    }
+
+    #[test]
+    fn test_database_connection_url() {
+        let config = DatabaseConnectionConfig {
+            host: "testhost".to_string(),
+            port: 3307,
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+            database_name: "testdb".to_string(),
+        };
+        let url = config.connection_url();
+        assert_eq!(url, "mysql://testuser:testpass@testhost:3307/testdb");
+    }
+
+    #[test]
+    fn test_vessel_status_config_default() {
+        let config = VesselStatusConfig::default();
+        assert_eq!(config.interval_moored_seconds, 1800);
+        assert_eq!(config.interval_underway_seconds, 30);
+    }
+
+    #[test]
+    fn test_vessel_status_config_intervals() {
+        let config = VesselStatusConfig {
+            interval_moored_seconds: 120,
+            interval_underway_seconds: 10,
+        };
+        assert_eq!(config.interval_moored(), Duration::from_secs(120));
+        assert_eq!(config.interval_underway(), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_environmental_config_default() {
+        let config = EnvironmentalConfig::default();
+        assert_eq!(config.wind_speed_seconds, 30);
+        assert_eq!(config.wind_direction_seconds, 30);
+        assert_eq!(config.roll_seconds, 30);
+        assert_eq!(config.pressure_seconds, 120);
+        assert_eq!(config.cabin_temp_seconds, 300);
+        assert_eq!(config.water_temp_seconds, 300);
+        assert_eq!(config.humidity_seconds, 300);
+    }
+
+    #[test]
+    fn test_environmental_config_intervals() {
+        let config = EnvironmentalConfig {
+            wind_speed_seconds: 10,
+            wind_direction_seconds: 20,
+            roll_seconds: 30,
+            pressure_seconds: 40,
+            cabin_temp_seconds: 50,
+            water_temp_seconds: 60,
+            humidity_seconds: 70,
+        };
+        assert_eq!(config.wind_speed_interval(), Duration::from_secs(10));
+        assert_eq!(config.wind_direction_interval(), Duration::from_secs(20));
+        assert_eq!(config.roll_interval(), Duration::from_secs(30));
+        assert_eq!(config.pressure_interval(), Duration::from_secs(40));
+        assert_eq!(config.cabin_temp_interval(), Duration::from_secs(50));
+        assert_eq!(config.water_temp_interval(), Duration::from_secs(60));
+        assert_eq!(config.humidity_interval(), Duration::from_secs(70));
+    }
+
+    #[test]
+    fn test_config_default() {
+        let config = Config::default();
+        assert_eq!(config.can_interface, "vcan0");
+        assert_eq!(config.time.skew_threshold_ms, 500);
+        assert_eq!(config.database.connection.host, "localhost");
+        assert_eq!(config.database.vessel_status.interval_moored_seconds, 1800);
+        assert_eq!(config.database.environmental.wind_speed_seconds, 30);
+    }
+
+    #[test]
+    fn test_config_serialization() {
+        let config = Config::default();
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("vcan0"));
+        assert!(json.contains("localhost"));
+    }
+
+    #[test]
+    fn test_config_deserialization() {
+        let json = r#"{
+            "can_interface": "can0",
+            "time": {
+                "skew_threshold_ms": 1000
+            },
+            "database": {
+                "connection": {
+                    "host": "myhost",
+                    "port": 3306,
+                    "username": "user",
+                    "password": "pass",
+                    "database_name": "mydb"
+                },
+                "vessel_status": {
+                    "interval_moored_seconds": 600,
+                    "interval_underway_seconds": 15
+                },
+                "environmental": {
+                    "wind_speed_seconds": 20,
+                    "wind_direction_seconds": 20,
+                    "roll_seconds": 20,
+                    "pressure_seconds": 100,
+                    "cabin_temp_seconds": 200,
+                    "water_temp_seconds": 200,
+                    "humidity_seconds": 200
+                }
+            }
+        }"#;
+        
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.can_interface, "can0");
+        assert_eq!(config.time.skew_threshold_ms, 1000);
+        assert_eq!(config.database.connection.host, "myhost");
+        assert_eq!(config.database.vessel_status.interval_moored_seconds, 600);
+        assert_eq!(config.database.environmental.wind_speed_seconds, 20);
+    }
+}
