@@ -90,6 +90,8 @@ Every 30 seconds, the following vessel status data is written to the database:
 | `average_speed_ms` | DOUBLE | Average speed over last 30 seconds (m/s) |
 | `max_speed_ms` | DOUBLE | Maximum speed over last 30 seconds (m/s) |
 | `is_moored` | BOOLEAN | TRUE if moored (stable position for 2+ min) |
+| `engine_on` | BOOLEAN | TRUE if engine is running |
+| `total_distance_m` | DOUBLE | Distance traveled since last report (meters) |
 
 ## Querying Data
 
@@ -101,6 +103,9 @@ SELECT
     CONCAT(latitude, '° N, ', longitude, '° E') as position,
     ROUND(average_speed_ms * 1.94384, 2) as avg_speed_knots,
     ROUND(max_speed_ms * 1.94384, 2) as max_speed_knots,
+    ROUND(total_distance_m, 1) as distance_meters,
+    ROUND(total_distance_m / 1852.0, 3) as distance_nm,
+    IF(engine_on, '🟢 ON', '⚫ OFF') as engine,
     IF(is_moored, '⚓ MOORED', '⛵ UNDERWAY') as status
 FROM vessel_status 
 ORDER BY timestamp DESC 
@@ -143,6 +148,8 @@ SELECT
     latitude,
     longitude,
     ROUND(average_speed_ms * 1.94384, 2) as speed_knots,
+    ROUND(total_distance_m, 1) as distance_m,
+    engine_on,
     is_moored
 FROM vessel_status
 WHERE timestamp >= NOW() - INTERVAL 24 HOUR

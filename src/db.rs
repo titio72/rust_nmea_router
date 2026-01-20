@@ -24,6 +24,7 @@ impl VesselDatabase {
     ///     max_speed_ms DOUBLE NOT NULL,
     ///     is_moored BOOLEAN NOT NULL,
     ///     engine_on BOOLEAN NOT NULL DEFAULT 0,
+    ///     total_distance_m DOUBLE NOT NULL DEFAULT 0,
     ///     INDEX idx_timestamp (timestamp)
     /// );
     /// ```
@@ -51,8 +52,8 @@ impl VesselDatabase {
         
         conn.exec_drop(
             r"INSERT INTO vessel_status 
-              (timestamp, latitude, longitude, average_speed_ms, max_speed_ms, is_moored, engine_on)
-              VALUES (:timestamp, :latitude, :longitude, :avg_speed, :max_speed, :is_moored, :engine_on)",
+              (timestamp, latitude, longitude, average_speed_ms, max_speed_ms, is_moored, engine_on, total_distance_m)
+              VALUES (:timestamp, :latitude, :longitude, :avg_speed, :max_speed, :is_moored, :engine_on, :total_distance)",
             params! {
                 "timestamp" => timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
                 "latitude" => latitude,
@@ -61,6 +62,7 @@ impl VesselDatabase {
                 "max_speed" => status.max_speed_30s,
                 "is_moored" => status.is_moored,
                 "engine_on" => status.engine_on,
+                "total_distance" => status.total_distance_m,
             },
         )?;
         

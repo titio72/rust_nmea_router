@@ -15,6 +15,7 @@ pub struct VesselStatus {
     pub max_speed_30s: f64,       // m/s
     pub is_moored: bool,
     pub engine_on: bool,
+    pub total_distance_m: f64,    // Total distance traveled since last DB write (meters)
     #[allow(dead_code)]
     pub timestamp: Instant,
 }
@@ -58,6 +59,7 @@ pub struct VesselMonitor {
     last_event_time: Instant,
     last_db_persist_time: Instant,
     current_position: Option<Position>,
+    last_reported_position: Option<Position>,  // Position from the last generated report
     engine_on: bool,
     config: VesselStatusConfig,
 }
@@ -70,6 +72,7 @@ impl VesselMonitor {
             last_event_time: Instant::now(),
             last_db_persist_time: Instant::now(),
             current_position: None,
+            last_reported_position: None,
             engine_on: false,
             config,
         }
@@ -159,12 +162,22 @@ impl VesselMonitor {
         let max_speed = self.calculate_max_speed(EVENT_INTERVAL);
         let is_moored = self.is_vessel_moored();
 
+        // Calculate distance from last reported position to current position
+        let total_distance_m = match (self.last_reported_position, self.current_position) {
+            (Some(last_pos), Some(current_pos)) => last_pos.distance_to(&current_pos),
+            _ => 0.0,
+        };
+
+        // Update last reported position for next report
+        self.last_reported_position = self.current_position;
+
         Some(VesselStatus {
             current_position: self.current_position,
             average_speed_30s: average_speed,
             max_speed_30s: max_speed,
             is_moored,
             engine_on: self.engine_on,
+            total_distance_m,
             timestamp: now,
         })
     }
@@ -257,6 +270,8 @@ impl std::fmt::Display for VesselStatus {
                  self.average_speed_30s, self.average_speed_30s * 1.94384)?;
         writeln!(f, "║ Max Speed:    {:5.2} m/s ({:5.2} knots)              ║", 
                  self.max_speed_30s, self.max_speed_30s * 1.94384)?;
+        writeln!(f, "║ Distance:     {:8.1} m ({:6.3} nm)              ║", 
+                 self.total_distance_m, self.total_distance_m / 1852.0)?;
         writeln!(f, "║ Status:       {}                          ║", 
                  if self.is_moored { "⚓ MOORED  " } else { "⛵ UNDERWAY" })?;
         writeln!(f, "║ Engine:       {}                              ║", 

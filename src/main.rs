@@ -250,8 +250,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         warn!("Error writing to database: {}", e);
                                     } else {
                                         if let Some(pos) = status.current_position {
-                                            debug!("Vessel status written to database: lat={:.6}, lon={:.6}, avg_speed={:.2} m/s, moored={}", 
-                                                pos.latitude, pos.longitude, status.average_speed_30s, status.is_moored);
+                                            debug!("Vessel status written to database: lat={:.6}, lon={:.6}, avg_speed={:.2} m/s, distance={:.1} m, moored={}", 
+                                                pos.latitude, pos.longitude, status.average_speed_30s, status.total_distance_m, status.is_moored);
                                         }
                                         vessel_monitor.mark_db_persisted();
                                     }
