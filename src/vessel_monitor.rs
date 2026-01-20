@@ -15,6 +15,7 @@ pub struct VesselStatus {
     pub max_speed_30s: f64,       // m/s
     pub is_moored: bool,
     pub engine_on: bool,
+    #[allow(dead_code)]
     pub timestamp: Instant,
 }
 
@@ -228,11 +229,9 @@ impl VesselMonitor {
         };
 
         // Check if all positions are within threshold of average position
-        let all_within_threshold = recent_positions
+        recent_positions
             .iter()
-            .all(|p| p.position.distance_to(&avg_position) <= MOORING_THRESHOLD_METERS);
-
-        all_within_threshold
+            .all(|p| p.position.distance_to(&avg_position) <= MOORING_THRESHOLD_METERS)
     }
 }
 
@@ -249,18 +248,18 @@ impl std::fmt::Display for VesselStatus {
         writeln!(f, "╠════════════════════════════════════════════════════╣")?;
         
         if let Some(pos) = self.current_position {
-            writeln!(f, "║ Position:     {:.6}° N, {:.6}° E", pos.latitude, pos.longitude)?;
+            writeln!(f, "║ Position:     {:+010.6}°, {:+010.6}°             ║", pos.latitude, pos.longitude)?;
         } else {
             writeln!(f, "║ Position:     Unknown                              ║")?;
         }
         
-        writeln!(f, "║ Avg Speed:    {:.2} m/s ({:.2} knots)            ║", 
+        writeln!(f, "║ Avg Speed:    {:5.2} m/s ({:5.2} knots)              ║", 
                  self.average_speed_30s, self.average_speed_30s * 1.94384)?;
-        writeln!(f, "║ Max Speed:    {:.2} m/s ({:.2} knots)            ║", 
+        writeln!(f, "║ Max Speed:    {:5.2} m/s ({:5.2} knots)              ║", 
                  self.max_speed_30s, self.max_speed_30s * 1.94384)?;
-        writeln!(f, "║ Status:       {}                              ║", 
+        writeln!(f, "║ Status:       {}                          ║", 
                  if self.is_moored { "⚓ MOORED  " } else { "⛵ UNDERWAY" })?;
-        writeln!(f, "║ Engine:       {}                                ║", 
+        writeln!(f, "║ Engine:       {}                              ║", 
                  if self.engine_on { "🟢 ON  " } else { "⚫ OFF " })?;
         writeln!(f, "╚════════════════════════════════════════════════════╝")
     }

@@ -2,7 +2,9 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct RateOfTurn {
+    #[allow(dead_code)]
     pub pgn: u32,
+    #[allow(dead_code)]
     sid: u8,
     pub rate: f64, // radians per second
 }

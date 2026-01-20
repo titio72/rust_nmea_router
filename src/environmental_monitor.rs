@@ -35,6 +35,7 @@ impl MetricId {
         }
     }
     
+    #[allow(dead_code)]
     pub fn name(&self) -> &'static str {
         match self {
             MetricId::Pressure => "pressure",
@@ -57,6 +58,7 @@ pub struct MetricData {
 
 #[derive(Debug, Clone)]
 pub struct EnvironmentalReport {
+    #[allow(dead_code)]
     pub timestamp: Instant,
     pub pressure: MetricData,        // Pascals
     pub cabin_temp: MetricData,      // Celsius

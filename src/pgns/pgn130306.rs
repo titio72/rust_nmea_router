@@ -2,7 +2,9 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct WindData {
+    #[allow(dead_code)]
     pub pgn: u32,
+    #[allow(dead_code)]
     sid: u8,
     pub speed: f64, // m/s
     pub angle: f64, // radians

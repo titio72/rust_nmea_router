@@ -1,6 +1,8 @@
 #[derive(Debug, Clone)]
 pub struct Attitude {
+    #[allow(dead_code)]
     pub pgn: u32,
+    #[allow(dead_code)]
     sid: u8,
     pub yaw: Option<f64>,   // radians
     pub pitch: Option<f64>, // radians

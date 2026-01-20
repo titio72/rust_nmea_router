@@ -3,15 +3,18 @@ use std::fmt;
 use chrono::DateTime;
 
 #[derive(Debug, Clone)]
-pub struct SystemTime {
+pub struct NMEASystemTime {
+    #[allow(dead_code)]
     pub pgn: u32,
+    #[allow(dead_code)]
     pub sid: u8,
+    #[allow(dead_code)]
     pub source: u8,
     pub date: u16,      // Days since January 1, 1970
     pub time: u32,      // Seconds since midnight
 }
 
-impl SystemTime {
+impl NMEASystemTime {
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 8 {
             return None;
@@ -22,7 +25,7 @@ impl SystemTime {
         let date = u16::from_le_bytes([data[2], data[3]]);
         let time = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
 
-        Some(SystemTime {
+        Some(NMEASystemTime {
             pgn: 126992,
             sid,
             source,
@@ -58,11 +61,11 @@ impl SystemTime {
 
     pub fn to_date_time(&self) -> DateTime<chrono::Utc> {
         let unix_timestamp = self.to_unix_timestamp();
-        let naive = chrono::NaiveDateTime::from_timestamp_opt(unix_timestamp, self.milliseconds() * 1_000_000)
-            .expect("Invalid timestamp");
-        DateTime::<chrono::Utc>::from_utc(naive, chrono::Utc)
+        DateTime::<chrono::Utc>::from_timestamp(unix_timestamp, self.milliseconds() * 1_000_000)
+            .expect("Invalid timestamp")
     }
 
+    #[allow(dead_code)]
     pub fn to_system_time(&self) -> std::time::SystemTime {
         let unix_timestamp = self.to_unix_timestamp();
         let duration = std::time::Duration::from_secs(unix_timestamp as u64)
@@ -71,7 +74,7 @@ impl SystemTime {
     }
 }
 
-impl fmt::Display for SystemTime {
+impl fmt::Display for NMEASystemTime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let timestamp = self.to_unix_timestamp();
         let ms = self.milliseconds();
@@ -102,7 +105,7 @@ mod tests {
             0x80, 0x51, 0x01, 0x00, // Time = 86400 (1 day in 0.0001 second units)
         ];
         
-        let time = SystemTime::from_bytes(&data).unwrap();
+        let time = NMEASystemTime::from_bytes(&data).unwrap();
         assert_eq!(time.sid, 1);
         assert_eq!(time.source, 2);
         assert_eq!(time.date, 10);
@@ -112,14 +115,14 @@ mod tests {
     #[test]
     fn test_system_time_insufficient_data() {
         let data = vec![0x01, 0x02, 0x03]; // Only 3 bytes
-        let time = SystemTime::from_bytes(&data);
+        let time = NMEASystemTime::from_bytes(&data);
         assert!(time.is_none());
     }
 
     #[test]
     fn test_system_time_to_unix_timestamp_epoch() {
         // Day 0, time 0 should be Unix epoch
-        let time = SystemTime {
+        let time = NMEASystemTime {
             pgn: 126992,
             sid: 0,
             source: 0,
@@ -134,7 +137,7 @@ mod tests {
     #[test]
     fn test_system_time_to_unix_timestamp_one_day() {
         // Day 1, time 0 should be 86400 seconds
-        let time = SystemTime {
+        let time = NMEASystemTime {
             pgn: 126992,
             sid: 0,
             source: 0,
@@ -149,7 +152,7 @@ mod tests {
     #[test]
     fn test_system_time_to_unix_timestamp_with_time() {
         // Day 1, 1 hour (3600 seconds = 36000000 in 0.0001 units)
-        let time = SystemTime {
+        let time = NMEASystemTime {
             pgn: 126992,
             sid: 0,
             source: 0,
@@ -163,7 +166,7 @@ mod tests {
 
     #[test]
     fn test_system_time_milliseconds_zero() {
-        let time = SystemTime {
+        let time = NMEASystemTime {
             pgn: 126992,
             sid: 0,
             source: 0,
@@ -178,7 +181,7 @@ mod tests {
     #[test]
     fn test_system_time_milliseconds_extraction() {
         // 1.5 seconds = 15000 in 0.0001 second units
-        let time = SystemTime {
+        let time = NMEASystemTime {
             pgn: 126992,
             sid: 0,
             source: 0,
@@ -193,7 +196,7 @@ mod tests {
     #[test]
     fn test_system_time_milliseconds_full_second() {
         // Exactly 1 second = 10000 in 0.0001 second units
-        let time = SystemTime {
+        let time = NMEASystemTime {
             pgn: 126992,
             sid: 0,
             source: 0,
@@ -208,7 +211,7 @@ mod tests {
     #[test]
     fn test_system_time_milliseconds_complex() {
         // 3.75 seconds = 37500 in 0.0001 second units
-        let time = SystemTime {
+        let time = NMEASystemTime {
             pgn: 126992,
             sid: 0,
             source: 0,
@@ -224,7 +227,7 @@ mod tests {
     fn test_system_time_realistic_date() {
         // January 1, 2024 00:00:00 UTC
         // Days since 1970-01-01: 19723 days (leap years included)
-        let time = SystemTime {
+        let time = NMEASystemTime {
             pgn: 126992,
             sid: 0,
             source: 0,

@@ -2,7 +2,9 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct VesselHeading {
+    #[allow(dead_code)]
     pub pgn: u32,
+    #[allow(dead_code)]
     sid: u8,
     pub heading: f64, // radians
     pub deviation: Option<f64>,

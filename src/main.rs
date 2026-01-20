@@ -1,6 +1,6 @@
-use nmea2000::Identifier;
 use socketcan::{CanSocket, EmbeddedFrame, ExtendedId, Frame, Socket};
-use std::{error::Error, time::Instant};
+use std::error::Error;
+use tracing::{info, warn, debug};
 
 mod pgns;
 mod stream_reader;
@@ -17,7 +17,46 @@ use environmental_monitor::EnvironmentalMonitor;
 use db::VesselDatabase;
 use config::Config;
 
-use crate::pgns::SystemTime;
+// ========== Logging Setup ==========
+
+fn init_logging(log_config: &config::LogConfig) -> Result<(), Box<dyn Error>> {
+    use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+    use tracing_appender::rolling;
+    
+    // Create log directory if it doesn't exist
+    std::fs::create_dir_all(&log_config.directory)?;
+    
+    // Create daily rolling file appender
+    let file_appender = rolling::daily(&log_config.directory, &log_config.file_prefix);
+    
+    // Build subscriber with both console and file output
+    let file_layer = fmt::layer()
+        .with_writer(file_appender)
+        .with_ansi(false)
+        .with_timer(fmt::time::OffsetTime::local_rfc_3339().unwrap_or_else(|_| fmt::time::OffsetTime::new(
+            time::UtcOffset::UTC,
+            time::format_description::well_known::Rfc3339,
+        )));
+    
+    let console_layer = fmt::layer()
+        .with_writer(std::io::stdout)
+        .with_timer(fmt::time::OffsetTime::local_rfc_3339().unwrap_or_else(|_| fmt::time::OffsetTime::new(
+            time::UtcOffset::UTC,
+            time::format_description::well_known::Rfc3339,
+        )));
+    
+    // Parse log level from config
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(&log_config.level));
+    
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(console_layer)
+        .with(file_layer)
+        .init();
+    
+    Ok(())
+}
 
 // ========== Display & Utility Functions ==========
 /*
@@ -89,12 +128,12 @@ fn open_can_socket_with_retry(interface: &str) -> CanSocket {
     loop {
         match CanSocket::open(interface) {
             Ok(socket) => {
-                println!("✓ Successfully opened CAN interface: {}", interface);
+                info!("Successfully opened CAN interface: {}", interface);
                 return socket;
             }
             Err(e) => {
-                eprintln!("⚠️  Failed to open CAN interface '{}': {}", interface, e);
-                eprintln!("   Retrying in 10 seconds...");
+                warn!("Failed to open CAN interface '{}': {}", interface, e);
+                warn!("Retrying in 10 seconds...");
                 std::thread::sleep(std::time::Duration::from_secs(10));
             }
         }
@@ -102,8 +141,6 @@ fn open_can_socket_with_retry(interface: &str) -> CanSocket {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    println!("NMEA2000 Router - Starting...");
-    
     // Load configuration
     let config = Config::from_file("config.json").unwrap_or_else(|e| {
         eprintln!("Warning: Could not load config.json: {}", e);
@@ -111,24 +148,29 @@ fn main() -> Result<(), Box<dyn Error>> {
         Config::default()
     });
     
+    // Initialize logging
+    init_logging(&config.logging)?;
+    info!("NMEA2000 Router starting...");
+    info!("Loaded configuration");
+    
     // Open CAN socket with retry
     let interface = &config.can_interface;
-    println!("Opening CAN interface: {}", interface);
+    info!("Opening CAN interface: {}", interface);
     
     let mut socket = open_can_socket_with_retry(interface);
-    println!("Listening for NMEA2000 messages...\n");
+    info!("Listening for NMEA2000 messages");
     
     // Create database connection using config
     let db_url = config.database.connection.connection_url();
     
     let vessel_db = match VesselDatabase::new(&db_url) {
         Ok(db) => {
-            println!("Database connection established");
+            info!("Database connection established");
             Some(db)
         }
         Err(e) => {
-            eprintln!("Warning: Failed to connect to database: {}", e);
-            eprintln!("Continuing without database logging...\n");
+            warn!("Failed to connect to database: {}", e);
+            warn!("Continuing without database logging...");
             None
         }
     };
@@ -156,10 +198,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 
                 // Process the frame through the stream reader
                 if let Some(n2k_frame) = reader.process_frame(extended_id, data) {
-                    if n2k_frame.identifier.pgn() == 126992 {
-                        let sys_time: SystemTime = pgns::pgn126992::SystemTime::from_bytes(&n2k_frame.data).expect("msg");
-                        println!("System Time: {:?} {:?}", sys_time.to_date_time(), sys_time.to_total_milliseconds() - chrono::Utc::now().timestamp_millis());
+                    let pgn = n2k_frame.identifier.pgn();
+                    let source = n2k_frame.identifier.source();
+                    
+                    // Apply source filter - skip messages that don't match the configured source
+                    if !config.source_filter.should_accept(pgn, source) {
+                        continue;
                     }
+                    
                     // Update monitors with incoming messages
                     match &n2k_frame.message {
                         pgns::N2kMessage::PositionRapidUpdate(pos) => {
@@ -168,7 +214,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         pgns::N2kMessage::CogSogRapidUpdate(cog_sog) => {
                             vessel_monitor.process_cog_sog(cog_sog);    
                         }
-                        pgns::N2kMessage::SystemTime(sys_time) => {
+                        pgns::N2kMessage::NMEASystemTime(sys_time) => {
                             time_monitor.process_system_time(sys_time);
                         }
                         pgns::N2kMessage::Temperature(temp) => {
@@ -201,12 +247,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                             if vessel_monitor.should_persist_to_db(status.is_moored) {
                                 if time_monitor.is_time_synchronized() {
                                     if let Err(e) = db.insert_status(&status) {
-                                        eprintln!("Error writing to database: {}", e);
+                                        warn!("Error writing to database: {}", e);
                                     } else {
+                                        if let Some(pos) = status.current_position {
+                                            debug!("Vessel status written to database: lat={:.6}, lon={:.6}, avg_speed={:.2} m/s, moored={}", 
+                                                pos.latitude, pos.longitude, status.average_speed_30s, status.is_moored);
+                                        }
                                         vessel_monitor.mark_db_persisted();
                                     }
                                 } else {
-                                    eprintln!("⚠️  Skipping vessel status DB write - time skew detected");
+                                    warn!("Skipping vessel status DB write - time skew detected");
                                 }
                             }
                         }
@@ -222,12 +272,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                             if !metrics_to_persist.is_empty() {
                                 if time_monitor.is_time_synchronized() {
                                     if let Err(e) = db.insert_environmental_metrics(&env_report, &metrics_to_persist) {
-                                        eprintln!("Error writing environmental data to database: {}", e);
+                                        warn!("Error writing environmental data to database: {}", e);
                                     } else {
+                                        debug!("Environmental metrics written to database: {} metrics ({:?})", 
+                                            metrics_to_persist.len(), 
+                                            metrics_to_persist.iter().map(|m| m.name()).collect::<Vec<_>>());
                                         env_monitor.mark_metrics_persisted(&metrics_to_persist);
                                     }
                                 } else {
-                                    eprintln!("⚠️  Skipping environmental metrics DB write - time skew detected");
+                                    warn!("Skipping environmental metrics DB write - time skew detected");
                                 }
                             }
                         }
@@ -243,12 +296,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             Err(e) => {
-                eprintln!("⚠️  Error reading CAN frame: {}", e);
-                eprintln!("⚠️  CAN bus connection lost. Attempting to reconnect...");
+                warn!("Error reading CAN frame: {}", e);
+                warn!("CAN bus connection lost. Attempting to reconnect...");
                 
                 // Try to reconnect
                 socket = open_can_socket_with_retry(interface);
-                eprintln!("✓ Reconnected to CAN bus. Resuming operation...\n");
+                info!("Reconnected to CAN bus. Resuming operation");
             }
         }
     }

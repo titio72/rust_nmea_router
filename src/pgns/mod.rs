@@ -8,7 +8,6 @@ pub mod pgn128267;
 pub mod pgn129025;
 pub mod pgn129026;
 pub mod pgn129029;
-pub mod pgn129033;
 pub mod pgn130306;
 pub mod pgn130312;
 pub mod pgn130313;
@@ -17,7 +16,7 @@ pub mod message;
 
 // Re-export commonly used types
 pub use message::N2kMessage;
-pub use pgn126992::SystemTime;
+pub use pgn126992::NMEASystemTime;
 pub use pgn127257::Attitude;
 pub use pgn127488::EngineRapidUpdate;
 pub use pgn129025::PositionRapidUpdate;

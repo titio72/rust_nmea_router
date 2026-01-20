@@ -1,7 +1,20 @@
 {
   "can_interface": "vcan0",
+  "source_filter": {
+    "pgn_source_map": {
+        "129025": 22,
+        "129026": 22,
+        "129029": 22,
+        "126992": 22
+    }
+  },
+  "logging": {
+    "directory": "./logs",
+    "file_prefix": "nmea_router",
+    "level": "debug"
+  },
   "time": {
-    "skew_threshold_ms": 500
+    "skew_threshold_ms": 1000
   },
   "database": {
     "connection": {

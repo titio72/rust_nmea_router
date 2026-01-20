@@ -25,7 +25,6 @@ use crate::pgns::N2kMessage;
 ///     println!("Message: {}", complete_message.message);
 /// }
 /// ```
-
 // Key for tracking multi-frame messages: (PGN, Source)
 type FastPacketKey = (u32, u8);
 
@@ -42,7 +41,7 @@ impl FastPacketBuffer {
         let expected_frames = if total_len <= 6 {
             1
         } else {
-            1 + ((total_len - 6 + 6) / 7)
+            1 + (total_len - 6).div_ceil(7)
         };
         
         Self {
@@ -75,6 +74,7 @@ impl FastPacketBuffer {
 pub struct N2kFrame {
     pub identifier: Identifier,
     pub message: N2kMessage,
+    #[allow(dead_code)]
     pub is_fast_packet: bool,
     pub data: Vec<u8>, // Complete assembled data
 }

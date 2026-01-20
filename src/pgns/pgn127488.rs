@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct EngineRapidUpdate {
+    #[allow(dead_code)]
     pub pgn: u32,
     pub engine_instance: u8,
     pub engine_speed: Option<f64>,  // RPM

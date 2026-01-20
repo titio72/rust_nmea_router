@@ -2,7 +2,9 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct CogSogRapidUpdate {
+    #[allow(dead_code)]
     pub pgn: u32,
+    #[allow(dead_code)]
     sid: u8,
     pub cog_reference: bool, // true = True, false = Magnetic
     pub cog: f64, // radians

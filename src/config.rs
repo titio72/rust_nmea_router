@@ -8,6 +8,52 @@ pub struct Config {
     pub can_interface: String,
     pub time: TimeConfig,
     pub database: DatabaseConfig,
+    #[serde(default)]
+    pub source_filter: SourceFilterConfig,
+    #[serde(default)]
+    pub logging: LogConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogConfig {
+    /// Directory where log files will be stored
+    pub directory: String,
+    /// Log file name prefix (date will be appended)
+    pub file_prefix: String,
+    /// Log level (trace, debug, info, warn, error)
+    pub level: String,
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            directory: "./logs".to_string(),
+            file_prefix: "nmea_router".to_string(),
+            level: "info".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SourceFilterConfig {
+    /// Map of PGN to allowed source address
+    /// If a PGN is present in this map, only messages from the specified source will be accepted
+    /// If a PGN is not in the map, all sources are accepted
+    #[serde(default)]
+    pub pgn_source_map: std::collections::HashMap<u32, u8>,
+}
+
+impl SourceFilterConfig {
+    /// Check if a message should be accepted based on its PGN and source
+    /// Returns true if:
+    /// - No filter is configured for this PGN (accept all sources)
+    /// - A filter is configured and the source matches
+    pub fn should_accept(&self, pgn: u32, source: u8) -> bool {
+        match self.pgn_source_map.get(&pgn) {
+            Some(&allowed_source) => source == allowed_source,
+            None => true, // No filter for this PGN, accept all sources
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +155,8 @@ impl Config {
                 vessel_status: VesselStatusConfig::default(),
                 environmental: EnvironmentalConfig::default(),
             },
+            source_filter: SourceFilterConfig::default(),
+            logging: LogConfig::default(),
         }
     }
 }
@@ -256,6 +304,50 @@ mod tests {
     }
 
     #[test]
+    fn test_source_filter_no_filter() {
+        let filter = SourceFilterConfig::default();
+        // No filters configured, should accept all sources
+        assert!(filter.should_accept(129025, 10));
+        assert!(filter.should_accept(129025, 22));
+        assert!(filter.should_accept(127488, 5));
+    }
+
+    #[test]
+    fn test_source_filter_with_filter() {
+        let mut filter = SourceFilterConfig::default();
+        filter.pgn_source_map.insert(129025, 22);
+        filter.pgn_source_map.insert(127488, 5);
+        
+        // PGN 129025 should only accept source 22
+        assert!(filter.should_accept(129025, 22));
+        assert!(!filter.should_accept(129025, 10));
+        assert!(!filter.should_accept(129025, 5));
+        
+        // PGN 127488 should only accept source 5
+        assert!(filter.should_accept(127488, 5));
+        assert!(!filter.should_accept(127488, 22));
+        
+        // PGN 130312 has no filter, should accept all sources
+        assert!(filter.should_accept(130312, 10));
+        assert!(filter.should_accept(130312, 22));
+    }
+
+    #[test]
+    fn test_source_filter_serialization() {
+        let mut filter = SourceFilterConfig::default();
+        filter.pgn_source_map.insert(129025, 22);
+        filter.pgn_source_map.insert(127488, 5);
+        
+        let json = serde_json::to_string(&filter).unwrap();
+        assert!(json.contains("129025"));
+        assert!(json.contains("127488"));
+        
+        let deserialized: SourceFilterConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.pgn_source_map.get(&129025), Some(&22));
+        assert_eq!(deserialized.pgn_source_map.get(&127488), Some(&5));
+    }
+
+    #[test]
     fn test_config_serialization() {
         let config = Config::default();
         let json = serde_json::to_string(&config).unwrap();
@@ -300,5 +392,32 @@ mod tests {
         assert_eq!(config.database.connection.host, "myhost");
         assert_eq!(config.database.vessel_status.interval_moored_seconds, 600);
         assert_eq!(config.database.environmental.wind_speed_seconds, 20);
+    }
+
+    #[test]
+    fn test_log_config_default() {
+        let log_config = LogConfig::default();
+        assert_eq!(log_config.directory, "./logs");
+        assert_eq!(log_config.file_prefix, "nmea_router");
+        assert_eq!(log_config.level, "info");
+    }
+
+    #[test]
+    fn test_log_config_serialization() {
+        let log_config = LogConfig {
+            directory: "/var/log/nmea".to_string(),
+            file_prefix: "router".to_string(),
+            level: "debug".to_string(),
+        };
+        
+        let json = serde_json::to_string(&log_config).unwrap();
+        assert!(json.contains("/var/log/nmea"));
+        assert!(json.contains("router"));
+        assert!(json.contains("debug"));
+        
+        let deserialized: LogConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.directory, "/var/log/nmea");
+        assert_eq!(deserialized.file_prefix, "router");
+        assert_eq!(deserialized.level, "debug");
     }
 }

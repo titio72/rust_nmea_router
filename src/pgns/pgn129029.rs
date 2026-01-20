@@ -2,19 +2,26 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct GnssPositionData {
+#[allow(dead_code)]
     pub pgn: u32,
+    #[allow(dead_code)]
     sid: u8,
+    #[allow(dead_code)]
     date: u16, // days since 1970-01-01
+    #[allow(dead_code)]
     time: f64, // seconds since midnight
     pub latitude: f64,
     pub longitude: f64,
+    #[allow(dead_code)]
     pub altitude: f64,
     pub gnss_type: GnssType,
     pub method: GnssMethod,
+    #[allow(dead_code)]
     integrity: u8,
     pub num_svs: u8,
     pub hdop: f64,
     pub pdop: f64,
+    #[allow(dead_code)]
     geoidal_separation: f64,
 }
 

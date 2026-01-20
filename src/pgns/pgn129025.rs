@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct PositionRapidUpdate {
+    #[allow(dead_code)]
     pub pgn: u32,
     pub latitude: f64,  // degrees
     pub longitude: f64, // degrees
@@ -22,6 +23,6 @@ impl PositionRapidUpdate {
 
 impl fmt::Display for PositionRapidUpdate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "      Position: {:.6}° N, {:.6}° E", self.latitude, self.longitude)
+        write!(f, "      Position: {:.6}°, {:.6}°", self.latitude, self.longitude)
     }
 }

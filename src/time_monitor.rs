@@ -1,5 +1,5 @@
 use std::time::{SystemTime as StdSystemTime, UNIX_EPOCH};
-use crate::pgns::SystemTime;
+use crate::pgns::NMEASystemTime;
 
 pub struct TimeMonitor {
     last_warning_time: Option<StdSystemTime>,
@@ -19,13 +19,13 @@ impl TimeMonitor {
     }
 
     /// Process a system time message and check for time skew
-    pub fn process_system_time(&mut self, nmea_time: &SystemTime) {
+    pub fn process_system_time(&mut self, nmea_time: &NMEASystemTime) {
         // Get current system time
         let now = StdSystemTime::now();
         let system_timestamp = match now.duration_since(UNIX_EPOCH) {
             Ok(duration) => duration.as_secs() as i64,
             Err(_) => {
-                eprintln!("⚠️  WARNING: System time is before Unix epoch!");
+                log::warn!("WARNING: System time is before Unix epoch!");
                 return;
             }
         };
@@ -101,7 +101,7 @@ impl Default for TimeMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pgns::SystemTime;
+    use crate::pgns::NMEASystemTime;
 
     #[test]
     fn test_time_monitor_default() {
@@ -135,7 +135,7 @@ mod tests {
         // Convert to NMEA2000 units (0.0001 seconds)
         let nmea_time_units = current_seconds * 10000;
         
-        let nmea_time = SystemTime {
+        let nmea_time = NMEASystemTime {
             pgn: 126992,
             sid: 0,
             source: 0,
@@ -155,7 +155,7 @@ mod tests {
         
         // Create a system time far in the past (definitely beyond threshold)
         let old_date = 10000; // Days since 1970 (way in the past)
-        let nmea_time = SystemTime {
+        let nmea_time = NMEASystemTime {
             pgn: 126992,
             sid: 0,
             source: 0,
@@ -173,7 +173,7 @@ mod tests {
     fn test_system_time_to_unix_timestamp() {
         // Test a known date/time
         // January 2, 1970, 00:01:00 UTC
-        let nmea_time = SystemTime {
+        let nmea_time = NMEASystemTime {
             pgn: 126992,
             sid: 0,
             source: 0,
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn test_system_time_milliseconds() {
         // Test milliseconds extraction
-        let nmea_time = SystemTime {
+        let nmea_time = NMEASystemTime {
             pgn: 126992,
             sid: 0,
             source: 0,
