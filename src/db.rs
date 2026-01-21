@@ -25,6 +25,7 @@ impl VesselDatabase {
     ///     is_moored BOOLEAN NOT NULL,
     ///     engine_on BOOLEAN NOT NULL DEFAULT 0,
     ///     total_distance_m DOUBLE NOT NULL DEFAULT 0,
+    ///     total_time_ms BIGINT NOT NULL DEFAULT 0,
     ///     INDEX idx_timestamp (timestamp)
     /// );
     /// ```
@@ -37,9 +38,9 @@ impl VesselDatabase {
     
     /// Insert a vessel status report into the database
     /// All timestamps are stored in UTC timezone
-    pub fn insert_status(&self, status: &VesselStatus) -> Result<(), Box<dyn Error>> {
+    pub fn insert_status(&self, status: &VesselStatus, total_distance_m: f64, total_time_ms: u64) -> Result<(), Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
-        
+
         // Get current system time and convert to UTC
         let now = std::time::SystemTime::now();
         let timestamp = chrono::DateTime::<chrono::Utc>::from(now);
@@ -52,8 +53,8 @@ impl VesselDatabase {
         
         conn.exec_drop(
             r"INSERT INTO vessel_status 
-              (timestamp, latitude, longitude, average_speed_ms, max_speed_ms, is_moored, engine_on, total_distance_m)
-              VALUES (:timestamp, :latitude, :longitude, :avg_speed, :max_speed, :is_moored, :engine_on, :total_distance)",
+              (timestamp, latitude, longitude, average_speed_ms, max_speed_ms, is_moored, engine_on, total_distance_m, total_time_ms)
+              VALUES (:timestamp, :latitude, :longitude, :avg_speed, :max_speed, :is_moored, :engine_on, :total_distance, :total_time)",
             params! {
                 "timestamp" => timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
                 "latitude" => latitude,
@@ -62,7 +63,8 @@ impl VesselDatabase {
                 "max_speed" => status.max_speed_30s,
                 "is_moored" => status.is_moored,
                 "engine_on" => status.engine_on,
-                "total_distance" => status.total_distance_m,
+                "total_distance" => total_distance_m,
+                "total_time" => total_time_ms,
             },
         )?;
         

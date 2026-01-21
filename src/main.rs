@@ -1,5 +1,5 @@
 use socketcan::{CanSocket, EmbeddedFrame, ExtendedId, Frame, Socket};
-use std::error::Error;
+use std::{error::Error, ops::ControlFlow};
 use tracing::{info, warn, debug};
 
 mod pgns;
@@ -16,6 +16,8 @@ use time_monitor::TimeMonitor;
 use environmental_monitor::EnvironmentalMonitor;
 use db::VesselDatabase;
 use config::Config;
+
+use crate::vessel_monitor::{PositionSample, VesselStatus};
 
 // ========== Logging Setup ==========
 
@@ -58,70 +60,6 @@ fn init_logging(log_config: &config::LogConfig) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// ========== Display & Utility Functions ==========
-/*
-fn decode_pgn_name(pgn: u32) -> &'static str {
-    match pgn {
-        126992 => "System Time",
-        126996 => "Product Information",
-        127233 => "Man Overboard Notification",
-        127237 => "Heading/Track Control",
-        127245 => "Rudder",
-        127250 => "Vessel Heading",
-        127251 => "Rate of Turn",
-        127257 => "Attitude",
-        127258 => "Magnetic Variation",
-        127488 => "Engine Parameters, Rapid Update",
-        127489 => "Engine Parameters, Dynamic",
-        127493 => "Transmission Parameters, Dynamic",
-        127505 => "Fluid Level",
-        127508 => "Battery Status",
-        128259 => "Speed, Water Referenced",
-        128267 => "Water Depth",
-        128275 => "Distance Log",
-        129025 => "Position, Rapid Update",
-        129026 => "COG & SOG, Rapid Update",
-        129029 => "GNSS Position Data",
-        129033 => "Time & Date",
-        129038 => "AIS Class A Position Report",
-        129039 => "AIS Class B Position Report",
-        129540 => "GNSS Sats in View",
-        129794 => "AIS Class A Static and Voyage Related Data",
-        129809 => "AIS Class B Static Data (Part A)",
-        129810 => "AIS Class B Static Data (Part B)",
-        130306 => "Wind Data",
-        130311 => "Environmental Parameters",
-        130312 => "Temperature",
-        130313 => "Humidity",
-        130314 => "Actual Pressure",
-        130316 => "Temperature, Extended Range",
-        _ => "Unknown PGN",
-    }
-}
-
-fn format_data_bytes(data: &[u8]) -> String {
-    data.iter()
-        .map(|b| format!("{:02X}", b))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn decode_message(identifier: &Identifier, message: &pgns::N2kMessage, is_fast_packet: bool, data_bytes: &[u8]) {
-    let pgn = identifier.pgn();
-    let priority = identifier.priority();
-    let source = identifier.source();
-    let pgn_name = decode_pgn_name(pgn);
-    
-    // Display message header
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("PGN: {} ({}){}", pgn, pgn_name, if is_fast_packet { " [Fast Packet]" } else { "" });
-    println!("Priority: {} | Source: {}", priority, source);
-    println!("Data: [{}]", format_data_bytes(data_bytes));
-    
-    // Display decoded message
-    println!("{}", message);
-}
-*/
 // ========== Main Application ==========
 
 fn open_can_socket_with_retry(interface: &str) -> CanSocket {
@@ -187,6 +125,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Create environmental monitor with config
     let mut env_monitor = EnvironmentalMonitor::new(config.database.environmental.clone());
     
+    let mut last_vessel_status: Option<VesselStatus> = None;
+
     // Read CAN frames in a loop
     loop {
         match socket.read_frame() {
@@ -198,101 +138,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                 
                 // Process the frame through the stream reader
                 if let Some(n2k_frame) = reader.process_frame(extended_id, data) {
-                    let pgn = n2k_frame.identifier.pgn();
-                    let source = n2k_frame.identifier.source();
-                    
-                    // Apply source filter - skip messages that don't match the configured source
-                    if !config.source_filter.should_accept(pgn, source) {
+                    if let ControlFlow::Break(_) = filter_frame(&config, &n2k_frame) {
                         continue;
                     }
                     
-                    // Update monitors with incoming messages
-                    match &n2k_frame.message {
-                        pgns::N2kMessage::PositionRapidUpdate(pos) => {
-                            vessel_monitor.process_position(pos);
-                        }
-                        pgns::N2kMessage::CogSogRapidUpdate(cog_sog) => {
-                            vessel_monitor.process_cog_sog(cog_sog);    
-                        }
-                        pgns::N2kMessage::NMEASystemTime(sys_time) => {
-                            time_monitor.process_system_time(sys_time);
-                        }
-                        pgns::N2kMessage::Temperature(temp) => {
-                            env_monitor.process_temperature(temp);
-                        }
-                        pgns::N2kMessage::WindData(wind) => {
-                            env_monitor.process_wind(wind);
-                        }
-                        pgns::N2kMessage::Humidity(hum) => {
-                            env_monitor.process_humidity(hum);
-                        }
-                        pgns::N2kMessage::ActualPressure(pressure) => {
-                            env_monitor.process_actual_pressure(pressure);
-                        }
-                        pgns::N2kMessage::Attitude(attitude) => {
-                            env_monitor.process_attitude(attitude);
-                        }
-                        pgns::N2kMessage::EngineRapidUpdate(engine) => {
-                            vessel_monitor.process_engine(engine);
-                        }
-                        _ => {}
-                    }
+                    handle_message(&mut vessel_monitor, &mut time_monitor, &mut env_monitor, n2k_frame);
                     
-                    // Check if it's time to generate a vessel status report
-                    if let Some(status) = vessel_monitor.generate_status() {
-                        println!("\n{}", status);
-                        
-                        // Write to database if connected, time to persist, and time is synchronized
-                        if let Some(ref db) = vessel_db {
-                            if vessel_monitor.should_persist_to_db(status.is_moored) {
-                                if time_monitor.is_time_synchronized() {
-                                    if let Err(e) = db.insert_status(&status) {
-                                        warn!("Error writing to database: {}", e);
-                                    } else {
-                                        if let Some(pos) = status.current_position {
-                                            debug!("Vessel status written to database: lat={:.6}, lon={:.6}, avg_speed={:.2} m/s, distance={:.1} m, moored={}", 
-                                                pos.latitude, pos.longitude, status.average_speed_30s, status.total_distance_m, status.is_moored);
-                                        }
-                                        vessel_monitor.mark_db_persisted();
-                                    }
-                                } else {
-                                    warn!("Skipping vessel status DB write - time skew detected");
-                                }
-                            }
-                        }
-                    }
+                    handle_vessel_status(&vessel_db, &mut vessel_monitor, &time_monitor, &mut last_vessel_status);
+                                        
+                    handle_environment_status(&vessel_db, &time_monitor, &mut env_monitor);
                     
-                    // Check if it's time to generate an environmental report
-                    if let Some(env_report) = env_monitor.generate_report() {
-                        println!("\n{}", env_report);
-                        
-                        // Write to database if connected, time to persist, and time is synchronized
-                        if let Some(ref db) = vessel_db {
-                            let metrics_to_persist = env_monitor.get_metrics_to_persist();
-                            if !metrics_to_persist.is_empty() {
-                                if time_monitor.is_time_synchronized() {
-                                    if let Err(e) = db.insert_environmental_metrics(&env_report, &metrics_to_persist) {
-                                        warn!("Error writing environmental data to database: {}", e);
-                                    } else {
-                                        debug!("Environmental metrics written to database: {} metrics ({:?})", 
-                                            metrics_to_persist.len(), 
-                                            metrics_to_persist.iter().map(|m| m.name()).collect::<Vec<_>>());
-                                        env_monitor.mark_metrics_persisted(&metrics_to_persist);
-                                    }
-                                } else {
-                                    warn!("Skipping environmental metrics DB write - time skew detected");
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Complete message available - decode and display
-                    /*decode_message(
-                        &n2k_frame.identifier,
-                        &n2k_frame.message,
-                        n2k_frame.is_fast_packet,
-                        &n2k_frame.data,
-                    );*/
                 }
             }
             Err(e) => {
@@ -304,5 +159,127 @@ fn main() -> Result<(), Box<dyn Error>> {
                 info!("Reconnected to CAN bus. Resuming operation");
             }
         }
+    }
+}
+
+fn filter_frame(config: &Config, n2k_frame: &stream_reader::N2kFrame) -> ControlFlow<()> {
+    let pgn = n2k_frame.identifier.pgn();
+    let source = n2k_frame.identifier.source();
+                    
+    // Apply source filter - skip messages that don't match the configured source
+    if !config.source_filter.should_accept(pgn, source) {
+        return ControlFlow::Break(());
+    }
+    ControlFlow::Continue(())
+}
+
+fn handle_environment_status(vessel_db: &Option<VesselDatabase>, time_monitor: &TimeMonitor, env_monitor: &mut EnvironmentalMonitor) {
+    // Check if it's time to generate an environmental report
+    if let Some(env_report) = env_monitor.generate_report() {
+        //println!("\n{}", env_report);
+        debug!("Environmental Report generated Cabin Temp {} °C, Water Temp {} °C, Pressure {} Pa, Humidity {} %, Wind Speed {:.1} m/s, Wind Dir {:.0}°, Roll {:.1}°", 
+            env_report.cabin_temp.avg.unwrap_or(f64::NAN),
+            env_report.water_temp.avg.unwrap_or(f64::NAN),
+            env_report.pressure.avg.unwrap_or(f64::NAN),
+            env_report.humidity.avg.unwrap_or(f64::NAN),
+            env_report.wind_speed.avg.unwrap_or(f64::NAN),
+            env_report.wind_dir.avg.unwrap_or(f64::NAN),
+            env_report.roll.avg.unwrap_or(f64::NAN));
+
+        // Write to database if connected, time to persist, and time is synchronized
+        if let Some(ref db) = *vessel_db {
+            let metrics_to_persist = env_monitor.get_metrics_to_persist();
+            if !metrics_to_persist.is_empty() {
+                if time_monitor.is_valid_and_synced() {
+                    if let Err(e) = db.insert_environmental_metrics(&env_report, &metrics_to_persist) {
+                        warn!("Error writing environmental data to database: {}", e);
+                    } else {
+                        debug!("Environmental metrics written to database: {} metrics ({:?})", 
+                            metrics_to_persist.len(), 
+                            metrics_to_persist.iter().map(|m| m.name()).collect::<Vec<_>>());
+                        env_monitor.mark_metrics_persisted(&metrics_to_persist);
+                    }
+                } else {
+                    warn!("Skipping environmental metrics DB write - time skew detected {} ms", time_monitor.last_measured_skew_ms());
+                }
+            }
+        }
+    }
+}
+
+fn handle_vessel_status(vessel_db: &Option<VesselDatabase>, vessel_monitor: &mut VesselMonitor, time_monitor: &TimeMonitor, last_vessel_status: &mut Option<VesselStatus>) {
+    // Check if it's time to generate a vessel status report
+    if let Some(status) = vessel_monitor.generate_status() {
+        //println!("\n{}", status);
+        debug!("Vessel Status: latitude={:.6}, longitude={:.6}, avg_speed={:.2} m/s, max_speed={:.2} m/s, moored={}", 
+            status.current_position.map_or(0.0, |pos| pos.latitude),
+            status.current_position.map_or(0.0, |pos| pos.longitude),
+            status.average_speed_30s, status.max_speed_30s, status.is_moored);
+    
+        // Write to database if connected, time to persist, and time is synchronized
+        if let Some(ref db) = *vessel_db
+            && vessel_monitor.should_persist_to_db(status.is_moored) {
+                if time_monitor.is_valid_and_synced() {
+                    let (total_distance_m, total_time_ms) = if let Some(ref last_status) = *last_vessel_status {
+                        if let (Some(last_sample), Some(current_sample)) = 
+                            (PositionSample::from_status(last_status), PositionSample::from_status(&status)) {
+                            let distance = last_sample.distance_to(&current_sample);
+                            let time = last_sample.time_difference_ms(&current_sample);
+                            (distance, time)
+                        } else {
+                            (0.0, 0)
+                        }
+                    } else {
+                        (0.0, 0)
+                    };
+
+                    if let Err(e) = db.insert_status(&status, total_distance_m, total_time_ms) {
+                        warn!("Error writing to database: {}", e);
+                    } else {
+                        if let Some(pos) = status.current_position {
+                            debug!("Vessel status written to database: lat={:.6}, lon={:.6}, avg_speed={:.2} m/s, distance={:.1} m, time={} ms, moored={}", 
+                                pos.latitude, pos.longitude, status.average_speed_30s, total_distance_m, total_time_ms, status.is_moored);
+                        }
+                        vessel_monitor.mark_db_persisted();
+                        *last_vessel_status = Some(status.clone());
+                    }
+                } else {
+                    warn!("Skipping vessel status DB write - time skew detected {} ms", time_monitor.last_measured_skew_ms());
+                }
+            }
+    }
+}
+
+fn handle_message(vessel_monitor: &mut VesselMonitor, time_monitor: &mut TimeMonitor, env_monitor: &mut EnvironmentalMonitor, n2k_frame: stream_reader::N2kFrame) {
+    // Update monitors with incoming messages
+    match &n2k_frame.message {
+        pgns::N2kMessage::PositionRapidUpdate(pos) => {
+            vessel_monitor.process_position(pos);
+        }
+        pgns::N2kMessage::CogSogRapidUpdate(cog_sog) => {
+            vessel_monitor.process_cog_sog(cog_sog);    
+        }
+        pgns::N2kMessage::NMEASystemTime(sys_time) => {
+            time_monitor.process_system_time(sys_time);
+        }
+        pgns::N2kMessage::Temperature(temp) => {
+            env_monitor.process_temperature(temp);
+        }
+        pgns::N2kMessage::WindData(wind) => {
+            env_monitor.process_wind(wind);
+        }
+        pgns::N2kMessage::Humidity(hum) => {
+            env_monitor.process_humidity(hum);
+        }
+        pgns::N2kMessage::ActualPressure(pressure) => {
+            env_monitor.process_actual_pressure(pressure);
+        }
+        pgns::N2kMessage::Attitude(attitude) => {
+            env_monitor.process_attitude(attitude);
+        }
+        pgns::N2kMessage::EngineRapidUpdate(engine) => {
+            vessel_monitor.process_engine(engine);
+        }
+        _ => {}
     }
 }

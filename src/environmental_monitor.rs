@@ -71,55 +71,55 @@ pub struct EnvironmentalReport {
 
 impl std::fmt::Display for EnvironmentalReport {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        writeln!(f, "╔═══════════════════════════════════════════════════════════════╗")?;
-        writeln!(f, "║         ENVIRONMENTAL DATA REPORT (1-minute average)          ║")?;
-        writeln!(f, "╠═══════════════════════════════════════════════════════════════╣")?;
+        writeln!(f, "═══════════════════════════════════════════════════════════════")?;
+        writeln!(f, "ENVIRONMENTAL DATA REPORT (1-minute average)")?;
+        writeln!(f, "═══════════════════════════════════════════════════════════════")?;
         
         if let (Some(avg), Some(max), Some(min)) = (self.pressure.avg, self.pressure.max, self.pressure.min) {
-            writeln!(f, "║  Pressure:   Avg: {:.0} Pa  Max: {:.0} Pa  Min: {:.0} Pa", avg, max, min)?;
+            writeln!(f, "Pressure:   Avg: {:.0} Pa  Max: {:.0} Pa  Min: {:.0} Pa", avg, max, min)?;
         } else {
-            writeln!(f, "║  Pressure:   No data")?;
+            writeln!(f, "Pressure:   No data")?;
         }
         
         if let (Some(avg), Some(max), Some(min)) = (self.cabin_temp.avg, self.cabin_temp.max, self.cabin_temp.min) {
-            writeln!(f, "║  Cabin Temp: Avg: {:.1}°C  Max: {:.1}°C  Min: {:.1}°C", avg, max, min)?;
+            writeln!(f, "Cabin Temp: Avg: {:.1}°C  Max: {:.1}°C  Min: {:.1}°C", avg, max, min)?;
         } else {
-            writeln!(f, "║  Cabin Temp: No data")?;
+            writeln!(f, "Cabin Temp: No data")?;
         }
         
         if let (Some(avg), Some(max), Some(min)) = (self.water_temp.avg, self.water_temp.max, self.water_temp.min) {
-            writeln!(f, "║  Water Temp: Avg: {:.1}°C  Max: {:.1}°C  Min: {:.1}°C", avg, max, min)?;
+            writeln!(f, "Water Temp: Avg: {:.1}°C  Max: {:.1}°C  Min: {:.1}°C", avg, max, min)?;
         } else {
-            writeln!(f, "║  Water Temp: No data")?;
+            writeln!(f, "Water Temp: No data")?;
         }
         
         if let (Some(avg), Some(max), Some(min)) = (self.humidity.avg, self.humidity.max, self.humidity.min) {
-            writeln!(f, "║  Humidity:   Avg: {:.1}%  Max: {:.1}%  Min: {:.1}%", avg, max, min)?;
+            writeln!(f, "Humidity:   Avg: {:.1}%  Max: {:.1}%  Min: {:.1}%", avg, max, min)?;
         } else {
-            writeln!(f, "║  Humidity:   No data")?;
+            writeln!(f, "Humidity:   No data")?;
         }
         
         if let (Some(avg), Some(max), Some(min)) = (self.wind_speed.avg, self.wind_speed.max, self.wind_speed.min) {
-            writeln!(f, "║  Wind Speed: Avg: {:.1} m/s  Max: {:.1} m/s  Min: {:.1} m/s", avg, max, min)?;
-            writeln!(f, "║              Avg: {:.1} kt   Max: {:.1} kt   Min: {:.1} kt", 
+            writeln!(f, "Wind Speed: Avg: {:.1} m/s  Max: {:.1} m/s  Min: {:.1} m/s", avg, max, min)?;
+            writeln!(f, "            Avg: {:.1} kt   Max: {:.1} kt   Min: {:.1} kt", 
                 avg * 1.94384, max * 1.94384, min * 1.94384)?;
         } else {
-            writeln!(f, "║  Wind Speed: No data")?;
+            writeln!(f, "Wind Speed: No data")?;
         }
         
         if let (Some(avg), Some(max), Some(min)) = (self.wind_dir.avg, self.wind_dir.max, self.wind_dir.min) {
-            writeln!(f, "║  Wind Dir:   Avg: {:.0}°  Max: {:.0}°  Min: {:.0}°", avg, max, min)?;
+            writeln!(f, "Wind Dir:   Avg: {:.0}°  Max: {:.0}°  Min: {:.0}°", avg, max, min)?;
         } else {
-            writeln!(f, "║  Wind Dir:   No data")?;
+            writeln!(f, "Wind Dir:   No data")?;
         }
         
         if let (Some(avg), Some(max), Some(min)) = (self.roll.avg, self.roll.max, self.roll.min) {
-            writeln!(f, "║  Roll:       Avg: {:.1}°  Max: {:.1}°  Min: {:.1}°", avg, max, min)?;
+            writeln!(f, "Roll:       Avg: {:.1}°  Max: {:.1}°  Min: {:.1}°", avg, max, min)?;
         } else {
-            writeln!(f, "║  Roll:       No data")?;
+            writeln!(f, "Roll:       No data")?;
         }
         
-        writeln!(f, "╚═══════════════════════════════════════════════════════════════╝")
+        writeln!(f, "═══════════════════════════════════════════════════════════════")
     }
 }
 

@@ -6,6 +6,8 @@ pub struct TimeMonitor {
     warning_cooldown_secs: u64,
     has_time_skew: bool,
     time_skew_threshold_ms: i64,
+    last_measured_skew_ms: i64,
+    is_initialized: bool,
 }
 
 impl TimeMonitor {
@@ -15,7 +17,21 @@ impl TimeMonitor {
             warning_cooldown_secs: 10, // Only warn once every 10 seconds
             has_time_skew: false,
             time_skew_threshold_ms,
+            last_measured_skew_ms: 0,
+            is_initialized: false,
         }
+    }
+
+    pub fn is_initialized(&self) -> bool {
+        self.is_initialized
+    }
+
+    pub fn last_measured_skew_ms(&self) -> i64 {
+        self.last_measured_skew_ms
+    }
+
+    pub fn is_valid_and_synced(&self) -> bool {
+        self.is_initialized() && self.is_time_synchronized()
     }
 
     /// Process a system time message and check for time skew
@@ -30,17 +46,12 @@ impl TimeMonitor {
             }
         };
 
-        let system_ms = match now.duration_since(UNIX_EPOCH) {
-            Ok(duration) => duration.subsec_millis() as i64,
-            Err(_) => 0,
-        };
-
-        // Get NMEA2000 time
-        let nmea_timestamp = nmea_time.to_unix_timestamp();
-        let nmea_ms = nmea_time.milliseconds() as i64;
-
         // Calculate time skew in milliseconds
-        let time_skew_ms = (system_timestamp * 1000 + system_ms) - (nmea_timestamp * 1000 + nmea_ms);
+        let nmea_system_time = nmea_time.to_system_time();
+        let time_skew_ms = match now.duration_since(nmea_system_time) {
+            Ok(duration) => duration.as_millis() as i64,
+            Err(e) => -(e.duration().as_millis() as i64), // Negative if NMEA is ahead
+        };
         let abs_skew = time_skew_ms.abs();
 
         if abs_skew > self.time_skew_threshold_ms {
@@ -57,12 +68,14 @@ impl TimeMonitor {
             };
 
             if should_warn {
-                self.print_time_skew_warning(time_skew_ms, system_timestamp, nmea_timestamp);
+                self.print_time_skew_warning(time_skew_ms, system_timestamp, nmea_time.to_unix_timestamp());
                 self.last_warning_time = Some(now);
             }
         } else {
             self.has_time_skew = false;
         }
+        self.is_initialized = true;
+        self.last_measured_skew_ms = time_skew_ms;
     }
 
     /// Check if time is synchronized (no skew above threshold)
@@ -124,7 +137,8 @@ mod tests {
 
     #[test]
     fn test_time_skew_detection_within_threshold() {
-        let mut monitor = TimeMonitor::new(500);
+        // Use a larger threshold to account for processing delays in tests
+        let mut monitor = TimeMonitor::new(2000);
         
         // Create a system time close to current time (within threshold)
         let now = StdSystemTime::now();

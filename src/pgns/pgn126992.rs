@@ -46,6 +46,7 @@ impl NMEASystemTime {
         seconds_from_date + seconds_since_midnight
     }
 
+    #[allow(dead_code)]
     pub fn to_total_milliseconds(&self) -> i64 {
         let unix_timestamp = self.to_unix_timestamp() as u64;
         let total_ms = unix_timestamp * 1000 + self.milliseconds() as u64;
@@ -59,13 +60,13 @@ impl NMEASystemTime {
         total_ms % 1000
     }
 
+    #[allow(dead_code)]
     pub fn to_date_time(&self) -> DateTime<chrono::Utc> {
         let unix_timestamp = self.to_unix_timestamp();
         DateTime::<chrono::Utc>::from_timestamp(unix_timestamp, self.milliseconds() * 1_000_000)
             .expect("Invalid timestamp")
     }
 
-    #[allow(dead_code)]
     pub fn to_system_time(&self) -> std::time::SystemTime {
         let unix_timestamp = self.to_unix_timestamp();
         let duration = std::time::Duration::from_secs(unix_timestamp as u64)

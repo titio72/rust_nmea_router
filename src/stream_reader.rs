@@ -76,6 +76,7 @@ pub struct N2kFrame {
     pub message: N2kMessage,
     #[allow(dead_code)]
     pub is_fast_packet: bool,
+    #[allow(dead_code)]
     pub data: Vec<u8>, // Complete assembled data
 }
 

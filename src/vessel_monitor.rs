@@ -15,7 +15,6 @@ pub struct VesselStatus {
     pub max_speed_30s: f64,       // m/s
     pub is_moored: bool,
     pub engine_on: bool,
-    pub total_distance_m: f64,    // Total distance traveled since last DB write (meters)
     #[allow(dead_code)]
     pub timestamp: Instant,
 }
@@ -27,7 +26,7 @@ pub struct Position {
 }
 
 impl Position {
-    fn distance_to(&self, other: &Position) -> f64 {
+    pub fn distance_to(&self, other: &Position) -> f64 {
         // Haversine formula to calculate distance in meters
         let r = 6371000.0; // Earth radius in meters
         let lat1 = self.latitude.to_radians();
@@ -43,9 +42,34 @@ impl Position {
     }
 }
 
-struct PositionSample {
-    position: Position,
-    timestamp: Instant,
+pub struct PositionSample {
+    pub position: Position,
+    pub timestamp: Instant,
+}
+
+impl PositionSample {
+    pub fn from_status(report: &VesselStatus) -> Option<Self> {
+        report.current_position.map(|pos| Self {
+            position: pos,
+            timestamp: report.timestamp,
+        })
+    }
+    
+    pub fn distance_to(&self, other: &PositionSample) -> f64 {
+        self.position.distance_to(&other.position)
+    }
+
+    pub fn time_difference(&self, other: &PositionSample) -> Duration {
+        if self.timestamp > other.timestamp {
+            self.timestamp - other.timestamp
+        } else {
+            other.timestamp - self.timestamp
+        }
+    }
+
+    pub fn time_difference_ms(&self, other: &PositionSample) -> u64 {
+        self.time_difference(other).as_millis() as u64
+    }
 }
 
 struct SpeedSample {
@@ -162,12 +186,6 @@ impl VesselMonitor {
         let max_speed = self.calculate_max_speed(EVENT_INTERVAL);
         let is_moored = self.is_vessel_moored();
 
-        // Calculate distance from last reported position to current position
-        let total_distance_m = match (self.last_reported_position, self.current_position) {
-            (Some(last_pos), Some(current_pos)) => last_pos.distance_to(&current_pos),
-            _ => 0.0,
-        };
-
         // Update last reported position for next report
         self.last_reported_position = self.current_position;
 
@@ -177,7 +195,6 @@ impl VesselMonitor {
             max_speed_30s: max_speed,
             is_moored,
             engine_on: self.engine_on,
-            total_distance_m,
             timestamp: now,
         })
     }
@@ -256,27 +273,25 @@ impl Default for VesselMonitor {
 
 impl std::fmt::Display for VesselStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "╔════════════════════════════════════════════════════╗")?;
-        writeln!(f, "║         VESSEL STATUS REPORT                       ║")?;
-        writeln!(f, "╠════════════════════════════════════════════════════╣")?;
+        writeln!(f, "════════════════════════════════════════════════════")?;
+        writeln!(f, "VESSEL STATUS REPORT")?;
+        writeln!(f, "════════════════════════════════════════════════════")?;
         
         if let Some(pos) = self.current_position {
-            writeln!(f, "║ Position:     {:+010.6}°, {:+010.6}°             ║", pos.latitude, pos.longitude)?;
+            writeln!(f, "Position:     {:+010.6}°, {:+010.6}°", pos.latitude, pos.longitude)?;
         } else {
-            writeln!(f, "║ Position:     Unknown                              ║")?;
+            writeln!(f, "Position:     Unknown")?;
         }
         
-        writeln!(f, "║ Avg Speed:    {:5.2} m/s ({:5.2} knots)              ║", 
+        writeln!(f, "Avg Speed:    {:5.2} m/s ({:5.2} knots)", 
                  self.average_speed_30s, self.average_speed_30s * 1.94384)?;
-        writeln!(f, "║ Max Speed:    {:5.2} m/s ({:5.2} knots)              ║", 
+        writeln!(f, "Max Speed:    {:5.2} m/s ({:5.2} knots)", 
                  self.max_speed_30s, self.max_speed_30s * 1.94384)?;
-        writeln!(f, "║ Distance:     {:8.1} m ({:6.3} nm)              ║", 
-                 self.total_distance_m, self.total_distance_m / 1852.0)?;
-        writeln!(f, "║ Status:       {}                          ║", 
+        writeln!(f, "Status:       {}", 
                  if self.is_moored { "⚓ MOORED  " } else { "⛵ UNDERWAY" })?;
-        writeln!(f, "║ Engine:       {}                              ║", 
+        writeln!(f, "Engine:       {}", 
                  if self.engine_on { "🟢 ON  " } else { "⚫ OFF " })?;
-        writeln!(f, "╚════════════════════════════════════════════════════╝")
+        writeln!(f, "════════════════════════════════════════════════════")
     }
 }
 

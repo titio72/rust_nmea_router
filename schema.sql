@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS vessel_status (
     is_moored BOOLEAN NOT NULL COMMENT 'TRUE if vessel is moored (position stable for 2+ minutes within 10m radius)',
     engine_on BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'TRUE if engine is running',
     total_distance_m DOUBLE NOT NULL DEFAULT 0 COMMENT 'Distance traveled since last report in meters (straight-line Haversine)',
+    total_time_ms BIGINT NOT NULL DEFAULT 0 COMMENT 'Time elapsed since last report in milliseconds',
     INDEX idx_timestamp (timestamp),
     INDEX idx_moored (is_moored, timestamp)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
