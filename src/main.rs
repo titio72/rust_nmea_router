@@ -214,7 +214,7 @@ fn handle_vessel_status(vessel_db: &Option<VesselDatabase>, vessel_monitor: &mut
         debug!("Vessel Status: latitude={:.6}, longitude={:.6}, avg_speed={:.2} m/s, max_speed={:.2} m/s, moored={}", 
             status.current_position.map_or(0.0, |pos| pos.latitude),
             status.current_position.map_or(0.0, |pos| pos.longitude),
-            status.average_speed_30s, status.max_speed_30s, status.is_moored);
+            status.average_speed, status.max_speed, status.is_moored);
     
         // Write to database if connected, time to persist, and time is synchronized
         if let Some(ref db) = *vessel_db
@@ -238,7 +238,7 @@ fn handle_vessel_status(vessel_db: &Option<VesselDatabase>, vessel_monitor: &mut
                     } else {
                         if let Some(pos) = status.current_position {
                             debug!("Vessel status written to database: lat={:.6}, lon={:.6}, avg_speed={:.2} m/s, distance={:.1} m, time={} ms, moored={}", 
-                                pos.latitude, pos.longitude, status.average_speed_30s, total_distance_m, total_time_ms, status.is_moored);
+                                pos.latitude, pos.longitude, status.average_speed, total_distance_m, total_time_ms, status.is_moored);
                         }
                         vessel_monitor.mark_db_persisted();
                         *last_vessel_status = Some(status.clone());

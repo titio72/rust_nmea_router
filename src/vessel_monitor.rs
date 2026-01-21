@@ -4,15 +4,15 @@ use std::time::{Duration, Instant};
 use crate::pgns::{PositionRapidUpdate, CogSogRapidUpdate};
 use crate::config::VesselStatusConfig;
 
-const EVENT_INTERVAL: Duration = Duration::from_secs(30);
+const EVENT_INTERVAL: Duration = Duration::from_secs(10);
 const MOORING_DETECTION_WINDOW: Duration = Duration::from_secs(120); // 2 minutes
 const MOORING_THRESHOLD_METERS: f64 = 10.0; // 10 meters radius
 
 #[derive(Debug, Clone)]
 pub struct VesselStatus {
     pub current_position: Option<Position>,
-    pub average_speed_30s: f64,  // m/s
-    pub max_speed_30s: f64,       // m/s
+    pub average_speed: f64,  // m/s
+    pub max_speed: f64,       // m/s
     pub is_moored: bool,
     pub engine_on: bool,
     #[allow(dead_code)]
@@ -42,6 +42,7 @@ impl Position {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct PositionSample {
     pub position: Position,
     pub timestamp: Instant,
@@ -191,8 +192,8 @@ impl VesselMonitor {
 
         Some(VesselStatus {
             current_position: self.current_position,
-            average_speed_30s: average_speed,
-            max_speed_30s: max_speed,
+            average_speed,
+            max_speed: max_speed,
             is_moored,
             engine_on: self.engine_on,
             timestamp: now,
@@ -284,7 +285,7 @@ impl std::fmt::Display for VesselStatus {
         }
         
         writeln!(f, "Avg Speed:    {:5.2} m/s ({:5.2} knots)", 
-                 self.average_speed_30s, self.average_speed_30s * 1.94384)?;
+                 self.average_speed, self.average_speed * 1.94384)?;
         writeln!(f, "Max Speed:    {:5.2} m/s ({:5.2} knots)", 
                  self.max_speed_30s, self.max_speed_30s * 1.94384)?;
         writeln!(f, "Status:       {}", 

@@ -59,7 +59,7 @@ impl VesselDatabase {
                 "timestamp" => timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
                 "latitude" => latitude,
                 "longitude" => longitude,
-                "avg_speed" => status.average_speed_30s,
+                "avg_speed" => status.average_speed,
                 "max_speed" => status.max_speed_30s,
                 "is_moored" => status.is_moored,
                 "engine_on" => status.engine_on,
