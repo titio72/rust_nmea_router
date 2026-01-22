@@ -1,7 +1,7 @@
 use mysql::*;
 use mysql::prelude::*;
-use std::error::Error;
-use crate::vessel_monitor::VesselStatus;
+use std::{error::Error, time::Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 use crate::environmental_monitor::{EnvironmentalReport, MetricId};
 
 pub struct VesselDatabase {
@@ -38,19 +38,16 @@ impl VesselDatabase {
     
     /// Insert a vessel status report into the database
     /// All timestamps are stored in UTC timezone
-    pub fn insert_status(&self, status: &VesselStatus, total_distance_m: f64, total_time_ms: u64) -> Result<(), Box<dyn Error>> {
+    pub fn insert_status(&self, time: Instant,
+        latitude: f64, longitude: f64, average_speed: f64, max_speed: f64, is_moored: bool, engine_on: bool, total_distance_m: f64, total_time_ms: u64) -> Result<(), Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
 
+        // Ugly workaround to convert Instant to SystemTime
+        let delta = Instant::now().duration_since(time);
+        let system_time = SystemTime::now().checked_sub(delta).unwrap_or(UNIX_EPOCH);
         // Get current system time and convert to UTC
-        let now = std::time::SystemTime::now();
-        let timestamp = chrono::DateTime::<chrono::Utc>::from(now);
-        
-        let (latitude, longitude) = if let Some(pos) = &status.current_position {
-            (Some(pos.latitude), Some(pos.longitude))
-        } else {
-            (None, None)
-        };
-        
+        let timestamp = chrono::DateTime::<chrono::Utc>::from(system_time);
+               
         conn.exec_drop(
             r"INSERT INTO vessel_status 
               (timestamp, latitude, longitude, average_speed_ms, max_speed_ms, is_moored, engine_on, total_distance_m, total_time_ms)
@@ -59,10 +56,10 @@ impl VesselDatabase {
                 "timestamp" => timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
                 "latitude" => latitude,
                 "longitude" => longitude,
-                "avg_speed" => status.average_speed,
-                "max_speed" => status.max_speed_30s,
-                "is_moored" => status.is_moored,
-                "engine_on" => status.engine_on,
+                "avg_speed" => average_speed,
+                "max_speed" => max_speed,
+                "is_moored" => is_moored,
+                "engine_on" => engine_on,
                 "total_distance" => total_distance_m,
                 "total_time" => total_time_ms,
             },

@@ -6,11 +6,14 @@ use crate::config::VesselStatusConfig;
 
 const EVENT_INTERVAL: Duration = Duration::from_secs(10);
 const MOORING_DETECTION_WINDOW: Duration = Duration::from_secs(120); // 2 minutes
-const MOORING_THRESHOLD_METERS: f64 = 10.0; // 10 meters radius
+const MOORING_THRESHOLD_METERS: f64 = 30.0; // 30 meters radius
+const MOORING_ACCURACY: f64 = 0.90; // 90% of positions within threshold 
 
 #[derive(Debug, Clone)]
 pub struct VesselStatus {
     pub current_position: Option<Position>,
+    pub average_position: Option<Position>,
+    pub number_of_samples: usize,
     pub average_speed: f64,  // m/s
     pub max_speed: f64,       // m/s
     pub is_moored: bool,
@@ -180,18 +183,20 @@ impl VesselMonitor {
             return None;
         }
 
+        let (sample_count, average_position) = self.calculate_average_position(EVENT_INTERVAL);
+        let (_, average_speed, max_speed) = self.calculate_average_and_max_speed(EVENT_INTERVAL);
+        let is_moored = self.is_vessel_moored();
+
         let now = Instant::now();
         self.last_event_time = now;
-
-        let average_speed = self.calculate_average_speed(EVENT_INTERVAL);
-        let max_speed = self.calculate_max_speed(EVENT_INTERVAL);
-        let is_moored = self.is_vessel_moored();
 
         // Update last reported position for next report
         self.last_reported_position = self.current_position;
 
         Some(VesselStatus {
             current_position: self.current_position,
+            average_position,
+            number_of_samples: sample_count,
             average_speed,
             max_speed: max_speed,
             is_moored,
@@ -200,33 +205,56 @@ impl VesselMonitor {
         })
     }
 
-    fn calculate_average_speed(&self, window: Duration) -> f64 {
-        let now = Instant::now();
-        let cutoff = now - window;
-
-        let speeds: Vec<f64> = self
-            .speeds
-            .iter()
-            .filter(|s| s.timestamp >= cutoff)
-            .map(|s| s.speed)
-            .collect();
-
-        if speeds.is_empty() {
-            0.0
-        } else {
-            speeds.iter().sum::<f64>() / speeds.len() as f64
+    fn calculate_average_position(&mut self, window: Duration) -> (usize, Option<Position>) {
+        let mut avg_latitude = 0.0;
+        let mut avg_longitude = 0.0;
+        let mut sample_count = 0;
+        
+        let iterator = self.positions.iter().rev();
+        for p in iterator {
+            if p.timestamp.duration_since(self.last_event_time) > window {
+                break; // go back until last event time, then stop
+            }
+            avg_latitude += p.position.latitude;
+            avg_longitude += p.position.longitude;
+            sample_count += 1;  
         }
+    
+        let average_position = if sample_count > 0 {
+            Some(Position {
+                latitude: avg_latitude / sample_count as f64,
+                longitude: avg_longitude / sample_count as f64,
+            })
+        } else {
+            None
+        };
+        (sample_count, average_position)
     }
-
-    fn calculate_max_speed(&self, window: Duration) -> f64 {
+    
+    fn calculate_average_and_max_speed(&self, window: Duration) -> (usize, f64, f64) {
         let now = Instant::now();
         let cutoff = now - window;
 
-        self.speeds
-            .iter()
-            .filter(|s| s.timestamp >= cutoff)
-            .map(|s| s.speed)
-            .fold(0.0, f64::max)
+        let iterator = self.speeds.iter().rev();
+        let mut total_speed = 0.0;
+        let mut count = 0;
+        let mut max_speed = 0.0;
+        for s in iterator {
+            if s.timestamp < cutoff {
+                break;
+            }
+            total_speed += s.speed;
+            if s.speed > max_speed {
+                max_speed = s.speed;
+            }
+            count += 1;
+        }
+        let average_speed = if count > 0 {
+            total_speed / count as f64
+        } else {
+            0.0
+        };
+        (count, average_speed, max_speed)
     }
 
     fn is_vessel_moored(&self) -> bool {
@@ -262,7 +290,8 @@ impl VesselMonitor {
         // Check if all positions are within threshold of average position
         recent_positions
             .iter()
-            .all(|p| p.position.distance_to(&avg_position) <= MOORING_THRESHOLD_METERS)
+            .filter(|p| p.position.distance_to(&avg_position) <= MOORING_THRESHOLD_METERS)
+            .count() >= (recent_positions.len() as f64 * MOORING_ACCURACY) as usize // At least 90% within threshold
     }
 }
 
@@ -287,7 +316,7 @@ impl std::fmt::Display for VesselStatus {
         writeln!(f, "Avg Speed:    {:5.2} m/s ({:5.2} knots)", 
                  self.average_speed, self.average_speed * 1.94384)?;
         writeln!(f, "Max Speed:    {:5.2} m/s ({:5.2} knots)", 
-                 self.max_speed_30s, self.max_speed_30s * 1.94384)?;
+                 self.max_speed, self.max_speed * 1.94384)?;
         writeln!(f, "Status:       {}", 
                  if self.is_moored { "⚓ MOORED  " } else { "⛵ UNDERWAY" })?;
         writeln!(f, "Engine:       {}", 

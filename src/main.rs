@@ -1,5 +1,5 @@
 use socketcan::{CanSocket, EmbeddedFrame, ExtendedId, Frame, Socket};
-use std::{error::Error, ops::ControlFlow};
+use std::{error::Error, ops::ControlFlow, time::{Instant, SystemTime}};
 use tracing::{info, warn, debug};
 
 mod pgns;
@@ -126,6 +126,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut env_monitor = EnvironmentalMonitor::new(config.database.environmental.clone());
     
     let mut last_vessel_status: Option<VesselStatus> = None;
+    let mut last_reported_max_speed: f64 = 0.0;
 
     // Read CAN frames in a loop
     loop {
@@ -144,7 +145,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     
                     handle_message(&mut vessel_monitor, &mut time_monitor, &mut env_monitor, n2k_frame);
                     
-                    handle_vessel_status(&vessel_db, &mut vessel_monitor, &time_monitor, &mut last_vessel_status);
+                    handle_vessel_status(&vessel_db, &mut vessel_monitor, &time_monitor, &mut last_vessel_status, &mut last_reported_max_speed);
                                         
                     handle_environment_status(&vessel_db, &time_monitor, &mut env_monitor);
                     
@@ -207,7 +208,7 @@ fn handle_environment_status(vessel_db: &Option<VesselDatabase>, time_monitor: &
     }
 }
 
-fn handle_vessel_status(vessel_db: &Option<VesselDatabase>, vessel_monitor: &mut VesselMonitor, time_monitor: &TimeMonitor, last_vessel_status: &mut Option<VesselStatus>) {
+fn handle_vessel_status(vessel_db: &Option<VesselDatabase>, vessel_monitor: &mut VesselMonitor, time_monitor: &TimeMonitor, last_vessel_status: &mut Option<VesselStatus>, last_reported_max_speed: &mut f64) {
     // Check if it's time to generate a vessel status report
     if let Some(status) = vessel_monitor.generate_status() {
         //println!("\n{}", status);
@@ -233,7 +234,15 @@ fn handle_vessel_status(vessel_db: &Option<VesselDatabase>, vessel_monitor: &mut
                         (0.0, 0)
                     };
 
-                    if let Err(e) = db.insert_status(&status, total_distance_m, total_time_ms) {
+                    let time: Instant = status.timestamp;
+                    let latitude = if status.is_moored { status.average_position.as_ref().map_or(0.0, |pos| pos.latitude) } else { status.current_position.map_or(0.0, |pos| pos.latitude) };
+                    let longitude = if status.is_moored { status.average_position.as_ref().map_or(0.0, |pos| pos.longitude) } else { status.current_position.map_or(0.0, |pos| pos.longitude) };
+                    let average_speed = if total_time_ms > 0 { total_distance_m / (total_time_ms as f64 / 1000.0) } else { 0.0 };
+                    let max_speed = if *last_reported_max_speed > status.max_speed { *last_reported_max_speed } else { status.max_speed };
+                    *last_reported_max_speed = max_speed;
+
+
+                    if let Err(e) = db.insert_status(time, latitude, longitude, average_speed, max_speed, status.is_moored, status.engine_on, total_distance_m, total_time_ms) {
                         warn!("Error writing to database: {}", e);
                     } else {
                         if let Some(pos) = status.current_position {
@@ -242,6 +251,7 @@ fn handle_vessel_status(vessel_db: &Option<VesselDatabase>, vessel_monitor: &mut
                         }
                         vessel_monitor.mark_db_persisted();
                         *last_vessel_status = Some(status.clone());
+                        *last_reported_max_speed = 0.0;
                     }
                 } else {
                     warn!("Skipping vessel status DB write - time skew detected {} ms", time_monitor.last_measured_skew_ms());
