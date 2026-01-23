@@ -205,8 +205,9 @@ test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured
 
 5. **Environmental Monitor** ([environmental_monitor.rs](src/environmental_monitor.rs))
    - Tracks wind, temperature, pressure, humidity, roll
-   - Calculates 1-minute averages (avg, min, max)
-   - Per-metric persistence intervals
+   - Calculates statistics (avg, min, max, count) on demand per metric
+   - Per-metric persistence intervals for efficient storage
+   - Metric-by-metric database writes for optimal performance
 
 6. **Database** ([db.rs](src/db.rs))
    - Connection pool management
@@ -257,7 +258,18 @@ To prevent incorrect timestamps in the database:
 
 ### Adaptive Persistence
 
-Environmental metrics are persisted at different intervals based on their update frequency and importance:
+Environmental metrics are persisted individually to the database at different intervals based on their update frequency and importance. When a metric's persistence interval is reached, the system:
+
+1. **Calculates Statistics**: Computes avg, min, max, and count from collected samples
+2. **Writes to Database**: Inserts a single row with the calculated statistics
+3. **Clears Samples**: Removes processed samples to conserve memory
+4. **Updates Timestamp**: Marks the metric as persisted for interval tracking
+
+This metric-by-metric approach provides:
+- **Efficient Storage**: Only stores aggregated statistics, not every sample
+- **Flexible Intervals**: Each metric can have its own persistence rate
+- **Memory Efficiency**: Samples are cleared after processing
+- **Better Query Performance**: Pre-aggregated data reduces database load
 
 | Metric | Default Interval | Rationale |
 |--------|-----------------|-----------|
@@ -308,19 +320,22 @@ CREATE TABLE vessel_status (
 );
 ```
 
-### `environmental_metrics` Table
+### `environmental_data` Table
 
-Stores environmental sensor data with 1-minute averages.
+Stores environmental sensor data with calculated statistics per metric per persistence interval.
 
 ```sql
-CREATE TABLE environmental_metrics (
-    id INT AUTO_INCREMENT PRIMARY KEY,
+CREATE TABLE environmental_data (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
     timestamp DATETIME(3) NOT NULL,
     metric_id TINYINT UNSIGNED NOT NULL,
-    avg_value DECIMAL(10, 2),
-    min_value DECIMAL(10, 2),
-    max_value DECIMAL(10, 2),
-    INDEX idx_timestamp_metric (timestamp, metric_id)
+    value_avg FLOAT,
+    value_max FLOAT,
+    value_min FLOAT,
+    unit CHAR(3),
+    UNIQUE KEY unique_metric_time (timestamp, metric_id),
+    INDEX idx_timestamp (timestamp),
+    INDEX idx_metric_timestamp (metric_id, timestamp)
 );
 ```
 
@@ -333,7 +348,13 @@ CREATE TABLE environmental_metrics (
 - 6: Wind Direction (degrees)
 - 7: Roll Angle (degrees)
 
-See [README_DATABASE.md](README_DATABASE.md) for detailed schema information.
+**Storage Approach:**
+- Each metric is persisted independently at its configured interval
+- Statistics (avg, min, max) are calculated from collected samples
+- Samples are cleared after persistence to conserve memory
+- `UNIQUE KEY` prevents duplicate data for the same metric/timestamp
+
+See [README_DATABASE.md](README_DATABASE.md) for detailed schema information and query examples.
 
 ## Troubleshooting
 

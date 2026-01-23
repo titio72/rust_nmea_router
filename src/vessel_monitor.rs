@@ -13,6 +13,7 @@ const MOORING_ACCURACY: f64 = 0.90; // 90% of positions within threshold
 pub struct VesselStatus {
     pub current_position: Option<Position>,
     pub average_position: Option<Position>,
+    #[allow(dead_code)]
     pub number_of_samples: usize,
     pub average_speed: f64,  // m/s
     pub max_speed: f64,       // m/s

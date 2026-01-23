@@ -4,8 +4,6 @@ use std::time::{Duration, Instant};
 use crate::pgns::{WindData, Temperature, Humidity, ActualPressure, Attitude};
 use crate::config::EnvironmentalConfig;
 
-const SAMPLE_INTERVAL: Duration = Duration::from_secs(60); // 1 minute
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum MetricId {
@@ -21,6 +19,18 @@ pub enum MetricId {
 impl MetricId {
     pub fn as_u8(&self) -> u8 {
         *self as u8
+    }
+
+    pub fn as_index(&self) -> usize {
+        match self {
+            MetricId::Pressure => 0,
+            MetricId::CabinTemp => 1,
+            MetricId::WaterTemp => 2,
+            MetricId::Humidity => 3,
+            MetricId::WindSpeed => 4,
+            MetricId::WindDir => 5,
+            MetricId::Roll => 6,
+        }
     }
     
     pub fn unit(&self) -> &'static str {
@@ -47,6 +57,16 @@ impl MetricId {
             MetricId::Roll => "roll",
         }
     }
+
+    pub const ALL_METRICS: [MetricId; 7] = [
+        MetricId::Pressure,
+        MetricId::CabinTemp,
+        MetricId::WaterTemp,
+        MetricId::Humidity,
+        MetricId::WindSpeed,
+        MetricId::WindDir,
+        MetricId::Roll,
+    ];
 }
 
 #[derive(Debug, Clone)]
@@ -54,107 +74,47 @@ pub struct MetricData {
     pub avg: Option<f64>,
     pub max: Option<f64>,
     pub min: Option<f64>,
+    pub count: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
-pub struct EnvironmentalReport {
-    #[allow(dead_code)]
-    pub timestamp: Instant,
-    pub pressure: MetricData,        // Pascals
-    pub cabin_temp: MetricData,      // Celsius
-    pub water_temp: MetricData,     // Celsius
-    pub humidity: MetricData,        // Percent
-    pub wind_speed: MetricData,      // m/s
-    pub wind_dir: MetricData,        // degrees
-    pub roll: MetricData,            // degrees
-}
-
-impl std::fmt::Display for EnvironmentalReport {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        writeln!(f, "═══════════════════════════════════════════════════════════════")?;
-        writeln!(f, "ENVIRONMENTAL DATA REPORT (1-minute average)")?;
-        writeln!(f, "═══════════════════════════════════════════════════════════════")?;
-        
-        if let (Some(avg), Some(max), Some(min)) = (self.pressure.avg, self.pressure.max, self.pressure.min) {
-            writeln!(f, "Pressure:   Avg: {:.0} Pa  Max: {:.0} Pa  Min: {:.0} Pa", avg, max, min)?;
-        } else {
-            writeln!(f, "Pressure:   No data")?;
-        }
-        
-        if let (Some(avg), Some(max), Some(min)) = (self.cabin_temp.avg, self.cabin_temp.max, self.cabin_temp.min) {
-            writeln!(f, "Cabin Temp: Avg: {:.1}°C  Max: {:.1}°C  Min: {:.1}°C", avg, max, min)?;
-        } else {
-            writeln!(f, "Cabin Temp: No data")?;
-        }
-        
-        if let (Some(avg), Some(max), Some(min)) = (self.water_temp.avg, self.water_temp.max, self.water_temp.min) {
-            writeln!(f, "Water Temp: Avg: {:.1}°C  Max: {:.1}°C  Min: {:.1}°C", avg, max, min)?;
-        } else {
-            writeln!(f, "Water Temp: No data")?;
-        }
-        
-        if let (Some(avg), Some(max), Some(min)) = (self.humidity.avg, self.humidity.max, self.humidity.min) {
-            writeln!(f, "Humidity:   Avg: {:.1}%  Max: {:.1}%  Min: {:.1}%", avg, max, min)?;
-        } else {
-            writeln!(f, "Humidity:   No data")?;
-        }
-        
-        if let (Some(avg), Some(max), Some(min)) = (self.wind_speed.avg, self.wind_speed.max, self.wind_speed.min) {
-            writeln!(f, "Wind Speed: Avg: {:.1} m/s  Max: {:.1} m/s  Min: {:.1} m/s", avg, max, min)?;
-            writeln!(f, "            Avg: {:.1} kt   Max: {:.1} kt   Min: {:.1} kt", 
-                avg * 1.94384, max * 1.94384, min * 1.94384)?;
-        } else {
-            writeln!(f, "Wind Speed: No data")?;
-        }
-        
-        if let (Some(avg), Some(max), Some(min)) = (self.wind_dir.avg, self.wind_dir.max, self.wind_dir.min) {
-            writeln!(f, "Wind Dir:   Avg: {:.0}°  Max: {:.0}°  Min: {:.0}°", avg, max, min)?;
-        } else {
-            writeln!(f, "Wind Dir:   No data")?;
-        }
-        
-        if let (Some(avg), Some(max), Some(min)) = (self.roll.avg, self.roll.max, self.roll.min) {
-            writeln!(f, "Roll:       Avg: {:.1}°  Max: {:.1}°  Min: {:.1}°", avg, max, min)?;
-        } else {
-            writeln!(f, "Roll:       No data")?;
-        }
-        
-        writeln!(f, "═══════════════════════════════════════════════════════════════")
-    }
-}
 
 struct Sample<T> {
     value: T,
+    #[allow(dead_code)]
     timestamp: Instant,
 }
 
 pub struct EnvironmentalMonitor {
-    pressure_samples: VecDeque<Sample<f64>>,
-    cabin_temp_samples: VecDeque<Sample<f64>>,
-    water_temp_samples: VecDeque<Sample<f64>>,
-    humidity_samples: VecDeque<Sample<f64>>,
-    wind_speed_samples: VecDeque<Sample<f64>>,
-    wind_dir_samples: VecDeque<Sample<f64>>,
-    roll_samples: VecDeque<Sample<f64>>,
-    last_report_time: Instant,
     last_db_persist: std::collections::HashMap<MetricId, Instant>,
-    config: EnvironmentalConfig,
+    db_periods: [Duration; 7],
+    data_samples: [VecDeque<Sample<f64>>; 7],
 }
 
 impl EnvironmentalMonitor {
     pub fn new(config: EnvironmentalConfig) -> Self {
-        Self {
-            pressure_samples: VecDeque::new(),
-            cabin_temp_samples: VecDeque::new(),
-            water_temp_samples: VecDeque::new(),
-            humidity_samples: VecDeque::new(),
-            wind_speed_samples: VecDeque::new(),
-            wind_dir_samples: VecDeque::new(),
-            roll_samples: VecDeque::new(),
-            last_report_time: Instant::now(),
+        let res = Self {
+            data_samples: [
+                VecDeque::new(), // Pressure    
+                VecDeque::new(), // CabinTemp
+                VecDeque::new(), // WaterTemp
+                VecDeque::new(), // Humidity
+                VecDeque::new(), // WindSpeed
+                VecDeque::new(), // WindDir
+                VecDeque::new(), // Roll
+            ],
             last_db_persist: std::collections::HashMap::new(),
-            config,
-        }
+            db_periods: [
+                config.wind_speed_interval(),
+                config.wind_direction_interval(),
+                config.roll_interval(),
+                config.pressure_interval(),
+                config.cabin_temp_interval(),
+                config.water_temp_interval(),
+                config.humidity_interval(),
+            ],
+        };
+        res
     }
 
     /// Process a temperature message (PGN 130312)
@@ -168,22 +128,17 @@ impl EnvironmentalMonitor {
             
             if source==4 && instance==0 {
                 // Source 4 is "Inside Ambient"
-                self.cabin_temp_samples.push_back(Sample {
+                self.data_samples[MetricId::CabinTemp.as_index()].push_back(Sample {
                     value: celsius,
                     timestamp: now,
                 });
-                
-                self.cleanup_samples();
             } else if source==0 && instance==0 {
                 // Source 0 is water temperature
-                self.water_temp_samples.push_back(Sample {
+                self.data_samples[MetricId::WaterTemp.as_index()].push_back(Sample {
                     value: celsius,
                     timestamp: now,
                 });
-                
-                self.cleanup_samples();
             }
-
         }
     }
 
@@ -192,19 +147,17 @@ impl EnvironmentalMonitor {
         let now = Instant::now();
         
         // Store wind speed
-        self.wind_speed_samples.push_back(Sample {
+        self.data_samples[MetricId::WindSpeed.as_index()].push_back(Sample {
             value: wind.speed,
             timestamp: now,
         });
         
         // Store wind direction (convert radians to degrees)
         let degrees = wind.angle.to_degrees();
-        self.wind_dir_samples.push_back(Sample {
+        self.data_samples[MetricId::WindDir.as_index()].push_back(Sample {
             value: degrees,
             timestamp: now,
         });
-        
-        self.cleanup_samples();
     }
     
     /// Process a humidity message (PGN 130313)
@@ -212,12 +165,10 @@ impl EnvironmentalMonitor {
     pub fn process_humidity(&mut self, hum: &Humidity) {
         let now = Instant::now();
         
-        self.humidity_samples.push_back(Sample {
+        self.data_samples[MetricId::Humidity.as_index()].push_back(Sample {
             value: hum.actual_humidity,
             timestamp: now,
         });
-        
-        self.cleanup_samples();
     }
     
     /// Process an actual pressure message (PGN 130314)
@@ -229,12 +180,10 @@ impl EnvironmentalMonitor {
 
         if instance == 0 && source == 0 {
             // Primary atmospheric pressure sensor
-            self.pressure_samples.push_back(Sample {
+            self.data_samples[MetricId::Pressure.as_index()].push_back(Sample {
                 value: pressure.pressure,
                 timestamp: now,
             });
-            
-            self.cleanup_samples();
         }
     }
     
@@ -244,100 +193,45 @@ impl EnvironmentalMonitor {
         if let Some(roll_deg) = attitude.roll_degrees() {
             let now = Instant::now();
             
-            self.roll_samples.push_back(Sample {
+            self.data_samples[MetricId::Roll.as_index()].push_back(Sample {
                 value: roll_deg,
                 timestamp: now,
             });
-            
-            self.cleanup_samples();
         }
     }
 
-    /// Generate a report if the sampling interval has elapsed
-    pub fn generate_report(&mut self) -> Option<EnvironmentalReport> {
-        let now = Instant::now();
-        if now.duration_since(self.last_report_time) < SAMPLE_INTERVAL {
-            return None;
-        }
-        
-        self.last_report_time = now;
-        
-        Some(EnvironmentalReport {
-            timestamp: now,
-            pressure: MetricData {
-                avg: self.calculate_avg(&self.pressure_samples),
-                max: self.calculate_max(&self.pressure_samples),
-                min: self.calculate_min(&self.pressure_samples),
-            },
-            cabin_temp: MetricData {
-                avg: self.calculate_avg(&self.cabin_temp_samples),
-                max: self.calculate_max(&self.cabin_temp_samples),
-                min: self.calculate_min(&self.cabin_temp_samples),
-            },
-            water_temp: MetricData {
-                avg: self.calculate_avg(&self.water_temp_samples),
-                max: self.calculate_max(&self.water_temp_samples),
-                min: self.calculate_min(&self.water_temp_samples),
-            },
-            humidity: MetricData {
-                avg: self.calculate_avg(&self.humidity_samples),
-                max: self.calculate_max(&self.humidity_samples),
-                min: self.calculate_min(&self.humidity_samples),
-            },
-            wind_speed: MetricData {
-                avg: self.calculate_avg(&self.wind_speed_samples),
-                max: self.calculate_max(&self.wind_speed_samples),
-                min: self.calculate_min(&self.wind_speed_samples),
-            },
-            wind_dir: MetricData {
-                avg: self.calculate_avg(&self.wind_dir_samples),
-                max: self.calculate_max(&self.wind_dir_samples),
-                min: self.calculate_min(&self.wind_dir_samples),
-            },
-            roll: MetricData {
-                avg: self.calculate_avg(&self.roll_samples),
-                max: self.calculate_max(&self.roll_samples),
-                min: self.calculate_min(&self.roll_samples),
-            },
-        })
+    pub fn cleanup_all_samples(&mut self, metric_id: MetricId) {
+        self.data_samples[metric_id.as_index()].clear();
     }
 
-    fn cleanup_samples(&mut self) {
-        let now = Instant::now();
-        let cutoff = now - SAMPLE_INTERVAL - Duration::from_secs(10);
-        
-        Self::remove_old_samples(&mut self.pressure_samples, cutoff);
-        Self::remove_old_samples(&mut self.cabin_temp_samples, cutoff);
-        Self::remove_old_samples(&mut self.water_temp_samples, cutoff);
-        Self::remove_old_samples(&mut self.humidity_samples, cutoff);
-        Self::remove_old_samples(&mut self.wind_speed_samples, cutoff);
-        Self::remove_old_samples(&mut self.wind_dir_samples, cutoff);
+    pub fn calculate_metric_data(&self, metric_id: MetricId) -> Option<MetricData> {
+        let samples = &self.data_samples[metric_id.as_index()];
+        self.calculate(samples)
     }
 
-    fn remove_old_samples<T>(samples: &mut VecDeque<Sample<T>>, cutoff: Instant) {
-        while let Some(sample) = samples.front() {
-            if sample.timestamp < cutoff {
-                samples.pop_front();
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn calculate_avg(&self, samples: &VecDeque<Sample<f64>>) -> Option<f64> {
+    fn calculate(&self, samples: &VecDeque<Sample<f64>>) -> Option<MetricData> {
         if samples.is_empty() {
             return None;
         }
-        let sum: f64 = samples.iter().map(|s| s.value).sum();
-        Some(sum / samples.len() as f64)
-    }
-
-    fn calculate_max(&self, samples: &VecDeque<Sample<f64>>) -> Option<f64> {
-        samples.iter().map(|s| s.value).max_by(|a, b| a.partial_cmp(b).unwrap())
-    }
-
-    fn calculate_min(&self, samples: &VecDeque<Sample<f64>>) -> Option<f64> {
-        samples.iter().map(|s| s.value).min_by(|a, b| a.partial_cmp(b).unwrap())
+        let mut avg: f64 = 0.0;
+        let mut max: f64 = 0.0;
+        let mut min: f64 = 0.0;
+        let count = samples.len() as f64;
+        for sample in samples.iter() {
+            avg += sample.value;
+            if sample.value > max {
+                max = sample.value;
+            }
+            if sample.value < min {
+                min = sample.value;
+            }
+        }
+        Some(MetricData {
+            avg: Some(avg / count),
+            max: Some(max),
+            min: Some(min),
+            count: Some(samples.len()),
+        })
     }
     
     /// Get the list of metrics that should be persisted to the database now
@@ -345,24 +239,15 @@ impl EnvironmentalMonitor {
         let now = Instant::now();
         let mut metrics_to_persist = Vec::new();
         
-        let metrics = [
-            (MetricId::WindSpeed, self.config.wind_speed_interval()),
-            (MetricId::WindDir, self.config.wind_direction_interval()),
-            (MetricId::Roll, self.config.roll_interval()),
-            (MetricId::Pressure, self.config.pressure_interval()),
-            (MetricId::CabinTemp, self.config.cabin_temp_interval()),
-            (MetricId::WaterTemp, self.config.water_temp_interval()),
-            (MetricId::Humidity, self.config.humidity_interval()),
-        ];
-        
-        for (metric_id, interval) in metrics.iter() {
-            if let Some(last_persist) = self.last_db_persist.get(metric_id) {
-                if now.duration_since(*last_persist) >= *interval {
-                    metrics_to_persist.push(*metric_id);
+        for metricid in MetricId::ALL_METRICS.iter() {
+            let interval = self.db_periods[metricid.as_index()];
+            if let Some(last_persist) = self.last_db_persist.get(&metricid) {
+                if now.duration_since(*last_persist) >= interval {
+                    metrics_to_persist.push(*metricid);
                 }
             } else {
                 // Never persisted before, should persist now
-                metrics_to_persist.push(*metric_id);
+                metrics_to_persist.push(*metricid);
             }
         }
         
@@ -370,11 +255,9 @@ impl EnvironmentalMonitor {
     }
     
     /// Mark specific metrics as persisted to the database
-    pub fn mark_metrics_persisted(&mut self, metrics: &[MetricId]) {
+    pub fn mark_metric_persisted(&mut self, metric: MetricId) {
         let now = Instant::now();
-        for metric_id in metrics {
-            self.last_db_persist.insert(*metric_id, now);
-        }
+        self.last_db_persist.insert(metric, now);
     }
 }
 
@@ -425,8 +308,8 @@ mod tests {
     fn test_environmental_monitor_creation() {
         let config = EnvironmentalConfig::default();
         let monitor = EnvironmentalMonitor::new(config);
-        assert_eq!(monitor.pressure_samples.len(), 0);
-        assert_eq!(monitor.cabin_temp_samples.len(), 0);
+        assert_eq!(monitor.data_samples[MetricId::Pressure.as_index()].len(), 0);
+        assert_eq!(monitor.data_samples[MetricId::CabinTemp.as_index()].len(), 0);
     }
 
     #[test]
@@ -444,7 +327,7 @@ mod tests {
         let pressure_msg = ActualPressure::from_bytes(&data).unwrap();
         
         monitor.process_actual_pressure(&pressure_msg);
-        assert_eq!(monitor.pressure_samples.len(), 1);
+        assert_eq!(monitor.data_samples[MetricId::Pressure.as_index()].len(), 1);
     }
 
     #[test]
@@ -464,7 +347,7 @@ mod tests {
         let temp_msg = Temperature::from_bytes(&data).unwrap();
         
         monitor.process_temperature(&temp_msg);
-        assert_eq!(monitor.cabin_temp_samples.len(), 1);
+        assert_eq!(monitor.data_samples[MetricId::CabinTemp.as_index()].len(), 1);
     }
 
     #[test]
@@ -484,7 +367,7 @@ mod tests {
         let temp_msg = Temperature::from_bytes(&data).unwrap();
         
         monitor.process_temperature(&temp_msg);
-        assert_eq!(monitor.water_temp_samples.len(), 1);
+        assert_eq!(monitor.data_samples[MetricId::WaterTemp.as_index()].len(), 1);
     }
 
     #[test]
@@ -504,7 +387,7 @@ mod tests {
         let humidity_msg = Humidity::from_bytes(&data).unwrap();
         
         monitor.process_humidity(&humidity_msg);
-        assert_eq!(monitor.humidity_samples.len(), 1);
+        assert_eq!(monitor.data_samples[MetricId::Humidity.as_index()].len(), 1);
     }
 
     #[test]
@@ -522,8 +405,8 @@ mod tests {
         let wind_msg = WindData::from_bytes(&data).unwrap();
         
         monitor.process_wind(&wind_msg);
-        assert_eq!(monitor.wind_speed_samples.len(), 1);
-        assert_eq!(monitor.wind_dir_samples.len(), 1);
+        assert_eq!(monitor.data_samples[MetricId::WindSpeed.as_index()].len(), 1);
+        assert_eq!(monitor.data_samples[MetricId::WindDir.as_index()].len(), 1);
     }
 
     #[test]
@@ -539,16 +422,16 @@ mod tests {
         ]).unwrap();
         
         monitor.process_attitude(&attitude_msg);
-        assert_eq!(monitor.roll_samples.len(), 1);
+        assert_eq!(monitor.data_samples[MetricId::Roll.as_index()].len(), 1);
     }
 
     #[test]
-    fn test_mark_metrics_persisted() {
+    fn test_mark_metric_persisted() {
         let config = EnvironmentalConfig::default();
         let mut monitor = EnvironmentalMonitor::new(config);
         
-        let metrics = vec![MetricId::Pressure, MetricId::CabinTemp];
-        monitor.mark_metrics_persisted(&metrics);
+        monitor.mark_metric_persisted(MetricId::Pressure);
+        monitor.mark_metric_persisted(MetricId::CabinTemp);
         
         assert!(monitor.last_db_persist.contains_key(&MetricId::Pressure));
         assert!(monitor.last_db_persist.contains_key(&MetricId::CabinTemp));
@@ -579,11 +462,13 @@ mod tests {
             avg: None,
             max: None,
             min: None,
+            count: None,
         };
         
         assert!(data.avg.is_none());
         assert!(data.max.is_none());
         assert!(data.min.is_none());
+        assert!(data.count.is_none());
     }
 
     #[test]
@@ -592,10 +477,12 @@ mod tests {
             avg: Some(20.5),
             max: Some(25.0),
             min: Some(18.0),
+            count: Some(10),
         };
         
         assert_eq!(data.avg.unwrap(), 20.5);
         assert_eq!(data.max.unwrap(), 25.0);
         assert_eq!(data.min.unwrap(), 18.0);
+        assert_eq!(data.count.unwrap(), 10);
     }
 }

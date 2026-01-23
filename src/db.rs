@@ -2,7 +2,7 @@ use mysql::*;
 use mysql::prelude::*;
 use std::{error::Error, time::Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::environmental_monitor::{EnvironmentalReport, MetricId};
+use crate::environmental_monitor::{MetricData, MetricId};
 
 pub struct VesselDatabase {
     pool: Pool,
@@ -72,8 +72,8 @@ impl VesselDatabase {
     /// This allows for adaptive persistence intervals per metric
     pub fn insert_environmental_metrics(
         &self, 
-        report: &EnvironmentalReport, 
-        metrics_to_persist: &[MetricId]
+        data: &MetricData, 
+        metric_id: MetricId
     ) -> Result<(), Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
         
@@ -82,43 +82,27 @@ impl VesselDatabase {
         let timestamp = chrono::DateTime::<chrono::Utc>::from(now);
         let timestamp_str = timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
         
-        // Build mapping of all metrics
-        let all_metrics = [
-            (MetricId::Pressure, &report.pressure),
-            (MetricId::CabinTemp, &report.cabin_temp),
-            (MetricId::WaterTemp, &report.water_temp),
-            (MetricId::Humidity, &report.humidity),
-            (MetricId::WindSpeed, &report.wind_speed),
-            (MetricId::WindDir, &report.wind_dir),
-            (MetricId::Roll, &report.roll),
-        ];
-        
-        // Insert only the specified metrics
-        for (metric_id, data) in all_metrics.iter() {
-            if metrics_to_persist.contains(metric_id) {
-                // Only insert if we have data for this metric
-                if data.avg.is_some() || data.max.is_some() || data.min.is_some() {
-                    conn.exec_drop(
-                        r"INSERT INTO environmental_data 
-                          (timestamp, metric_id, value_avg, value_max, value_min, unit)
-                          VALUES (:timestamp, :metric_id, :value_avg, :value_max, :value_min, :unit)
-                          ON DUPLICATE KEY UPDATE
-                              value_avg = VALUES(value_avg),
-                              value_max = VALUES(value_max),
-                              value_min = VALUES(value_min),
-                              unit = VALUES(unit)",
-                        params! {
-                            "timestamp" => &timestamp_str,
-                            "metric_id" => metric_id.as_u8(),
-                            "value_avg" => data.avg,
-                            "value_max" => data.max,
-                            "value_min" => data.min,
-                            "unit" => metric_id.unit(),
-                        },
-                    )?;
-                }
-            }
+        if data.avg.is_some() || data.max.is_some() || data.min.is_some() {
+            conn.exec_drop(
+                r"INSERT INTO environmental_data 
+                    (timestamp, metric_id, value_avg, value_max, value_min, unit)
+                    VALUES (:timestamp, :metric_id, :value_avg, :value_max, :value_min, :unit)
+                    ON DUPLICATE KEY UPDATE
+                        value_avg = VALUES(value_avg),
+                        value_max = VALUES(value_max),
+                        value_min = VALUES(value_min),
+                        unit = VALUES(unit)",
+                params! {
+                    "timestamp" => &timestamp_str,
+                    "metric_id" => metric_id.as_u8(),
+                    "value_avg" => data.avg,
+                    "value_max" => data.max,
+                    "value_min" => data.min,
+                    "unit" => metric_id.unit(),
+                },
+            )?;
         }
+
         
         Ok(())
     }

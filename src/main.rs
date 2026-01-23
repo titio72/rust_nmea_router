@@ -1,5 +1,5 @@
 use socketcan::{CanSocket, EmbeddedFrame, ExtendedId, Frame, Socket};
-use std::{error::Error, ops::ControlFlow, time::{Instant, SystemTime}};
+use std::{error::Error, ops::ControlFlow, time::{Instant}};
 use tracing::{info, warn, debug};
 
 mod pgns;
@@ -175,34 +175,36 @@ fn filter_frame(config: &Config, n2k_frame: &stream_reader::N2kFrame) -> Control
 }
 
 fn handle_environment_status(vessel_db: &Option<VesselDatabase>, time_monitor: &TimeMonitor, env_monitor: &mut EnvironmentalMonitor) {
-    // Check if it's time to generate an environmental report
-    if let Some(env_report) = env_monitor.generate_report() {
-        //println!("\n{}", env_report);
-        debug!("Environmental Report generated Cabin Temp {} °C, Water Temp {} °C, Pressure {} Pa, Humidity {} %, Wind Speed {:.1} m/s, Wind Dir {:.0}°, Roll {:.1}°", 
-            env_report.cabin_temp.avg.unwrap_or(f64::NAN),
-            env_report.water_temp.avg.unwrap_or(f64::NAN),
-            env_report.pressure.avg.unwrap_or(f64::NAN),
-            env_report.humidity.avg.unwrap_or(f64::NAN),
-            env_report.wind_speed.avg.unwrap_or(f64::NAN),
-            env_report.wind_dir.avg.unwrap_or(f64::NAN),
-            env_report.roll.avg.unwrap_or(f64::NAN));
 
-        // Write to database if connected, time to persist, and time is synchronized
-        if let Some(ref db) = *vessel_db {
-            let metrics_to_persist = env_monitor.get_metrics_to_persist();
-            if !metrics_to_persist.is_empty() {
-                if time_monitor.is_valid_and_synced() {
-                    if let Err(e) = db.insert_environmental_metrics(&env_report, &metrics_to_persist) {
-                        warn!("Error writing environmental data to database: {}", e);
+
+    // Write to database if connected, time to persist, and time is synchronized
+    if let Some(ref db) = *vessel_db {
+        let metrics_to_persist = env_monitor.get_metrics_to_persist();
+        if !metrics_to_persist.is_empty() {
+            if time_monitor.is_valid_and_synced() {
+                for metricid in metrics_to_persist.iter() {
+                    debug!("Persisting environmental metric: {}", metricid.name());
+                    let data = env_monitor.calculate_metric_data(*metricid);
+                    if let Some(metric_data) = data {
+                        debug!("Metric Data for {}: avg={:?}, max={:?}, min={:?}, count={:?}", 
+                            metricid.name(), 
+                            metric_data.avg, 
+                            metric_data.max, 
+                            metric_data.min,
+                            metric_data.count);
+                        if let Err(e) = db.insert_environmental_metrics(&metric_data, *metricid) {
+                            warn!("Error writing {} data to database: {}", metricid.name(), e);
+                        } else {
+                        env_monitor.mark_metric_persisted(*metricid);
+                        env_monitor.cleanup_all_samples(*metricid);
+                            debug!("Environmental metric {} written to database", metricid.name());
+                        }
                     } else {
-                        debug!("Environmental metrics written to database: {} metrics ({:?})", 
-                            metrics_to_persist.len(), 
-                            metrics_to_persist.iter().map(|m| m.name()).collect::<Vec<_>>());
-                        env_monitor.mark_metrics_persisted(&metrics_to_persist);
+                        debug!("No data available for metric: {}", metricid.name());
                     }
-                } else {
-                    warn!("Skipping environmental metrics DB write - time skew detected {} ms", time_monitor.last_measured_skew_ms());
                 }
+            } else {
+                warn!("Skipping environmental metrics DB write - time skew detected {} ms", time_monitor.last_measured_skew_ms());
             }
         }
     }
