@@ -125,6 +125,41 @@ CREATE TABLE environmental_data (
 
 Each metric is persisted independently based on configured intervals, allowing efficient storage and querying. For example, wind data might be stored every 10 seconds, while temperature data every 60 seconds.
 
+## Trip Tracking
+
+The system automatically tracks vessel trips, separating sailing time, motoring time, and time at anchor. A trip represents a continuous voyage, with automatic trip boundaries based on inactivity.
+
+**Trip Logic:**
+- A new trip is created when vessel status is written and the last trip ended more than 24 hours ago
+- An existing trip is updated when vessel status is written within 24 hours of the last trip end
+- Each trip records:
+  - Start and end timestamps
+  - Total distance sailed (engine off, underway)
+  - Total distance motoring (engine on, underway)
+  - Total time sailing, motoring, and moored
+
+**Database Schema:**
+```sql
+CREATE TABLE trips (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    description VARCHAR(255) NOT NULL,
+    start_timestamp DATETIME(3) NOT NULL,
+    end_timestamp DATETIME(3) NOT NULL,
+    total_distance_sailed DOUBLE NOT NULL DEFAULT 0 COMMENT 'nautical miles',
+    total_distance_motoring DOUBLE NOT NULL DEFAULT 0 COMMENT 'nautical miles',
+    total_time_sailing BIGINT NOT NULL DEFAULT 0,
+    total_time_motoring BIGINT NOT NULL DEFAULT 0,
+    total_time_moored BIGINT NOT NULL DEFAULT 0,
+    INDEX idx_end_timestamp (end_timestamp)
+);
+```
+
+**Migration:**
+Run the migration script to create the trips table:
+```bash
+mysql -u nmea -p nmea_router < migrations/003_create_trips_table.sql
+```
+
 ## Querying Data
 
 ### Latest Vessel Status
@@ -135,8 +170,7 @@ SELECT
     CONCAT(latitude, '° N, ', longitude, '° E') as position,
     ROUND(average_speed_ms * 1.94384, 2) as avg_speed_knots,
     ROUND(max_speed_ms * 1.94384, 2) as max_speed_knots,
-    ROUND(total_distance_m, 1) as distance_meters,
-    ROUND(total_distance_m / 1852.0, 3) as distance_nm,
+    ROUND(total_distance_nm, 3) as distance_nm,
     IF(engine_on, '🟢 ON', '⚫ OFF') as engine,
     IF(is_moored, '⚓ MOORED', '⛵ UNDERWAY') as status
 FROM vessel_status 
@@ -145,6 +179,52 @@ LIMIT 1;
 ```
 
 ### Average Speed Last Hour
+
+```sql
+SELECT 
+    ROUND(AVG(average_speed_ms) * 1.94384, 2) as avg_speed_knots
+FROM vessel_status 
+WHERE timestamp > NOW() - INTERVAL 1 HOUR;
+```
+
+### Current Trip Summary
+
+```sql
+SELECT 
+    description,
+    start_timestamp,
+    end_timestamp,
+    ROUND(total_distance_sailed, 2) as distance_sailed_nm,
+    ROUND(total_distance_motoring, 2) as distance_motoring_nm,
+    ROUND(total_distance_sailed + total_distance_motoring, 2) as total_distance_nm,
+    CONCAT(FLOOR(total_time_sailing / 3600000), 'h ', 
+           FLOOR((total_time_sailing % 3600000) / 60000), 'm') as time_sailing,
+    CONCAT(FLOOR(total_time_motoring / 3600000), 'h ', 
+           FLOOR((total_time_motoring % 3600000) / 60000), 'm') as time_motoring,
+    CONCAT(FLOOR(total_time_moored / 3600000), 'h ', 
+           FLOOR((total_time_moored % 3600000) / 60000), 'm') as time_moored
+FROM trips 
+ORDER BY end_timestamp DESC 
+LIMIT 1;
+```
+
+### All Trips Summary
+
+```sql
+SELECT 
+    id,
+    description,
+    DATE(start_timestamp) as start_date,
+    DATEDIFF(end_timestamp, start_timestamp) as duration_days,
+    ROUND(total_distance_sailed + total_distance_motoring, 2) as total_nm,
+    ROUND(total_distance_sailed, 2) as sailed_nm,
+    ROUND(total_distance_motoring, 2) as motored_nm,
+    ROUND(total_distance_sailed / (total_distance_sailed + total_distance_motoring) * 100, 1) as sail_percentage
+FROM trips 
+ORDER BY start_timestamp DESC;
+```
+
+### Latest Environmental Readings
 
 ```sql
 SELECT 

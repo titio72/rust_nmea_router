@@ -11,7 +11,7 @@ const MOORING_ACCURACY: f64 = 0.90; // 90% of positions within threshold
 
 #[derive(Debug, Clone)]
 pub struct VesselStatus {
-    pub current_position: Option<Position>,
+    pub current_position: Position,
     pub average_position: Option<Position>,
     #[allow(dead_code)]
     pub number_of_samples: usize,
@@ -23,6 +23,33 @@ pub struct VesselStatus {
     pub timestamp: Instant,
 }
 
+impl VesselStatus {
+    pub fn get_effective_position(&self) -> Position {
+        if self.is_moored { self.current_position } else { self.average_position.unwrap_or(self.current_position) }
+    }
+
+    pub fn get_effective_speed(&self) -> f64 {
+        if self.is_moored { 0.0 } else { self.average_speed }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.number_of_samples > 0
+    }
+
+    pub fn get_total_distance_and_time_from_last_report(&self, last_vessel_status: &mut Option<VesselStatus>) -> (f64, u64) {
+        let (total_distance_nm, total_time_ms) = if let Some(ref last_status) = *last_vessel_status {
+            let last_sample = PositionSample::from_status(last_status);
+            let current_sample = PositionSample::from_status(self);
+            let distance = last_sample.distance_to(&current_sample);
+            let time = last_sample.time_difference_ms(&current_sample);
+            (distance, time)
+        } else {
+            (0.0, 0)
+        };
+        (total_distance_nm, total_time_ms)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Position {
     pub latitude: f64,
@@ -31,7 +58,7 @@ pub struct Position {
 
 impl Position {
     pub fn distance_to(&self, other: &Position) -> f64 {
-        // Haversine formula to calculate distance in meters
+        // Haversine formula to calculate distance in nautical miles
         let r = 6371000.0; // Earth radius in meters
         let lat1 = self.latitude.to_radians();
         let lat2 = other.latitude.to_radians();
@@ -42,7 +69,7 @@ impl Position {
             + lat1.cos() * lat2.cos() * (delta_lon / 2.0).sin().powi(2);
         let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
 
-        r * c
+        (r * c) / 1852.0 // Convert meters to nautical miles
     }
 }
 
@@ -53,11 +80,11 @@ pub struct PositionSample {
 }
 
 impl PositionSample {
-    pub fn from_status(report: &VesselStatus) -> Option<Self> {
-        report.current_position.map(|pos| Self {
-            position: pos,
+    pub fn from_status(report: &VesselStatus) -> Self {
+        Self {
+            position: report.current_position,
             timestamp: report.timestamp,
-        })
+        }
     }
     
     pub fn distance_to(&self, other: &PositionSample) -> f64 {
@@ -88,20 +115,20 @@ pub struct VesselMonitor {
     last_event_time: Instant,
     last_db_persist_time: Instant,
     current_position: Option<Position>,
-    last_reported_position: Option<Position>,  // Position from the last generated report
     engine_on: bool,
     config: VesselStatusConfig,
 }
 
 impl VesselMonitor {
     pub fn new(config: VesselStatusConfig) -> Self {
-        Self {
+        let now = Instant::now();
+        VesselMonitor {
             positions: VecDeque::new(),
             speeds: VecDeque::new(),
-            last_event_time: Instant::now(),
-            last_db_persist_time: Instant::now(),
+            last_event_time: now,
+            // Initialize to far past to ensure first report is written immediately
+            last_db_persist_time: now - Duration::from_secs(86400), // 24 hours ago
             current_position: None,
-            last_reported_position: None,
             engine_on: false,
             config,
         }
@@ -180,7 +207,7 @@ impl VesselMonitor {
 
     /// Generate a vessel status event
     pub fn generate_status(&mut self) -> Option<VesselStatus> {
-        if !self.should_generate_event() {
+        if !self.should_generate_event() || self.current_position.is_none() {
             return None;
         }
 
@@ -188,21 +215,22 @@ impl VesselMonitor {
         let (_, average_speed, max_speed) = self.calculate_average_and_max_speed(EVENT_INTERVAL);
         let is_moored = self.is_vessel_moored();
 
-        let now = Instant::now();
-        self.last_event_time = now;
-
-        // Update last reported position for next report
-        self.last_reported_position = self.current_position;
+        // Use the timestamp of the last position in the buffer, or current time if no positions
+        let timestamp = self.positions.back()
+            .map(|sample| sample.timestamp)
+            .unwrap_or_else(|| Instant::now());
+        
+        self.last_event_time = Instant::now();
 
         Some(VesselStatus {
-            current_position: self.current_position,
+            current_position: self.current_position.unwrap(),
             average_position,
             number_of_samples: sample_count,
             average_speed,
             max_speed: max_speed,
             is_moored,
             engine_on: self.engine_on,
-            timestamp: now,
+            timestamp,
         })
     }
 
@@ -308,11 +336,7 @@ impl std::fmt::Display for VesselStatus {
         writeln!(f, "VESSEL STATUS REPORT")?;
         writeln!(f, "════════════════════════════════════════════════════")?;
         
-        if let Some(pos) = self.current_position {
-            writeln!(f, "Position:     {:+010.6}°, {:+010.6}°", pos.latitude, pos.longitude)?;
-        } else {
-            writeln!(f, "Position:     Unknown")?;
-        }
+        writeln!(f, "Position:     {:+010.6}°, {:+010.6}°", self.current_position.latitude, self.current_position.longitude)?;
         
         writeln!(f, "Avg Speed:    {:5.2} m/s ({:5.2} knots)", 
                  self.average_speed, self.average_speed * 1.94384)?;
@@ -352,12 +376,12 @@ mod tests {
         };
         let pos2 = Position {
             latitude: 0.0,
-            longitude: 0.001, // ~111 meters at equator
+            longitude: 0.001, // ~111 meters at equator = ~0.06 nm
         };
         
         let distance = pos1.distance_to(&pos2);
-        // Should be approximately 111 meters
-        assert!(distance > 100.0 && distance < 120.0);
+        // Should be approximately 0.06 nautical miles (111 meters / 1852)
+        assert!(distance > 0.05 && distance < 0.07);
     }
 
     #[test]
@@ -449,6 +473,19 @@ mod tests {
     }
 
     #[test]
+    fn test_first_report_persists_immediately() {
+        let config = VesselStatusConfig {
+            interval_moored_seconds: 600, // 10 minutes
+            interval_underway_seconds: 30, // 30 seconds
+        };
+        let monitor = VesselMonitor::new(config);
+        
+        // First report should persist immediately (regardless of interval)
+        assert!(monitor.should_persist_to_db(true));
+        assert!(monitor.should_persist_to_db(false));
+    }
+
+    #[test]
     fn test_mooring_detection_stationary() {
         let config = VesselStatusConfig::default();
         let mut monitor = VesselMonitor::new(config);
@@ -492,12 +529,10 @@ mod tests {
         let cog_sog_msg = CogSogRapidUpdate::from_bytes(&data).unwrap();
         monitor.process_cog_sog(&cog_sog_msg);
         
-        // Wait for event interval
-        std::thread::sleep(Duration::from_millis(100));
+        // Wait for event interval (10 seconds)
+        std::thread::sleep(EVENT_INTERVAL + Duration::from_millis(100));
         
         let status = monitor.generate_status();
-        if let Some(status) = status {
-            assert!(status.current_position.is_some());
-        }
+        assert!(status.is_some());
     }
 }

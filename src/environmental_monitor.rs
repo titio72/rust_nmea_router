@@ -214,8 +214,11 @@ impl EnvironmentalMonitor {
             return None;
         }
         let mut avg: f64 = 0.0;
-        let mut max: f64 = 0.0;
-        let mut min: f64 = 0.0;
+        // Initialize with the first value to handle negative numbers or non-zero baselines correctly
+        let first_val = samples[0].value;
+        let mut max: f64 = first_val;
+        let mut min: f64 = first_val;
+        
         let count = samples.len() as f64;
         for sample in samples.iter() {
             avg += sample.value;
@@ -240,14 +243,16 @@ impl EnvironmentalMonitor {
         let mut metrics_to_persist = Vec::new();
         
         for metricid in MetricId::ALL_METRICS.iter() {
-            let interval = self.db_periods[metricid.as_index()];
-            if let Some(last_persist) = self.last_db_persist.get(&metricid) {
-                if now.duration_since(*last_persist) >= interval {
+            if !self.data_samples[metricid.as_index()].is_empty() {
+                let interval = self.db_periods[metricid.as_index()];
+                if let Some(last_persist) = self.last_db_persist.get(&metricid) {
+                    if now.duration_since(*last_persist) >= interval {
+                        metrics_to_persist.push(*metricid);
+                    }
+                } else {
+                    // Never persisted before, should persist now
                     metrics_to_persist.push(*metricid);
                 }
-            } else {
-                // Never persisted before, should persist now
-                metrics_to_persist.push(*metricid);
             }
         }
         
@@ -440,18 +445,26 @@ mod tests {
 
     #[test]
     fn test_get_metrics_to_persist_initial() {
-        let config = EnvironmentalConfig {
-            wind_speed_seconds: 10,
-            wind_direction_seconds: 10,
-            roll_seconds: 10,
-            pressure_seconds: 10,
-            cabin_temp_seconds: 10,
-            water_temp_seconds: 10,
-            humidity_seconds: 10,
-        };
+        let config = EnvironmentalConfig::default();
         let monitor = EnvironmentalMonitor::new(config);
         
-        // Initially, all metrics should be ready to persist
+        // Initially, no metrics have data, so nothing to persist
+        let metrics = monitor.get_metrics_to_persist();
+        assert_eq!(metrics.len(), 0);
+    }
+
+    #[test]
+    fn test_get_metrics_to_persist_with_data() {
+        let config = EnvironmentalConfig::default();
+        let mut monitor = EnvironmentalMonitor::new(config);
+
+        // Add dummy data for all metrics
+        let now = Instant::now();
+        for samples in monitor.data_samples.iter_mut() {
+             samples.push_back(Sample { value: 10.0, timestamp: now });
+        }
+        
+        // Now all 7 should be ready as they have data and haven't been persisted
         let metrics = monitor.get_metrics_to_persist();
         assert_eq!(metrics.len(), 7);
     }

@@ -9,6 +9,7 @@ mod time_monitor;
 mod environmental_monitor;
 mod db;
 mod config;
+mod trip;
 
 use stream_reader::N2kStreamReader;
 use vessel_monitor::VesselMonitor;
@@ -16,8 +17,9 @@ use time_monitor::TimeMonitor;
 use environmental_monitor::EnvironmentalMonitor;
 use db::VesselDatabase;
 use config::Config;
+use trip::Trip;
 
-use crate::vessel_monitor::{PositionSample, VesselStatus};
+use crate::vessel_monitor::VesselStatus;
 
 // ========== Logging Setup ==========
 
@@ -127,6 +129,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     let mut last_vessel_status: Option<VesselStatus> = None;
     let mut last_reported_max_speed: f64 = 0.0;
+    let mut current_trip: Option<Trip> = None;
+    
+    // Load the last trip from database if available
+    if let Some(ref db) = vessel_db {
+        match db.get_last_trip() {
+            Ok(trip) => {
+                if let Some(t) = trip {
+                    info!("Loaded last trip from database: {} (ID: {})", t.description, t.id.unwrap_or(0));
+                    current_trip = Some(t);
+                } else {
+                    info!("No existing trip found in database");
+                }
+            }
+            Err(e) => {
+                warn!("Failed to load last trip from database: {}", e);
+            }
+        }
+    }
 
     // Read CAN frames in a loop
     loop {
@@ -145,7 +165,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     
                     handle_message(&mut vessel_monitor, &mut time_monitor, &mut env_monitor, n2k_frame);
                     
-                    handle_vessel_status(&vessel_db, &mut vessel_monitor, &time_monitor, &mut last_vessel_status, &mut last_reported_max_speed);
+                    handle_vessel_status(&vessel_db, &mut vessel_monitor, &time_monitor, &mut last_vessel_status, &mut last_reported_max_speed, &mut current_trip);
                                         
                     handle_environment_status(&vessel_db, &time_monitor, &mut env_monitor);
                     
@@ -175,8 +195,6 @@ fn filter_frame(config: &Config, n2k_frame: &stream_reader::N2kFrame) -> Control
 }
 
 fn handle_environment_status(vessel_db: &Option<VesselDatabase>, time_monitor: &TimeMonitor, env_monitor: &mut EnvironmentalMonitor) {
-
-
     // Write to database if connected, time to persist, and time is synchronized
     if let Some(ref db) = *vessel_db {
         let metrics_to_persist = env_monitor.get_metrics_to_persist();
@@ -210,55 +228,95 @@ fn handle_environment_status(vessel_db: &Option<VesselDatabase>, time_monitor: &
     }
 }
 
-fn handle_vessel_status(vessel_db: &Option<VesselDatabase>, vessel_monitor: &mut VesselMonitor, time_monitor: &TimeMonitor, last_vessel_status: &mut Option<VesselStatus>, last_reported_max_speed: &mut f64) {
+fn handle_vessel_status(vessel_db: &Option<VesselDatabase>, vessel_monitor: &mut VesselMonitor, time_monitor: &TimeMonitor, last_vessel_status: &mut Option<VesselStatus>, last_reported_max_speed: &mut f64, current_trip: &mut Option<Trip>) {
     // Check if it's time to generate a vessel status report
     if let Some(status) = vessel_monitor.generate_status() {
-        //println!("\n{}", status);
+        let effective_position = status.get_effective_position();
         debug!("Vessel Status: latitude={:.6}, longitude={:.6}, avg_speed={:.2} m/s, max_speed={:.2} m/s, moored={}", 
-            status.current_position.map_or(0.0, |pos| pos.latitude),
-            status.current_position.map_or(0.0, |pos| pos.longitude),
+            effective_position.latitude,
+            effective_position.longitude,
             status.average_speed, status.max_speed, status.is_moored);
     
         // Write to database if connected, time to persist, and time is synchronized
-        if let Some(ref db) = *vessel_db
-            && vessel_monitor.should_persist_to_db(status.is_moored) {
-                if time_monitor.is_valid_and_synced() {
-                    let (total_distance_m, total_time_ms) = if let Some(ref last_status) = *last_vessel_status {
-                        if let (Some(last_sample), Some(current_sample)) = 
-                            (PositionSample::from_status(last_status), PositionSample::from_status(&status)) {
-                            let distance = last_sample.distance_to(&current_sample);
-                            let time = last_sample.time_difference_ms(&current_sample);
-                            (distance, time)
-                        } else {
-                            (0.0, 0)
-                        }
-                    } else {
-                        (0.0, 0)
-                    };
-
-                    let time: Instant = status.timestamp;
-                    let latitude = if status.is_moored { status.average_position.as_ref().map_or(0.0, |pos| pos.latitude) } else { status.current_position.map_or(0.0, |pos| pos.latitude) };
-                    let longitude = if status.is_moored { status.average_position.as_ref().map_or(0.0, |pos| pos.longitude) } else { status.current_position.map_or(0.0, |pos| pos.longitude) };
-                    let average_speed = if total_time_ms > 0 { total_distance_m / (total_time_ms as f64 / 1000.0) } else { 0.0 };
-                    let max_speed = if *last_reported_max_speed > status.max_speed { *last_reported_max_speed } else { status.max_speed };
-                    *last_reported_max_speed = max_speed;
+        if let Some(ref db) = *vessel_db && vessel_monitor.should_persist_to_db(status.is_moored) {
+            if time_monitor.is_valid_and_synced() {
+                let position = status.get_effective_position();
+                let latitude = position.latitude;
+                let longitude = position.longitude;
+                let (total_distance_nm, total_time_ms) = status.get_total_distance_and_time_from_last_report(last_vessel_status);
+                let time: Instant = status.timestamp;
+                let average_speed = if total_time_ms > 0 { total_distance_nm / (total_time_ms as f64 / 1000.0) } else { 0.0 };
+                let max_speed = if *last_reported_max_speed > status.max_speed { *last_reported_max_speed } else { status.max_speed };
+                *last_reported_max_speed = max_speed;
 
 
-                    if let Err(e) = db.insert_status(time, latitude, longitude, average_speed, max_speed, status.is_moored, status.engine_on, total_distance_m, total_time_ms) {
-                        warn!("Error writing to database: {}", e);
-                    } else {
-                        if let Some(pos) = status.current_position {
-                            debug!("Vessel status written to database: lat={:.6}, lon={:.6}, avg_speed={:.2} m/s, distance={:.1} m, time={} ms, moored={}", 
-                                pos.latitude, pos.longitude, status.average_speed, total_distance_m, total_time_ms, status.is_moored);
-                        }
-                        vessel_monitor.mark_db_persisted();
-                        *last_vessel_status = Some(status.clone());
-                        *last_reported_max_speed = 0.0;
-                    }
+                if let Err(e) = db.insert_status(time, latitude, longitude, average_speed, max_speed, status.is_moored, status.engine_on, total_distance_nm, total_time_ms) {
+                    warn!("Error writing to database: {}", e);
                 } else {
-                    warn!("Skipping vessel status DB write - time skew detected {} ms", time_monitor.last_measured_skew_ms());
+                    debug!("Vessel status written to database: lat={:.6}, lon={:.6}, avg_speed={:.2} m/s, distance={:.3} nm, time={} ms, moored={}", 
+                        position.latitude, position.longitude, status.average_speed, total_distance_nm, total_time_ms, status.is_moored);
+                    vessel_monitor.mark_db_persisted();
+                    *last_vessel_status = Some(status.clone());
+                    *last_reported_max_speed = 0.0;
+                    
+                    // Update or create trip
+                    handle_trip_update(db, current_trip, &status, total_distance_nm, total_time_ms);
+                }
+            } else {
+                warn!("Skipping vessel status DB write - time skew detected {} ms", time_monitor.last_measured_skew_ms());
+            }
+        }
+    }
+}
+
+fn handle_trip_update(db: &VesselDatabase, current_trip: &mut Option<Trip>, status: &VesselStatus, distance: f64, time_ms: u64) {
+    let report_time = status.timestamp;
+    
+    // Check if we need to create a new trip or update existing
+    let should_create_new = if let Some(ref trip) = *current_trip {
+        !trip.is_active(report_time)
+    } else {
+        true // No current trip, create new one
+    };
+    
+    if should_create_new {
+        // Create new trip
+        let start_time = report_time;
+        
+        // Format description with date
+        let delta = Instant::now().duration_since(start_time);
+        let system_time = std::time::SystemTime::now().checked_sub(delta).unwrap_or(std::time::UNIX_EPOCH);
+        let datetime = chrono::DateTime::<chrono::Utc>::from(system_time);
+        let description = format!("Trip {}", datetime.format("%Y-%m-%d"));
+        
+        let mut new_trip = Trip::new(start_time, description);
+        new_trip.update(report_time, distance, time_ms, status.engine_on, status.is_moored);
+        
+        match db.insert_trip(&new_trip) {
+            Ok(id) => {
+                new_trip.id = Some(id);
+                info!("Created new trip: {} (ID: {})", new_trip.description, id);
+                *current_trip = Some(new_trip);
+            }
+            Err(e) => {
+                warn!("Failed to create new trip: {}", e);
+            }
+        }
+    } else {
+        // Update existing trip
+        if let Some(ref mut trip) = *current_trip {
+            trip.update(report_time, distance, time_ms, status.engine_on, status.is_moored);
+            
+            match db.update_trip(trip) {
+                Ok(_) => {
+                    debug!("Updated trip: {} (ID: {}), total_distance={:.3}nm, total_time={}ms", 
+                           trip.description, trip.id.unwrap_or(0), trip.total_distance(), trip.total_time());
+                }
+                Err(e) => {
+                    warn!("Failed to update trip: {}", e);
                 }
             }
+        }
     }
 }
 
