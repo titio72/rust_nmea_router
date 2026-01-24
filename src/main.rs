@@ -1,6 +1,6 @@
 use socketcan::{CanSocket, EmbeddedFrame, ExtendedId, Frame, Socket};
-use std::{error::Error, ops::ControlFlow, time::{Instant}};
-use tracing::{info, warn, debug};
+use std::{error::Error, ops::ControlFlow, time::{Duration, Instant}};
+use tracing::{info, warn};
 
 mod pgns;
 mod stream_reader;
@@ -139,10 +139,31 @@ fn main() -> Result<(), Box<dyn Error>> {
         vessel_status_handler.load_last_trip(db);
     }
 
+    // Metrics tracking
+    struct Metrics {
+        can_frames: u64,
+        nmea_messages: u64,
+        vessel_reports: u64,
+        env_reports: u64,
+        can_errors: u64,
+    }
+    
+    let mut metrics = Metrics {
+        can_frames: 0,
+        nmea_messages: 0,
+        vessel_reports: 0,
+        env_reports: 0,
+        can_errors: 0,
+    };
+    let mut last_metrics_log = Instant::now();
+    let metrics_interval = Duration::from_secs(60);
+
     // Read CAN frames in a loop
     loop {
         match socket.read_frame() {
             Ok(frame) => {
+                metrics.can_frames += 1;
+                
                 // NMEA2000 uses 29-bit extended CAN identifiers
                 let can_id = frame.can_id();
                 let extended_id = ExtendedId::new(can_id.as_raw()).expect("Invalid CAN ID for NMEA2000");
@@ -150,17 +171,25 @@ fn main() -> Result<(), Box<dyn Error>> {
                 
                 // Process the frame through the stream reader
                 if let Some(n2k_frame) = reader.process_frame(extended_id, data) {
+                    metrics.nmea_messages += 1;
+                    
                     if let ControlFlow::Break(_) = filter_frame(&config, &n2k_frame) {
                         continue;
                     }
                     time_monitor.handle_message(&n2k_frame.message);
                     vessel_monitor.handle_message(&n2k_frame.message);
-                    env_monitor.handle_message(&n2k_frame.message);                    
-                    vessel_status_handler.handle_vessel_status(&vessel_db, &time_monitor, &mut vessel_monitor);
-                    environmental_status_handler.handle_environment_status(&vessel_db, &time_monitor, &mut env_monitor);
+                    env_monitor.handle_message(&n2k_frame.message);
+                    
+                    if vessel_status_handler.handle_vessel_status(&vessel_db, &time_monitor, &mut vessel_monitor) {
+                        metrics.vessel_reports += 1;
+                    }
+                    
+                    let env_writes = environmental_status_handler.handle_environment_status(&vessel_db, &time_monitor, &mut env_monitor);
+                    metrics.env_reports += env_writes as u64;
                 }
             }
             Err(e) => {
+                metrics.can_errors += 1;
                 warn!("Error reading CAN frame: {}", e);
                 warn!("CAN bus connection lost. Attempting to reconnect...");
                 
@@ -171,6 +200,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Wait before resuming to allow bus to stabilize
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
+        }
+        
+        // Log metrics every minute
+        if last_metrics_log.elapsed() >= metrics_interval {
+            info!("[Metrics] CAN frames: {}, NMEA messages: {}, Vessel reports: {}, Env reports: {}, CAN errors: {}",
+                metrics.can_frames, metrics.nmea_messages, metrics.vessel_reports, metrics.env_reports, metrics.can_errors);
+            
+            // Reset metrics
+            metrics.can_frames = 0;
+            metrics.nmea_messages = 0;
+            metrics.vessel_reports = 0;
+            metrics.env_reports = 0;
+            metrics.can_errors = 0;
+            last_metrics_log = Instant::now();
         }
     }
 }

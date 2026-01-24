@@ -34,13 +34,14 @@ impl VesselStatusHandler {
     }
 
     /// Handle vessel status reporting and persistence
+    /// Returns true if a vessel status report was written to the database
     pub fn handle_vessel_status(
         &mut self,
         vessel_db: &Option<VesselDatabase>,
         time_monitor: &TimeMonitor,
         vessel_monitor: &mut VesselMonitor,
-    ) {
-        handle_vessel_status(vessel_db, vessel_monitor, time_monitor, &mut self.state);
+    ) -> bool {
+        handle_vessel_status(vessel_db, vessel_monitor, time_monitor, &mut self.state)
     }
 }
 
@@ -97,7 +98,7 @@ pub fn handle_vessel_status(
     vessel_monitor: &mut VesselMonitor, 
     time_monitor: &TimeMonitor, 
     state: &mut VesselStatusState
-) {
+) -> bool {
     // Check if it's time to generate a vessel status report
     if let Some(status) = vessel_monitor.generate_status() {
         let effective_position = status.get_effective_position();
@@ -129,12 +130,14 @@ pub fn handle_vessel_status(
                     
                     // Update or create trip
                     handle_trip_update(db, &mut state.current_trip, &status, total_distance_nm, total_time_ms);
+                    return true;
                 }
             } else {
                 warn!("Skipping vessel status DB write - time skew detected {} ms", time_monitor.last_measured_skew_ms());
             }
         }
     }
+    false
 }
 
 /// Handle trip creation and updates

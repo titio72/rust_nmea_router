@@ -61,13 +61,14 @@ impl EnvironmentalStatusHandler {
     }
 
     /// Handle environmental status reporting and persistence
+    /// Returns the number of environmental metrics written to the database
     pub fn handle_environment_status(
         &mut self,
         vessel_db: &Option<VesselDatabase>,
         time_monitor: &TimeMonitor,
         env_monitor: &mut EnvironmentalMonitor,
-    ) {
-        handle_environment_status(vessel_db, time_monitor, env_monitor, &mut self.state);
+    ) -> usize {
+        handle_environment_status(vessel_db, time_monitor, env_monitor, &mut self.state)
     }
 }
 
@@ -80,7 +81,8 @@ fn handle_environment_status(
     time_monitor: &TimeMonitor,
     env_monitor: &mut EnvironmentalMonitor,
     state: &mut EnvironmentalStatusState,
-) {
+) -> usize {
+    let mut written_count = 0;
     // Write to database if connected, time to persist, and time is synchronized
     if let Some(ref db) = *vessel_db {
         let metrics_to_persist = state.get_metrics_to_persist(env_monitor);
@@ -102,6 +104,7 @@ fn handle_environment_status(
                             state.mark_metric_persisted(*metricid);
                             env_monitor.cleanup_all_samples(*metricid);
                             debug!("Environmental metric {} written to database", metricid.name());
+                            written_count += 1;
                         }
                     } else {
                         debug!("No data available for metric: {}", metricid.name());
@@ -112,6 +115,7 @@ fn handle_environment_status(
             }
         }
     }
+    written_count
 }
 
 #[cfg(test)]
