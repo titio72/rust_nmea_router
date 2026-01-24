@@ -111,6 +111,17 @@ impl Default for TimeMonitor {
     }
 }
 
+impl crate::message_handler::MessageHandler for TimeMonitor {
+    fn handle_message(&mut self, message: &crate::pgns::N2kMessage) {
+        match message {
+            crate::pgns::N2kMessage::NMEASystemTime(sys_time) => {
+                self.process_system_time(sys_time);
+            }
+            _ => {} // Ignore messages we're not interested in
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

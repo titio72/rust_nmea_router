@@ -4,6 +4,7 @@ use std::{error::Error, time::Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::environmental_monitor::{MetricData, MetricId};
 use crate::trip::Trip;
+use chrono::NaiveDateTime;
 
 pub struct VesselDatabase {
     pool: Pool,
@@ -128,8 +129,10 @@ impl VesselDatabase {
     pub fn get_last_trip(&self) -> Result<Option<Trip>, Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
         
-        let result: Option<(i64, String, String, String, f64, f64, u64, u64, u64)> = conn.exec_first(
-            r"SELECT id, description, start_timestamp, end_timestamp, 
+        let row: Option<mysql::Row> = conn.exec_first(
+            r"SELECT id, description, 
+                     DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f') as start_ts,
+                     DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S.%f') as end_ts,
                      total_distance_sailed, total_distance_motoring,
                      total_time_sailing, total_time_motoring, total_time_moored
               FROM trips
@@ -138,13 +141,20 @@ impl VesselDatabase {
             (),
         )?;
         
-        if let Some((id, description, start_ts, end_ts, 
-                     total_distance_sailed, total_distance_motoring,
-                     total_time_sailing, total_time_motoring, total_time_moored)) = result {
+        if let Some(mut row) = row {
+            let id: i64 = row.take("id").ok_or("Missing id")?;
+            let description: String = row.take("description").ok_or("Missing description")?;
+            let start_ts: String = row.take("start_ts").ok_or("Missing start_ts")?;
+            let end_ts: String = row.take("end_ts").ok_or("Missing end_ts")?;
+            let total_distance_sailed: f64 = row.take("total_distance_sailed").ok_or("Missing total_distance_sailed")?;
+            let total_distance_motoring: f64 = row.take("total_distance_motoring").ok_or("Missing total_distance_motoring")?;
+            let total_time_sailing: u64 = row.take("total_time_sailing").ok_or("Missing total_time_sailing")?;
+            let total_time_motoring: u64 = row.take("total_time_motoring").ok_or("Missing total_time_motoring")?;
+            let total_time_moored: u64 = row.take("total_time_moored").ok_or("Missing total_time_moored")?;
             
-            // Parse timestamps and convert to Instant
-            let start_dt = chrono::NaiveDateTime::parse_from_str(&start_ts, "%Y-%m-%d %H:%M:%S%.3f")?;
-            let end_dt = chrono::NaiveDateTime::parse_from_str(&end_ts, "%Y-%m-%d %H:%M:%S%.3f")?;
+            // Parse timestamps
+            let start_dt = NaiveDateTime::parse_from_str(&start_ts, "%Y-%m-%d %H:%M:%S%.6f")?;
+            let end_dt = NaiveDateTime::parse_from_str(&end_ts, "%Y-%m-%d %H:%M:%S%.6f")?;
             
             // Convert to SystemTime then to Instant (approximate)
             let start_system = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start_dt, chrono::Utc);

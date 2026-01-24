@@ -78,17 +78,15 @@ pub struct MetricData {
 }
 
 #[derive(Debug, Clone)]
-
-struct Sample<T> {
-    value: T,
+pub struct Sample<T> {
+    pub value: T,
     #[allow(dead_code)]
-    timestamp: Instant,
+    pub timestamp: Instant,
 }
 
 pub struct EnvironmentalMonitor {
-    last_db_persist: std::collections::HashMap<MetricId, Instant>,
     db_periods: [Duration; 7],
-    data_samples: [VecDeque<Sample<f64>>; 7],
+    pub data_samples: [VecDeque<Sample<f64>>; 7],
 }
 
 impl EnvironmentalMonitor {
@@ -103,7 +101,6 @@ impl EnvironmentalMonitor {
                 VecDeque::new(), // WindDir
                 VecDeque::new(), // Roll
             ],
-            last_db_persist: std::collections::HashMap::new(),
             db_periods: [
                 config.wind_speed_interval(),
                 config.wind_direction_interval(),
@@ -237,38 +234,43 @@ impl EnvironmentalMonitor {
         })
     }
     
-    /// Get the list of metrics that should be persisted to the database now
-    pub fn get_metrics_to_persist(&self) -> Vec<MetricId> {
-        let now = Instant::now();
-        let mut metrics_to_persist = Vec::new();
-        
-        for metricid in MetricId::ALL_METRICS.iter() {
-            if !self.data_samples[metricid.as_index()].is_empty() {
-                let interval = self.db_periods[metricid.as_index()];
-                if let Some(last_persist) = self.last_db_persist.get(&metricid) {
-                    if now.duration_since(*last_persist) >= interval {
-                        metrics_to_persist.push(*metricid);
-                    }
-                } else {
-                    // Never persisted before, should persist now
-                    metrics_to_persist.push(*metricid);
-                }
-            }
-        }
-        
-        metrics_to_persist
+    /// Check if there are samples for a specific metric
+    pub fn has_samples(&self, metric: MetricId) -> bool {
+        !self.data_samples[metric.as_index()].is_empty()
     }
     
-    /// Mark specific metrics as persisted to the database
-    pub fn mark_metric_persisted(&mut self, metric: MetricId) {
-        let now = Instant::now();
-        self.last_db_persist.insert(metric, now);
+    /// Get the database persistence periods for all metrics
+    pub fn db_periods(&self) -> [Duration; 7] {
+        self.db_periods
     }
 }
 
 impl Default for EnvironmentalMonitor {
     fn default() -> Self {
         Self::new(crate::config::EnvironmentalConfig::default())
+    }
+}
+
+impl crate::message_handler::MessageHandler for EnvironmentalMonitor {
+    fn handle_message(&mut self, message: &crate::pgns::N2kMessage) {
+        match message {
+            crate::pgns::N2kMessage::Temperature(temp) => {
+                self.process_temperature(temp);
+            }
+            crate::pgns::N2kMessage::WindData(wind) => {
+                self.process_wind(wind);
+            }
+            crate::pgns::N2kMessage::Humidity(hum) => {
+                self.process_humidity(hum);
+            }
+            crate::pgns::N2kMessage::ActualPressure(pressure) => {
+                self.process_actual_pressure(pressure);
+            }
+            crate::pgns::N2kMessage::Attitude(attitude) => {
+                self.process_attitude(attitude);
+            }
+            _ => {} // Ignore messages we're not interested in
+        }
     }
 }
 
@@ -428,45 +430,6 @@ mod tests {
         
         monitor.process_attitude(&attitude_msg);
         assert_eq!(monitor.data_samples[MetricId::Roll.as_index()].len(), 1);
-    }
-
-    #[test]
-    fn test_mark_metric_persisted() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
-        
-        monitor.mark_metric_persisted(MetricId::Pressure);
-        monitor.mark_metric_persisted(MetricId::CabinTemp);
-        
-        assert!(monitor.last_db_persist.contains_key(&MetricId::Pressure));
-        assert!(monitor.last_db_persist.contains_key(&MetricId::CabinTemp));
-        assert!(!monitor.last_db_persist.contains_key(&MetricId::WindSpeed));
-    }
-
-    #[test]
-    fn test_get_metrics_to_persist_initial() {
-        let config = EnvironmentalConfig::default();
-        let monitor = EnvironmentalMonitor::new(config);
-        
-        // Initially, no metrics have data, so nothing to persist
-        let metrics = monitor.get_metrics_to_persist();
-        assert_eq!(metrics.len(), 0);
-    }
-
-    #[test]
-    fn test_get_metrics_to_persist_with_data() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
-
-        // Add dummy data for all metrics
-        let now = Instant::now();
-        for samples in monitor.data_samples.iter_mut() {
-             samples.push_back(Sample { value: 10.0, timestamp: now });
-        }
-        
-        // Now all 7 should be ready as they have data and haven't been persisted
-        let metrics = monitor.get_metrics_to_persist();
-        assert_eq!(metrics.len(), 7);
     }
 
     #[test]

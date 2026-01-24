@@ -117,7 +117,6 @@ pub struct VesselMonitor {
     positions: VecDeque<PositionSample>,
     speeds: VecDeque<SpeedSample>,
     last_event_time: Instant,
-    last_db_persist_time: Instant,
     current_position: Option<Position>,
     engine_on: bool,
     config: VesselStatusConfig,
@@ -130,8 +129,6 @@ impl VesselMonitor {
             positions: VecDeque::new(),
             speeds: VecDeque::new(),
             last_event_time: now,
-            // Initialize to far past to ensure first report is written immediately
-            last_db_persist_time: now - Duration::from_secs(86400), // 24 hours ago
             current_position: None,
             engine_on: false,
             config,
@@ -261,22 +258,6 @@ impl VesselMonitor {
         Instant::now().duration_since(self.last_event_time) >= EVENT_INTERVAL
     }
 
-    /// Check if it's time to persist status to database (adaptive based on mooring state)
-    pub fn should_persist_to_db(&self, is_moored: bool) -> bool {
-        let now = Instant::now();
-        let interval = if is_moored {
-            self.config.interval_moored()
-        } else {
-            self.config.interval_underway()
-        };
-        now.duration_since(self.last_db_persist_time) >= interval
-    }
-
-    /// Mark that we've persisted to the database
-    pub fn mark_db_persisted(&mut self) {
-        self.last_db_persist_time = Instant::now();
-    }
-
     /// Generate a vessel status event
     pub fn generate_status(&mut self) -> Option<VesselStatus> {
         if !self.should_generate_event() || self.current_position.is_none() {
@@ -393,6 +374,23 @@ impl VesselMonitor {
             .iter()
             .filter(|p| p.position.distance_to(&avg_position) <= MOORING_THRESHOLD_METERS)
             .count() >= (recent_positions.len() as f64 * MOORING_ACCURACY) as usize // At least 90% within threshold
+    }
+}
+
+impl crate::message_handler::MessageHandler for VesselMonitor {
+    fn handle_message(&mut self, message: &crate::pgns::N2kMessage) {
+        match message {
+            crate::pgns::N2kMessage::PositionRapidUpdate(pos) => {
+                self.process_position(pos);
+            }
+            crate::pgns::N2kMessage::CogSogRapidUpdate(cog_sog) => {
+                self.process_cog_sog(cog_sog);
+            }
+            crate::pgns::N2kMessage::EngineRapidUpdate(engine) => {
+                self.process_engine(engine);
+            }
+            _ => {} // Ignore messages we're not interested in
+        }
     }
 }
 
@@ -516,56 +514,6 @@ mod tests {
         monitor.process_cog_sog(&cog_sog_msg);
         
         assert_eq!(monitor.speeds.len(), 1);
-    }
-
-    #[test]
-    fn test_should_persist_moored() {
-        let config = VesselStatusConfig {
-            interval_moored_seconds: 0, // Set to 0 so it always needs to persist
-            interval_underway_seconds: 5,
-        };
-        let monitor = VesselMonitor::new(config);
-        
-        // Should persist immediately with 0-second interval
-        assert!(monitor.should_persist_to_db(true));
-    }
-
-    #[test]
-    fn test_should_persist_underway() {
-        let config = VesselStatusConfig {
-            interval_moored_seconds: 10,
-            interval_underway_seconds: 0, // Set to 0 so it always needs to persist
-        };
-        let monitor = VesselMonitor::new(config);
-        
-        // Should persist immediately with 0-second interval
-        assert!(monitor.should_persist_to_db(false));
-    }
-
-    #[test]
-    fn test_mark_db_persisted() {
-        let config = VesselStatusConfig::default();
-        let mut monitor = VesselMonitor::new(config);
-        
-        let before = monitor.last_db_persist_time;
-        std::thread::sleep(Duration::from_millis(10));
-        monitor.mark_db_persisted();
-        let after = monitor.last_db_persist_time;
-        
-        assert!(after > before);
-    }
-
-    #[test]
-    fn test_first_report_persists_immediately() {
-        let config = VesselStatusConfig {
-            interval_moored_seconds: 600, // 10 minutes
-            interval_underway_seconds: 30, // 30 seconds
-        };
-        let monitor = VesselMonitor::new(config);
-        
-        // First report should persist immediately (regardless of interval)
-        assert!(monitor.should_persist_to_db(true));
-        assert!(monitor.should_persist_to_db(false));
     }
 
     #[test]
