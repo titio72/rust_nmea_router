@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
-
 use nmea2k::pgns::{PositionRapidUpdate, CogSogRapidUpdate};
 use crate::config::VesselStatusConfig;
 

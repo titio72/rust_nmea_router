@@ -1,15 +1,14 @@
 use std::fmt;
 
+use super::nmea2000_date_time::N2kDateTime;
+
 #[derive(Debug, Clone)]
 pub struct GnssPositionData {
-#[allow(dead_code)]
+    #[allow(dead_code)]
     pub pgn: u32,
     #[allow(dead_code)]
     sid: u8,
-    #[allow(dead_code)]
-    date: u16, // days since 1970-01-01
-    #[allow(dead_code)]
-    time: f64, // seconds since midnight
+    pub date_time: N2kDateTime,
     pub latitude: f64,
     pub longitude: f64,
     #[allow(dead_code)]
@@ -56,8 +55,10 @@ impl GnssPositionData {
         Some(Self {
             pgn: 129029,
             sid: data[0],
-            date: u16::from_le_bytes([data[1], data[2]]),
-            time: u32::from_le_bytes([data[3], data[4], data[5], data[6]]) as f64 * 0.0001,
+            date_time: N2kDateTime {
+                date: u16::from_le_bytes([data[1], data[2]]),
+                time: u32::from_le_bytes([data[3], data[4], data[5], data[6]]) as f64 * 0.0001,
+            },
             latitude: i64::from_le_bytes([
                 data[7], data[8], data[9], data[10], data[11], data[12], data[13], data[14]
             ]) as f64 * 1e-16,

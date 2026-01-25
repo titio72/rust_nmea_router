@@ -1,4 +1,4 @@
-use nmea2k::N2kFrame;
+use nmea2k::{Identifier, N2kFrame};
 use crate::config::Config;
 
 /// Filters NMEA2000 frames based on application configuration
@@ -15,4 +15,9 @@ pub fn should_process_frame(config: &Config, n2k_frame: &N2kFrame) -> bool {
                     
     // Apply source filter - skip messages that don't match the configured source
     config.source_filter.should_accept(pgn, source)
+}
+
+pub fn should_process_frame_by_id(config: &Config, id: Identifier) -> bool {
+    // Apply PGN filter - skip messages that don't match the configured PGNs
+    config.source_filter.should_accept(id.pgn(), id.source())
 }

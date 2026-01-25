@@ -19,9 +19,10 @@ use db::{VesselDatabase, HealthCheckManager};
 use config::Config;
 use app_metrics::{AppMetrics, MetricsLogger};
 use frame_filter::should_process_frame;
+use frame_filter::should_process_frame_by_id;
 
 // Import from nmea2k crate
-use nmea2k::{N2kStreamReader, CanBus, MessageHandler};
+use nmea2k::{CanBus, Identifier, MessageHandler, N2kStreamReader};
 
 // ========== Logging Setup ==========
 
@@ -188,6 +189,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             Ok((extended_id, data)) => {
                 metrics.can_frames += 1;
                 
+                let id = Identifier::from_can_id(extended_id);
+                if !should_process_frame_by_id(&config, id) {
+                    continue;
+                }
+
                 // Process the frame through the stream reader
                 if let Some(n2k_frame) = reader.process_frame(extended_id, &data) {
                     metrics.nmea_messages += 1;

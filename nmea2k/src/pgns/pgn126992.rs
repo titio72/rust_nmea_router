@@ -1,6 +1,6 @@
 use std::fmt;
 
-use chrono::DateTime;
+use super::nmea2000_date_time::N2kDateTime;
 
 #[derive(Debug, Clone)]
 pub struct NMEASystemTime {
@@ -10,8 +10,7 @@ pub struct NMEASystemTime {
     pub sid: u8,
     #[allow(dead_code)]
     pub source: u8,
-    pub date: u16,      // Days since January 1, 1970
-    pub time: u32,      // Seconds since midnight
+    pub date_time: N2kDateTime,
 }
 
 impl NMEASystemTime {
@@ -23,66 +22,28 @@ impl NMEASystemTime {
         let sid = data[0];
         let source = data[1];
         let date = u16::from_le_bytes([data[2], data[3]]);
-        let time = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        let time = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as f64;
 
         Some(NMEASystemTime {
             pgn: 126992,
             sid,
             source,
-            date,
-            time,
+            date_time: N2kDateTime {
+                date,
+                time,
+            },
         })
-    }
-
-    /// Convert NMEA2000 date/time to Unix timestamp (seconds since epoch)
-    pub fn to_unix_timestamp(&self) -> i64 {
-        // NMEA2000 date is days since January 1, 1970
-        let days_since_epoch = self.date as i64;
-        let seconds_from_date = days_since_epoch * 86400;
-        
-        // NMEA2000 time is in units of 0.0001 seconds since midnight
-        let seconds_since_midnight = (self.time as f64 * 0.0001) as i64;
-        
-        seconds_from_date + seconds_since_midnight
-    }
-
-    #[allow(dead_code)]
-    pub fn to_total_milliseconds(&self) -> i64 {
-        let unix_timestamp = self.to_unix_timestamp() as u64;
-        let total_ms = unix_timestamp * 1000 + self.milliseconds() as u64;
-        total_ms as i64
-    }
-
-    /// Get milliseconds component
-    pub fn milliseconds(&self) -> u32 {
-        // Time is in units of 0.0001 seconds (100 microseconds)
-        let total_ms = (self.time as f64 * 0.0001 * 1000.0) as u32;
-        total_ms % 1000
-    }
-
-    #[allow(dead_code)]
-    pub fn to_date_time(&self) -> DateTime<chrono::Utc> {
-        let unix_timestamp = self.to_unix_timestamp();
-        DateTime::<chrono::Utc>::from_timestamp(unix_timestamp, self.milliseconds() * 1_000_000)
-            .expect("Invalid timestamp")
-    }
-
-    pub fn to_system_time(&self) -> std::time::SystemTime {
-        let unix_timestamp = self.to_unix_timestamp();
-        let duration = std::time::Duration::from_secs(unix_timestamp as u64)
-            + std::time::Duration::from_millis(self.milliseconds() as u64);
-        std::time::UNIX_EPOCH + duration
     }
 }
 
 impl fmt::Display for NMEASystemTime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let timestamp = self.to_unix_timestamp();
-        let ms = self.milliseconds();
+        let timestamp = self.date_time.to_unix_timestamp();
+        let ms = self.date_time.milliseconds();
         
         // Convert to date/time components
-        let days_since_epoch = self.date as i64;
-        let seconds_since_midnight = (self.time as f64 * 0.0001) as i64;
+        let days_since_epoch = self.date_time.date as i64;
+        let seconds_since_midnight = (self.date_time.time as f64 * 0.0001) as i64;
         
         let hours = seconds_since_midnight / 3600;
         let minutes = (seconds_since_midnight % 3600) / 60;
@@ -103,14 +64,14 @@ mod tests {
             0x01, // SID
             0x02, // Source
             0x0A, 0x00, // Date = 10 days
-            0x80, 0x51, 0x01, 0x00, // Time = 86400 (1 day in 0.0001 second units)
+            0x80, 0x51, 0x01, 0x00, // Time = 86400 (in 0.0001 second units = 8.64 seconds)
         ];
         
         let time = NMEASystemTime::from_bytes(&data).unwrap();
         assert_eq!(time.sid, 1);
         assert_eq!(time.source, 2);
-        assert_eq!(time.date, 10);
-        assert_eq!(time.time, 86400);
+        assert_eq!(time.date_time.date, 10);
+        assert_eq!(time.date_time.time as i64, 86400); // Raw time value
     }
 
     #[test]
@@ -127,11 +88,10 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date: 0,
-            time: 0,
+            date_time: N2kDateTime { date: 0, time: 0.0 },
         };
         
-        let timestamp = time.to_unix_timestamp();
+        let timestamp = time.date_time.to_unix_timestamp();
         assert_eq!(timestamp, 0);
     }
 
@@ -142,11 +102,10 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date: 1,
-            time: 0,
+            date_time: N2kDateTime { date: 1, time: 0.0 },
         };
         
-        let timestamp = time.to_unix_timestamp();
+        let timestamp = time.date_time.to_unix_timestamp();
         assert_eq!(timestamp, 86400);
     }
 
@@ -157,11 +116,10 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date: 1,
-            time: 36000000,
+            date_time: N2kDateTime { date: 1, time: 36000000.0 },
         };
         
-        let timestamp = time.to_unix_timestamp();
+        let timestamp = time.date_time.to_unix_timestamp();
         assert_eq!(timestamp, 86400 + 3600); // 1 day + 1 hour
     }
 
@@ -171,11 +129,10 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date: 0,
-            time: 0,
+            date_time: N2kDateTime { date: 0, time: 0.0 },
         };
         
-        let ms = time.milliseconds();
+        let ms = time.date_time.milliseconds();
         assert_eq!(ms, 0);
     }
 
@@ -186,11 +143,10 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date: 0,
-            time: 15000,
+            date_time: N2kDateTime { date: 0, time: 15000.0 },
         };
         
-        let ms = time.milliseconds();
+        let ms = time.date_time.milliseconds();
         assert_eq!(ms, 500); // 500 milliseconds
     }
 
@@ -201,11 +157,10 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date: 0,
-            time: 10000,
+            date_time: N2kDateTime { date: 0, time: 10000.0 },
         };
         
-        let ms = time.milliseconds();
+        let ms = time.date_time.milliseconds();
         assert_eq!(ms, 0); // 0 milliseconds (full second)
     }
 
@@ -216,11 +171,10 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date: 0,
-            time: 37500,
+            date_time: N2kDateTime { date: 0, time: 37500.0 },
         };
         
-        let ms = time.milliseconds();
+        let ms = time.date_time.milliseconds();
         assert_eq!(ms, 750); // 750 milliseconds
     }
 
@@ -232,11 +186,10 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date: 19723,
-            time: 0,
+            date_time: N2kDateTime { date: 19723, time: 0.0 },
         };
         
-        let timestamp = time.to_unix_timestamp();
+        let timestamp = time.date_time.to_unix_timestamp();
         // 19723 days * 86400 seconds/day = 1704067200 seconds
         assert_eq!(timestamp, 1704067200);
     }

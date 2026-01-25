@@ -47,7 +47,7 @@ impl TimeMonitor {
         };
 
         // Calculate time skew in milliseconds
-        let nmea_system_time = nmea_time.to_system_time();
+        let nmea_system_time = nmea_time.date_time.to_system_time();
         let time_skew_ms = match now.duration_since(nmea_system_time) {
             Ok(duration) => duration.as_millis() as i64,
             Err(e) => -(e.duration().as_millis() as i64), // Negative if NMEA is ahead
@@ -68,7 +68,7 @@ impl TimeMonitor {
             };
 
             if should_warn {
-                self.print_time_skew_warning(time_skew_ms, system_timestamp, nmea_time.to_unix_timestamp());
+                self.print_time_skew_warning(time_skew_ms, system_timestamp, nmea_time.date_time.to_unix_timestamp());
                 self.last_warning_time = Some(now);
             }
         } else {
@@ -164,8 +164,10 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date: current_days,
-            time: nmea_time_units,
+            date_time: nmea2k::pgns::nmea2000_date_time::N2kDateTime {
+                date: current_days,
+                time: nmea_time_units as f64,
+            },
         };
         
         monitor.process_system_time(&nmea_time);
@@ -184,8 +186,10 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date: old_date,
-            time: 0,
+            date_time: nmea2k::pgns::nmea2000_date_time::N2kDateTime {
+                date: old_date,
+                time: 0.0,
+            },
         };
         
         monitor.process_system_time(&nmea_time);
@@ -202,11 +206,13 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date: 1, // 1 day since epoch
-            time: 600000, // 60 seconds * 10000 (0.0001 second units)
+            date_time: nmea2k::pgns::nmea2000_date_time::N2kDateTime {
+                date: 1, // 1 day since epoch
+                time: 600000.0, // 60 seconds * 10000 (0.0001 second units)
+            },
         };
         
-        let timestamp = nmea_time.to_unix_timestamp();
+        let timestamp = nmea_time.date_time.to_unix_timestamp();
         // 1 day (86400 seconds) + 60 seconds = 86460
         assert_eq!(timestamp, 86460);
     }
@@ -218,11 +224,13 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date: 0,
-            time: 12345, // 1.2345 seconds = 1234.5 ms
+            date_time: nmea2k::pgns::nmea2000_date_time::N2kDateTime {
+                date: 0,
+                time: 12345.0, // 1.2345 seconds = 1234.5 ms
+            },
         };
         
-        let ms = nmea_time.milliseconds();
+        let ms = nmea_time.date_time.milliseconds();
         // 12345 * 0.0001 * 1000 = 1234.5 -> 1234 ms (integer part)
         assert_eq!(ms, 234); // 234 ms within the current second
     }

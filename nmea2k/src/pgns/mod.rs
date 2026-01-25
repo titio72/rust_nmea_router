@@ -13,6 +13,7 @@ pub mod pgn130312;
 pub mod pgn130313;
 pub mod pgn130314;
 pub mod message;
+pub mod nmea2000_date_time;
 
 // Re-export commonly used types
 pub use message::N2kMessage;
