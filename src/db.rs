@@ -1,10 +1,11 @@
 use mysql::*;
 use mysql::prelude::*;
-use std::{error::Error, time::Instant};
+use std::{error::Error, time::{Duration, Instant}};
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::environmental_monitor::{MetricData, MetricId};
 use crate::trip::Trip;
 use chrono::NaiveDateTime;
+use tracing::{info, warn};
 
 /// Encapsulates vessel status data for database insertion
 pub struct VesselStatusOperation {
@@ -284,5 +285,85 @@ impl VesselDatabase {
         } else {
             Ok(None)
         }
+    }
+    
+    /// Attempt to reconnect to the database with exponential backoff
+    /// Returns Some(VesselDatabase) if successful, None if all retries fail
+    pub fn reconnect_with_retry(db_url: &str, max_retries: u32) -> Option<Self> {
+        for attempt in 1..=max_retries {
+            warn!("Attempting to reconnect to database (attempt {}/{})...", attempt, max_retries);
+            match Self::new(db_url) {
+                Ok(db) => {
+                    info!("Database reconnection successful");
+                    return Some(db);
+                }
+                Err(e) => {
+                    warn!("Database reconnection attempt {} failed: {}", attempt, e);
+                    if attempt < max_retries {
+                        let wait_time = std::cmp::min(2_u64.pow(attempt - 1), 30); // Exponential backoff, max 30s
+                        warn!("Waiting {} seconds before retry...", wait_time);
+                        std::thread::sleep(Duration::from_secs(wait_time));
+                    }
+                }
+            }
+        }
+        warn!("Failed to reconnect to database after {} attempts", max_retries);
+        None
+    }
+}
+
+/// Manages database health check timing and execution
+pub struct HealthCheckManager {
+    last_check: Instant,
+    check_interval: Duration,
+}
+
+impl HealthCheckManager {
+    /// Create a new health check manager with the specified interval
+    pub fn new(check_interval: Duration) -> Self {
+        Self {
+            last_check: Instant::now(),
+            check_interval,
+        }
+    }
+    
+    /// Check if it's time to perform a health check
+    pub fn should_check(&self) -> bool {
+        self.last_check.elapsed() >= self.check_interval
+    }
+    
+    /// Reset the health check timer
+    pub fn reset(&mut self) {
+        self.last_check = Instant::now();
+    }
+    
+    /// Perform health check and handle reconnection if needed
+    /// Returns the updated database connection (may be None if reconnection fails)
+    pub fn check_and_reconnect(
+        &mut self,
+        db: &mut Option<VesselDatabase>,
+        db_url: &str,
+    ) -> bool {
+        if !self.should_check() {
+            return false;
+        }
+        
+        let mut did_check = false;
+        if let Some(database) = db {
+            match database.health_check() {
+                Ok(_) => {
+                    info!("[DB Health] Connection healthy");
+                }
+                Err(e) => {
+                    warn!("[DB Health] Connection check failed: {}", e);
+                    warn!("Attempting to reconnect to database...");
+                    *db = VesselDatabase::reconnect_with_retry(db_url, 3);
+                }
+            }
+            did_check = true;
+        }
+        
+        self.reset();
+        did_check
     }
 }
