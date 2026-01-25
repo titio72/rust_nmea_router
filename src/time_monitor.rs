@@ -1,5 +1,5 @@
 use std::time::{SystemTime as StdSystemTime, UNIX_EPOCH};
-use crate::pgns::NMEASystemTime;
+use nmea2k::pgns::NMEASystemTime;
 
 pub struct TimeMonitor {
     last_warning_time: Option<StdSystemTime>,
@@ -111,10 +111,10 @@ impl Default for TimeMonitor {
     }
 }
 
-impl crate::message_handler::MessageHandler for TimeMonitor {
-    fn handle_message(&mut self, message: &crate::pgns::N2kMessage) {
+impl nmea2k::MessageHandler for TimeMonitor {
+    fn handle_message(&mut self, message: &nmea2k::N2kMessage) {
         match message {
-            crate::pgns::N2kMessage::NMEASystemTime(sys_time) => {
+            nmea2k::pgns::N2kMessage::NMEASystemTime(sys_time) => {
                 self.process_system_time(sys_time);
             }
             _ => {} // Ignore messages we're not interested in
@@ -125,7 +125,7 @@ impl crate::message_handler::MessageHandler for TimeMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pgns::NMEASystemTime;
+    use nmea2k::pgns::NMEASystemTime;
 
     #[test]
     fn test_time_monitor_default() {

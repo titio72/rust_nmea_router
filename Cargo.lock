@@ -1140,6 +1140,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nmea2k"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "nmea2000",
+ "socketcan",
+ "tracing",
+]
+
+[[package]]
 name = "nmea_router"
 version = "0.1.0"
 dependencies = [
@@ -1147,6 +1157,7 @@ dependencies = [
  "log",
  "mysql",
  "nmea2000",
+ "nmea2k",
  "serde",
  "serde_json",
  "socketcan",

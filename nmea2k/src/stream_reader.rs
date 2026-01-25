@@ -14,12 +14,16 @@ use crate::pgns::N2kMessage;
 /// # Usage
 /// 
 /// ```no_run
-/// use stream_reader::N2kStreamReader;
+/// use nmea2k::N2kStreamReader;
+/// use socketcan::ExtendedId;
 /// 
 /// let mut reader = N2kStreamReader::new();
 /// 
-/// // Push frames into the reader
-/// if let Some(complete_message) = reader.process_frame(can_id, data) {
+/// // Example: Push frames into the reader
+/// let can_id = ExtendedId::new(0x09F80001).unwrap();
+/// let data = vec![0xC0, 0x0F, 0x7B, 0x26, 0x36, 0xD0, 0x86, 0x3A];
+/// 
+/// if let Some(complete_message) = reader.process_frame(can_id, &data) {
 ///     // A complete message is available
 ///     println!("PGN: {}", complete_message.identifier.pgn());
 ///     println!("Message: {}", complete_message.message);

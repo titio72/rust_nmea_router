@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use crate::pgns::{PositionRapidUpdate, CogSogRapidUpdate};
+use nmea2k::pgns::{PositionRapidUpdate, CogSogRapidUpdate};
 use crate::config::VesselStatusConfig;
 
 const EVENT_INTERVAL: Duration = Duration::from_secs(10);
@@ -184,7 +184,7 @@ impl VesselMonitor {
     }
 
     /// Process engine rapid update to determine engine status
-    pub fn process_engine(&mut self, engine_msg: &crate::pgns::EngineRapidUpdate) {
+    pub fn process_engine(&mut self, engine_msg: &nmea2k::pgns::EngineRapidUpdate) {
         self.engine_on = engine_msg.is_engine_running();
     }
 
@@ -368,16 +368,16 @@ impl VesselMonitor {
     }
 }
 
-impl crate::message_handler::MessageHandler for VesselMonitor {
-    fn handle_message(&mut self, message: &crate::pgns::N2kMessage) {
+impl nmea2k::MessageHandler for VesselMonitor {
+    fn handle_message(&mut self, message: &nmea2k::N2kMessage) {
         match message {
-            crate::pgns::N2kMessage::PositionRapidUpdate(pos) => {
+            nmea2k::pgns::N2kMessage::PositionRapidUpdate(pos) => {
                 self.process_position(pos);
             }
-            crate::pgns::N2kMessage::CogSogRapidUpdate(cog_sog) => {
+            nmea2k::pgns::N2kMessage::CogSogRapidUpdate(cog_sog) => {
                 self.process_cog_sog(cog_sog);
             }
-            crate::pgns::N2kMessage::EngineRapidUpdate(engine) => {
+            nmea2k::pgns::N2kMessage::EngineRapidUpdate(engine) => {
                 self.process_engine(engine);
             }
             _ => {} // Ignore messages we're not interested in
@@ -394,7 +394,7 @@ impl Default for VesselMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pgns::{PositionRapidUpdate, CogSogRapidUpdate};
+    use nmea2k::pgns::{PositionRapidUpdate, CogSogRapidUpdate};
 
     #[test]
     fn test_vessel_monitor_creation() {

@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use crate::pgns::{WindData, Temperature, Humidity, ActualPressure, Attitude};
+use nmea2k::pgns::{WindData, Temperature, Humidity, ActualPressure, Attitude};
 use crate::config::EnvironmentalConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -251,22 +251,22 @@ impl Default for EnvironmentalMonitor {
     }
 }
 
-impl crate::message_handler::MessageHandler for EnvironmentalMonitor {
-    fn handle_message(&mut self, message: &crate::pgns::N2kMessage) {
+impl nmea2k::MessageHandler for EnvironmentalMonitor {
+    fn handle_message(&mut self, message: &nmea2k::N2kMessage) {
         match message {
-            crate::pgns::N2kMessage::Temperature(temp) => {
+            nmea2k::pgns::N2kMessage::Temperature(temp) => {
                 self.process_temperature(temp);
             }
-            crate::pgns::N2kMessage::WindData(wind) => {
+            nmea2k::pgns::N2kMessage::WindData(wind) => {
                 self.process_wind(wind);
             }
-            crate::pgns::N2kMessage::Humidity(hum) => {
+            nmea2k::pgns::N2kMessage::Humidity(hum) => {
                 self.process_humidity(hum);
             }
-            crate::pgns::N2kMessage::ActualPressure(pressure) => {
+            nmea2k::pgns::N2kMessage::ActualPressure(pressure) => {
                 self.process_actual_pressure(pressure);
             }
-            crate::pgns::N2kMessage::Attitude(attitude) => {
+            nmea2k::pgns::N2kMessage::Attitude(attitude) => {
                 self.process_attitude(attitude);
             }
             _ => {} // Ignore messages we're not interested in

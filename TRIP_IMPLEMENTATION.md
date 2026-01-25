@@ -27,9 +27,6 @@ New module containing the Trip entity with:
 
 - **Tests:** 8 comprehensive unit tests covering all functionality
 
-### 2. `migrations/003_create_trips_table.sql`
-Database migration script to create the trips table with proper indexes and comments.
-
 ## Files Modified
 
 ### 1. `src/main.rs`
@@ -144,12 +141,9 @@ All 76 tests pass, including:
 - All existing tests continue to pass
 - Trip creation, update, and active status detection verified
 
-## Migration Steps
+## Deployment
 
-1. Apply database migration:
-   ```bash
-   mysql -u nmea -p nmea_router < migrations/003_create_trips_table.sql
-   ```
+1. The trips table schema is included in the main schema.sql file.
 
 2. Restart the application:
    ```bash

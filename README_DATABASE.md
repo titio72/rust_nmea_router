@@ -181,12 +181,6 @@ CREATE TABLE trips (
 );
 ```
 
-**Migration:**
-Run the migration script to create the trips table:
-```bash
-mysql -u nmea -p nmea_router < migrations/003_create_trips_table.sql
-```
-
 ## Querying Data
 
 ### Latest Vessel Status

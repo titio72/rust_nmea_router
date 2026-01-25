@@ -1,8 +1,6 @@
 use std::{error::Error, time::Duration};
 use tracing::{info, warn};
 
-mod pgns;
-mod stream_reader;
 mod vessel_monitor;
 mod time_monitor;
 mod environmental_monitor;
@@ -11,18 +9,19 @@ mod config;
 mod trip;
 mod vessel_status_handler;
 mod environmental_status_handler;
-mod message_handler;
-mod nmea2k;
 mod app_metrics;
+mod frame_filter;
 
-use stream_reader::N2kStreamReader;
 use vessel_monitor::VesselMonitor;
 use time_monitor::TimeMonitor;
 use environmental_monitor::EnvironmentalMonitor;
 use db::{VesselDatabase, HealthCheckManager};
 use config::Config;
-use message_handler::MessageHandler;
 use app_metrics::{AppMetrics, MetricsLogger};
+use frame_filter::should_process_frame;
+
+// Import from nmea2k crate
+use nmea2k::{N2kStreamReader, CanBus, MessageHandler};
 
 // ========== Logging Setup ==========
 
@@ -133,8 +132,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let interface = &config.can_interface;
     info!("Opening CAN interface: {}", interface);
     
-    let mut socket = nmea2k::open_can_socket_with_retry(interface);
-    nmea2k::configure_nmea2k_socket(&mut socket).expect("Failed to configure CAN socket");
+    let mut socket = CanBus::open_can_socket_with_retry(interface);
+    CanBus::configure_nmea2k_socket(&mut socket).expect("Failed to configure CAN socket");
     
     info!("Listening for NMEA2000 messages");
     
@@ -185,7 +184,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Read CAN frames in a loop
     loop {
-        match nmea2k::read_nmea2k_frame(&socket) {
+        match CanBus::read_nmea2k_frame(&socket) {
             Ok((extended_id, data)) => {
                 metrics.can_frames += 1;
                 
@@ -193,7 +192,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if let Some(n2k_frame) = reader.process_frame(extended_id, &data) {
                     metrics.nmea_messages += 1;
                     
-                    if nmea2k::filter_frame(&config, &n2k_frame).is_break() {
+                    if !should_process_frame(&config, &n2k_frame) {
                         continue;
                     }
                     time_monitor.handle_message(&n2k_frame.message);
@@ -233,8 +232,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     warn!("CAN bus connection lost. Attempting to reconnect...");
                     
                     // Try to reconnect
-                    socket = nmea2k::open_can_socket_with_retry(interface);
-                    nmea2k::configure_nmea2k_socket(&mut socket).expect("Failed to configure CAN socket");
+                    socket = CanBus::open_can_socket_with_retry(interface);
+                    CanBus::configure_nmea2k_socket(&mut socket).expect("Failed to configure CAN socket");
                     
                     info!("Reconnected to CAN bus. Resuming operation");
                     

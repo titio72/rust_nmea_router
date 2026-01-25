@@ -1,8 +1,8 @@
 use socketcan::{CanSocket, EmbeddedFrame, ExtendedId, Frame, Socket};
-use std::{error::Error, ops::ControlFlow, time::Duration};
+use std::{error::Error, time::Duration};
 use tracing::{info, warn};
-use crate::config::Config;
-use crate::stream_reader::N2kFrame;
+
+pub use crate::stream_reader::N2kFrame;
 
 /// Opens a CAN socket with automatic retry on failure
 /// 
@@ -64,29 +64,8 @@ pub fn read_nmea2k_frame(socket: &CanSocket) -> Result<(ExtendedId, Vec<u8>), st
     Ok((extended_id, data))
 }
 
-/// Filters NMEA2000 frames based on configuration
-/// 
-/// # Arguments
-/// * `config` - Application configuration containing filter rules
-/// * `n2k_frame` - The NMEA2000 frame to filter
-/// 
-/// # Returns
-/// ControlFlow::Continue(()) if frame should be processed,
-/// ControlFlow::Break(()) if frame should be skipped
-pub fn filter_frame(config: &Config, n2k_frame: &N2kFrame) -> ControlFlow<()> {
-    let pgn = n2k_frame.identifier.pgn();
-    let source = n2k_frame.identifier.source();
-                    
-    // Apply source filter - skip messages that don't match the configured source
-    if !config.source_filter.should_accept(pgn, source) {
-        return ControlFlow::Break(());
-    }
-    ControlFlow::Continue(())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     
     #[test]
     fn test_configure_socket_sets_timeout() {

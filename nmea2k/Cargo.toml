@@ -1,0 +1,15 @@
+[package]
+name = "nmea2k"
+version = "0.1.0"
+edition = "2024"
+authors = ["NMEA Router Contributors"]
+description = "NMEA2000 protocol implementation with PGN decoders and CAN bus support"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+nmea2000 = "0.2.2"
+socketcan = "3.0"
+tracing = "0.1"
+chrono = "0.4"
+
+[dev-dependencies]
