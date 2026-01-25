@@ -17,23 +17,17 @@ const MIN_SAMPLES_FOR_VALIDATION: usize = 10; // Minimum samples required for va
 pub struct VesselStatus {
     pub current_position: Position,
     pub average_position: Option<Position>,
-    #[allow(dead_code)]
     pub number_of_samples: usize,
-    pub average_speed: f64,  // m/s
+    //pub average_speed: f64,  // m/s
     pub max_speed: f64,       // m/s
     pub is_moored: bool,
     pub engine_on: bool,
-    #[allow(dead_code)]
     pub timestamp: Instant,
 }
 
 impl VesselStatus {
     pub fn get_effective_position(&self) -> Position {
         if self.is_moored { self.current_position } else { self.average_position.unwrap_or(self.current_position) }
-    }
-
-    pub fn get_effective_speed(&self) -> f64 {
-        if self.is_moored { 0.0 } else { self.average_speed }
     }
 
     pub fn is_valid(&self) -> bool {
@@ -119,11 +113,10 @@ pub struct VesselMonitor {
     last_event_time: Instant,
     current_position: Option<Position>,
     engine_on: bool,
-    config: VesselStatusConfig,
 }
 
 impl VesselMonitor {
-    pub fn new(config: VesselStatusConfig) -> Self {
+    pub fn new(_config: VesselStatusConfig) -> Self {
         let now = Instant::now();
         VesselMonitor {
             positions: VecDeque::new(),
@@ -131,7 +124,6 @@ impl VesselMonitor {
             last_event_time: now,
             current_position: None,
             engine_on: false,
-            config,
         }
     }
 
@@ -265,7 +257,7 @@ impl VesselMonitor {
         }
 
         let (sample_count, average_position) = self.calculate_average_position(EVENT_INTERVAL);
-        let (_, average_speed, max_speed) = self.calculate_average_and_max_speed(EVENT_INTERVAL);
+        let (_, _, max_speed) = self.calculate_average_and_max_speed(EVENT_INTERVAL);
         let is_moored = self.is_vessel_moored();
 
         // Use the timestamp of the last position in the buffer, or current time if no positions
@@ -279,7 +271,6 @@ impl VesselMonitor {
             current_position: self.current_position.unwrap(),
             average_position,
             number_of_samples: sample_count,
-            average_speed,
             max_speed: max_speed,
             is_moored,
             engine_on: self.engine_on,
@@ -397,26 +388,6 @@ impl crate::message_handler::MessageHandler for VesselMonitor {
 impl Default for VesselMonitor {
     fn default() -> Self {
         Self::new(VesselStatusConfig::default())
-    }
-}
-
-impl std::fmt::Display for VesselStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "════════════════════════════════════════════════════")?;
-        writeln!(f, "VESSEL STATUS REPORT")?;
-        writeln!(f, "════════════════════════════════════════════════════")?;
-        
-        writeln!(f, "Position:     {:+010.6}°, {:+010.6}°", self.current_position.latitude, self.current_position.longitude)?;
-        
-        writeln!(f, "Avg Speed:    {:5.2} m/s ({:5.2} knots)", 
-                 self.average_speed, self.average_speed * 1.94384)?;
-        writeln!(f, "Max Speed:    {:5.2} m/s ({:5.2} knots)", 
-                 self.max_speed, self.max_speed * 1.94384)?;
-        writeln!(f, "Status:       {}", 
-                 if self.is_moored { "⚓ MOORED  " } else { "⛵ UNDERWAY" })?;
-        writeln!(f, "Engine:       {}", 
-                 if self.engine_on { "🟢 ON  " } else { "⚫ OFF " })?;
-        writeln!(f, "════════════════════════════════════════════════════")
     }
 }
 

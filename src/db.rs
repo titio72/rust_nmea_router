@@ -6,6 +6,26 @@ use crate::environmental_monitor::{MetricData, MetricId};
 use crate::trip::Trip;
 use chrono::NaiveDateTime;
 
+/// Encapsulates vessel status data for database insertion
+pub struct VesselStatusOperation {
+    pub time: Instant,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub average_speed: f64,
+    pub max_speed: f64,
+    pub is_moored: bool,
+    pub engine_on: bool,
+    pub total_distance_nm: f64,
+    pub total_time_ms: u64,
+}
+
+/// Represents a trip operation to be performed atomically with vessel status insert
+pub enum TripOperation {
+    CreateTrip(Trip),
+    UpdateTrip(Trip),
+    None,
+}
+
 pub struct VesselDatabase {
     pool: Pool,
 }
@@ -38,37 +58,113 @@ impl VesselDatabase {
         Ok(VesselDatabase { pool })
     }
     
-    /// Insert a vessel status report into the database
-    /// All timestamps are stored in UTC timezone
-    /// Distances are in nautical miles
-    pub fn insert_status(&self, time: Instant,
-        latitude: f64, longitude: f64, average_speed: f64, max_speed: f64, is_moored: bool, engine_on: bool, total_distance_nm: f64, total_time_ms: u64) -> Result<(), Box<dyn Error>> {
+    /// Check database connection health using a simple query
+    /// Returns Ok(()) if the connection is healthy, Err otherwise
+    pub fn health_check(&self) -> Result<(), Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
-
-        // Ugly workaround to convert Instant to SystemTime
-        let delta = Instant::now().duration_since(time);
+        conn.query_drop("SELECT 1")?;
+        Ok(())
+    }
+    
+    /// Insert vessel status and create/update trip in a single transaction
+    /// This ensures atomicity - either both operations succeed or both fail
+    pub fn insert_status_and_trip(
+        &self,
+        status_op: VesselStatusOperation,
+        trip_operation: TripOperation,
+    ) -> Result<Option<i64>, Box<dyn Error>> {
+        let mut conn = self.pool.get_conn()?;
+        let mut tx = conn.start_transaction(TxOpts::default())?;
+        
+        // Insert vessel status
+        let delta = Instant::now().duration_since(status_op.time);
         let system_time = SystemTime::now().checked_sub(delta).unwrap_or(UNIX_EPOCH);
-        // Get current system time and convert to UTC
         let timestamp = chrono::DateTime::<chrono::Utc>::from(system_time);
                
-        conn.exec_drop(
+        tx.exec_drop(
             r"INSERT INTO vessel_status 
               (timestamp, latitude, longitude, average_speed_ms, max_speed_ms, is_moored, engine_on, total_distance_nm, total_time_ms)
               VALUES (:timestamp, :latitude, :longitude, :avg_speed, :max_speed, :is_moored, :engine_on, :total_distance, :total_time)",
             params! {
                 "timestamp" => timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
-                "latitude" => latitude,
-                "longitude" => longitude,
-                "avg_speed" => average_speed,
-                "max_speed" => max_speed,
-                "is_moored" => is_moored,
-                "engine_on" => engine_on,
-                "total_distance" => total_distance_nm,
-                "total_time" => total_time_ms,
+                "latitude" => status_op.latitude,
+                "longitude" => status_op.longitude,
+                "avg_speed" => status_op.average_speed,
+                "max_speed" => status_op.max_speed,
+                "is_moored" => status_op.is_moored,
+                "engine_on" => status_op.engine_on,
+                "total_distance" => status_op.total_distance_nm,
+                "total_time" => status_op.total_time_ms,
             },
         )?;
         
-        Ok(())
+        // Handle trip operation
+        let trip_id = match trip_operation {
+            TripOperation::CreateTrip(trip) => {
+                let delta_start = Instant::now().duration_since(trip.start_timestamp);
+                let delta_end = Instant::now().duration_since(trip.end_timestamp);
+                
+                let start_system = SystemTime::now().checked_sub(delta_start).unwrap_or(UNIX_EPOCH);
+                let end_system = SystemTime::now().checked_sub(delta_end).unwrap_or(UNIX_EPOCH);
+                
+                let start_timestamp = chrono::DateTime::<chrono::Utc>::from(start_system);
+                let end_timestamp = chrono::DateTime::<chrono::Utc>::from(end_system);
+                
+                tx.exec_drop(
+                    r"INSERT INTO trips 
+                      (description, start_timestamp, end_timestamp, 
+                       total_distance_sailed, total_distance_motoring,
+                       total_time_sailing, total_time_motoring, total_time_moored)
+                      VALUES (:description, :start_ts, :end_ts, 
+                              :distance_sailed, :distance_motoring,
+                              :time_sailing, :time_motoring, :time_moored)",
+                    params! {
+                        "description" => &trip.description,
+                        "start_ts" => start_timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+                        "end_ts" => end_timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+                        "distance_sailed" => trip.total_distance_sailed,
+                        "distance_motoring" => trip.total_distance_motoring,
+                        "time_sailing" => trip.total_time_sailing,
+                        "time_motoring" => trip.total_time_motoring,
+                        "time_moored" => trip.total_time_moored,
+                    },
+                )?;
+                
+                tx.last_insert_id().map(|id| id as i64)
+            }
+            TripOperation::UpdateTrip(trip) => {
+                if let Some(trip_id) = trip.id {
+                    let delta_end = Instant::now().duration_since(trip.end_timestamp);
+                    let end_system = SystemTime::now().checked_sub(delta_end).unwrap_or(UNIX_EPOCH);
+                    let end_timestamp = chrono::DateTime::<chrono::Utc>::from(end_system);
+                    
+                    tx.exec_drop(
+                        r"UPDATE trips 
+                          SET end_timestamp = :end_ts,
+                              total_distance_sailed = :distance_sailed,
+                              total_distance_motoring = :distance_motoring,
+                              total_time_sailing = :time_sailing,
+                              total_time_motoring = :time_motoring,
+                              total_time_moored = :time_moored
+                          WHERE id = :trip_id",
+                        params! {
+                            "trip_id" => trip_id,
+                            "end_ts" => end_timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+                            "distance_sailed" => trip.total_distance_sailed,
+                            "distance_motoring" => trip.total_distance_motoring,
+                            "time_sailing" => trip.total_time_sailing,
+                            "time_motoring" => trip.total_time_motoring,
+                            "time_moored" => trip.total_time_moored,
+                        },
+                    )?;
+                }
+                None
+            }
+            TripOperation::None => None,
+        };
+        
+        tx.commit()?;
+        Ok(trip_id)
     }
         
     /// Insert only specific environmental metrics into the database
@@ -188,78 +284,5 @@ impl VesselDatabase {
         } else {
             Ok(None)
         }
-    }
-    
-    /// Insert a new trip into the database
-    pub fn insert_trip(&self, trip: &Trip) -> Result<i64, Box<dyn Error>> {
-        let mut conn = self.pool.get_conn()?;
-        
-        // Convert Instant to SystemTime
-        let delta_start = Instant::now().duration_since(trip.start_timestamp);
-        let delta_end = Instant::now().duration_since(trip.end_timestamp);
-        
-        let start_system = SystemTime::now().checked_sub(delta_start).unwrap_or(UNIX_EPOCH);
-        let end_system = SystemTime::now().checked_sub(delta_end).unwrap_or(UNIX_EPOCH);
-        
-        let start_timestamp = chrono::DateTime::<chrono::Utc>::from(start_system);
-        let end_timestamp = chrono::DateTime::<chrono::Utc>::from(end_system);
-        
-        conn.exec_drop(
-            r"INSERT INTO trips 
-              (description, start_timestamp, end_timestamp, 
-               total_distance_sailed, total_distance_motoring,
-               total_time_sailing, total_time_motoring, total_time_moored)
-              VALUES (:description, :start_ts, :end_ts, 
-                      :distance_sailed, :distance_motoring,
-                      :time_sailing, :time_motoring, :time_moored)",
-            params! {
-                "description" => &trip.description,
-                "start_ts" => start_timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
-                "end_ts" => end_timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
-                "distance_sailed" => trip.total_distance_sailed,
-                "distance_motoring" => trip.total_distance_motoring,
-                "time_sailing" => trip.total_time_sailing,
-                "time_motoring" => trip.total_time_motoring,
-                "time_moored" => trip.total_time_moored,
-            },
-        )?;
-        
-        Ok(conn.last_insert_id() as i64)
-    }
-    
-    /// Update an existing trip in the database
-    pub fn update_trip(&self, trip: &Trip) -> Result<(), Box<dyn Error>> {
-        if trip.id.is_none() {
-            return Err("Cannot update trip without id".into());
-        }
-        
-        let mut conn = self.pool.get_conn()?;
-        
-        // Convert Instant to SystemTime
-        let delta_end = Instant::now().duration_since(trip.end_timestamp);
-        let end_system = SystemTime::now().checked_sub(delta_end).unwrap_or(UNIX_EPOCH);
-        let end_timestamp = chrono::DateTime::<chrono::Utc>::from(end_system);
-        
-        conn.exec_drop(
-            r"UPDATE trips 
-              SET end_timestamp = :end_ts,
-                  total_distance_sailed = :distance_sailed,
-                  total_distance_motoring = :distance_motoring,
-                  total_time_sailing = :time_sailing,
-                  total_time_motoring = :time_motoring,
-                  total_time_moored = :time_moored
-              WHERE id = :id",
-            params! {
-                "id" => trip.id.unwrap(),
-                "end_ts" => end_timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
-                "distance_sailed" => trip.total_distance_sailed,
-                "distance_motoring" => trip.total_distance_motoring,
-                "time_sailing" => trip.total_time_sailing,
-                "time_motoring" => trip.total_time_motoring,
-                "time_moored" => trip.total_time_moored,
-            },
-        )?;
-        
-        Ok(())
     }
 }

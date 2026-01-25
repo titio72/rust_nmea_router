@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 use crate::db::VesselDatabase;
-use crate::time_monitor::TimeMonitor;
 use crate::environmental_monitor::{EnvironmentalMonitor, MetricId};
 
 /// State for tracking environmental metric persistence
@@ -61,14 +60,14 @@ impl EnvironmentalStatusHandler {
     }
 
     /// Handle environmental status reporting and persistence
-    /// Returns the number of environmental metrics written to the database
+    /// Returns Ok(count) with the number of environmental metrics written to the database
+    /// Returns Err if there was a database error
     pub fn handle_environment_status(
         &mut self,
         vessel_db: &Option<VesselDatabase>,
-        time_monitor: &TimeMonitor,
         env_monitor: &mut EnvironmentalMonitor,
-    ) -> usize {
-        handle_environment_status(vessel_db, time_monitor, env_monitor, &mut self.state)
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        handle_environment_status(vessel_db, env_monitor, &mut self.state)
     }
 }
 
@@ -78,44 +77,40 @@ impl EnvironmentalStatusHandler {
 /// when conditions are met (database connected, time synchronized, metrics ready).
 fn handle_environment_status(
     vessel_db: &Option<VesselDatabase>,
-    time_monitor: &TimeMonitor,
     env_monitor: &mut EnvironmentalMonitor,
     state: &mut EnvironmentalStatusState,
-) -> usize {
+) -> Result<usize, Box<dyn std::error::Error>> {
     let mut written_count = 0;
     // Write to database if connected, time to persist, and time is synchronized
     if let Some(ref db) = *vessel_db {
         let metrics_to_persist = state.get_metrics_to_persist(env_monitor);
         if !metrics_to_persist.is_empty() {
-            if time_monitor.is_valid_and_synced() {
-                for metricid in metrics_to_persist.iter() {
-                    debug!("Persisting environmental metric: {}", metricid.name());
-                    let data = env_monitor.calculate_metric_data(*metricid);
-                    if let Some(metric_data) = data {
-                        debug!("Metric Data for {}: avg={:?}, max={:?}, min={:?}, count={:?}", 
-                            metricid.name(), 
-                            metric_data.avg, 
-                            metric_data.max, 
-                            metric_data.min,
-                            metric_data.count);
-                        if let Err(e) = db.insert_environmental_metrics(&metric_data, *metricid) {
-                            warn!("Error writing {} data to database: {}", metricid.name(), e);
-                        } else {
-                            state.mark_metric_persisted(*metricid);
-                            env_monitor.cleanup_all_samples(*metricid);
-                            debug!("Environmental metric {} written to database", metricid.name());
-                            written_count += 1;
-                        }
+            for metricid in metrics_to_persist.iter() {
+                debug!("Persisting environmental metric: {}", metricid.name());
+                let data = env_monitor.calculate_metric_data(*metricid);
+                if let Some(metric_data) = data {
+                    debug!("Metric Data for {}: avg={:?}, max={:?}, min={:?}, count={:?}", 
+                        metricid.name(), 
+                        metric_data.avg, 
+                        metric_data.max, 
+                        metric_data.min,
+                        metric_data.count);
+                    if let Err(e) = db.insert_environmental_metrics(&metric_data, *metricid) {
+                        warn!("Error writing {} data to database: {}", metricid.name(), e);
+                        return Err(e);
                     } else {
-                        debug!("No data available for metric: {}", metricid.name());
+                        state.mark_metric_persisted(*metricid);
+                        env_monitor.cleanup_all_samples(*metricid);
+                        debug!("Environmental metric {} written to database", metricid.name());
+                        written_count += 1;
                     }
+                } else {
+                    debug!("No data available for metric: {}", metricid.name());
                 }
-            } else {
-                warn!("Skipping environmental metrics DB write - time skew detected {} ms", time_monitor.last_measured_skew_ms());
             }
         }
     }
-    written_count
+    Ok(written_count)
 }
 
 #[cfg(test)]
