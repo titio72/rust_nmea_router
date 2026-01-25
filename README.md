@@ -17,11 +17,18 @@ This is a new project spawned from https://github.com/titio72/nmearouter, mostly
   - Moored vessels: 30-minute intervals
   - Underway vessels: 30-second intervals
   - Per-metric environmental intervals
+- **Database Resilience**:
+  - Health checks every 60 seconds
+  - Automatic retry on failed writes
+  - Transaction atomicity for vessel status and trip updates
+  - Continues operation if database unavailable
 - **Time Synchronization Protection**: Blocks database writes when NMEA2000 time differs from system time by more than 500ms (configurable)
+- **Configuration Validation**: Comprehensive validation with auto-correction and sensible defaults
+- **CLI Options**: Test configuration (--validate-config), display help (--help)
 - **Automatic Reconnection**: Retries CAN interface connection every 10 seconds on failure
 - **JSON Configuration**: Externalized configuration for all runtime parameters
 - **Mooring Detection**: Automatically detects when vessel is moored based on position history
-- **Comprehensive Unit Tests**: 58 tests covering core functionality
+- **Comprehensive Unit Tests**: 86 tests covering core functionality including configuration validation
 
 ## Requirements
 
@@ -111,9 +118,12 @@ Edit `config.json` to customize settings:
 
 #### CAN Interface
 - `can_interface`: Name of the SocketCAN interface (e.g., `can0`, `vcan0`)
+  - Must be alphanumeric, underscore, or hyphen characters only
+  - Cannot be empty
+  - Invalid values will cause startup failure
 
 #### Time Synchronization
-- `skew_threshold_ms`: Maximum allowed time difference between NMEA2000 and system time in milliseconds. Database writes are blocked when exceeded (default: 500ms)
+- `skew_threshold_ms`: Maximum allowed time difference between NMEA2000 and system time in milliseconds. Database writes are blocked when exceeded (default: 500ms, minimum: 100ms)
 
 #### Database Connection
 - `host`: Database server hostname
@@ -123,11 +133,11 @@ Edit `config.json` to customize settings:
 - `database_name`: Target database name
 
 #### Vessel Status Intervals
-- `interval_moored_seconds`: DB write interval when vessel is moored (default: 1800 = 30 minutes)
-- `interval_underway_seconds`: DB write interval when vessel is underway (default: 30 seconds)
+- `interval_moored_seconds`: DB write interval when vessel is moored (default: 1800, valid range: 30-600)
+- `interval_underway_seconds`: DB write interval when vessel is underway (default: 30, valid range: 30-600)
 
 #### Environmental Metrics Intervals
-Individual persistence intervals for each environmental metric:
+Individual persistence intervals for each environmental metric (all values in seconds, valid range: 30-600):
 - `wind_speed_seconds`: Wind speed persistence interval (default: 30)
 - `wind_direction_seconds`: Wind direction persistence interval (default: 30)
 - `roll_seconds`: Roll angle persistence interval (default: 30)
@@ -136,7 +146,81 @@ Individual persistence intervals for each environmental metric:
 - `water_temp_seconds`: Water temperature persistence interval (default: 300)
 - `humidity_seconds`: Humidity persistence interval (default: 300)
 
+### Configuration Validation
+
+The application automatically validates the configuration on startup and applies the following rules:
+
+#### PGN Filter Rules
+- **Valid Range**: 50,000 - 200,000
+- **Invalid Entries**: Automatically removed with a warning
+- **Example**: PGN 12345 (too low) or PGN 250000 (too high) will be filtered out
+
+#### Source Filter Rules
+- **Valid Range**: 1 - 254
+- **Invalid Entries**: Automatically removed with a warning
+- **Example**: Source 0 or source 300 will be filtered out
+
+#### Interval Validation
+- **Valid Range**: 30 - 600 seconds
+- **Out of Range**: Reverts to default value with a warning
+- **Example**: `wind_speed_seconds: 10` (too low) will revert to default 30 seconds
+
+#### Skew Threshold Validation
+- **Minimum Value**: 100 milliseconds
+- **Below Minimum**: Reverts to default 500ms with a warning
+- **Example**: `skew_threshold_ms: 50` will revert to 500ms
+
+All validation errors are logged with warnings but do not prevent startup (except for invalid CAN interface names).
+
 ## Usage
+
+### Command Line Options
+
+```bash
+# Run the application normally
+./target/release/nmea_router
+
+# Validate configuration without running
+./target/release/nmea_router --validate-config
+# or
+./target/release/nmea_router --validate
+./target/release/nmea_router -v
+
+# Display help
+./target/release/nmea_router --help
+./target/release/nmea_router -h
+```
+
+#### Validation Mode (--validate-config)
+
+Tests the configuration file for errors without starting the application. Displays:
+- CAN interface name
+- All configured PGN filters
+- All configured source filters
+- Time skew threshold
+- All database intervals (vessel status and environmental metrics)
+
+Example output:
+```
+Configuration is valid!
+
+Configuration Summary:
+  CAN Interface: vcan0
+  PGN Filters: 126992, 127250, 129025, 129026, 130306, 130312
+  Source Filters: 1, 2, 3, 10
+  Time Skew Threshold: 500 ms
+  Vessel Status Intervals:
+    Moored: 1800 seconds
+    Underway: 30 seconds
+  Environmental Intervals:
+    Wind Speed: 30 seconds
+    Wind Direction: 30 seconds
+    Roll: 30 seconds
+    Pressure: 120 seconds
+    Cabin Temperature: 300 seconds
+    Water Temperature: 300 seconds
+    Humidity: 300 seconds
+```
 
 ### Run the Application
 
@@ -162,8 +246,45 @@ Listening for NMEA2000 messages...
 Position: 45.123456° N, -122.654321° W | Alt: 15.5m
 Speed: 5.2 m/s (10.1 knots) | COG: 245° (Magnetic)
 Heading: 243° (Magnetic) | ROT: 2.5°/s (right)
+
+--- Metrics (60s) ---
+  CAN Frames: 1234 (20.6/s)
+  NMEA Messages: 987 (16.5/s)
+  Vessel Reports: 12 (0.2/s)
+  Env Reports: 45 (0.8/s)
+  Errors: 0
+-------------------
 ...
 ```
+
+### Database Resilience Features
+
+#### Health Checks
+The application performs database health checks every 60 seconds using a lightweight query (`SELECT 1`). If the check fails:
+1. A warning is logged
+2. Automatic reconnection is attempted with exponential backoff (1s, 2s, 4s)
+3. Application continues reading CAN data during reconnection attempts
+
+#### Automatic Retry
+When a database write fails (e.g., connection lost):
+1. The failed data is retained in memory
+2. Reconnection is attempted (up to 3 attempts with exponential backoff)
+3. The write operation is retried automatically (up to 2 attempts)
+4. If all retries fail, the data is discarded and a warning is logged
+
+This ensures that transient database issues don't cause data loss.
+
+#### Transaction Atomicity
+Vessel status and trip updates are wrapped in a database transaction:
+- Both operations succeed together, or
+- Both operations roll back together
+- This prevents inconsistent data (e.g., status saved but trip update failed)
+
+### Non-Blocking Operation
+The CAN socket uses a 500ms read timeout to prevent blocking. This ensures that:
+- Metrics are logged every 60 seconds even without CAN activity
+- Database health checks run on schedule
+- The application remains responsive
 
 ### Testing
 
@@ -175,23 +296,36 @@ cargo test
 
 Expected output:
 ```
-running 58 tests
-test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured
+running 86 tests
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured
 ```
+
+Tests cover:
+- Configuration validation (PGN ranges, source ranges, intervals, skew threshold)
+- NMEA2000 message parsing for all 13 supported PGNs
+- Fast packet assembly
+- Vessel monitoring (position tracking, mooring detection, speed calculations)
+- Environmental monitoring (statistics, per-metric intervals)
+- Time synchronization
+- Database operations
 
 ## Architecture
 
 ### Core Components
 
 1. **Main Loop** ([main.rs](src/main.rs))
-   - CAN frame reading with automatic reconnection
+   - CAN frame reading with automatic reconnection and 500ms timeout
    - Message processing and routing
-   - Database write coordination
+   - Database write coordination with retry logic
+   - Health checks every 60 seconds
+   - Metrics logging every 60 seconds
 
 2. **Configuration** ([config.rs](src/config.rs))
    - JSON-based configuration loading
+   - Comprehensive validation with auto-correction
    - Default values with type-safe access
    - Duration conversions for intervals
+   - CLI validation mode support
 
 3. **Time Monitor** ([time_monitor.rs](src/time_monitor.rs))
    - Tracks time skew between NMEA2000 and system time
@@ -210,9 +344,11 @@ test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured
    - Metric-by-metric database writes for optimal performance
 
 6. **Database** ([db.rs](src/db.rs))
-   - Connection pool management
-   - Vessel status inserts
+   - Connection pool management with health checks
+   - Transaction support for atomic operations
+   - Vessel status and trip inserts (atomic)
    - Environmental metrics inserts
+   - Automatic reconnection with exponential backoff
 
 7. **PGN Decoders** ([pgns/](src/pgns/))
    - Individual decoders for each supported PGN
@@ -222,7 +358,7 @@ test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured
 ### Data Flow
 
 ```
-CAN Bus (vcan0/can0)
+CAN Bus (vcan0/can0) [500ms timeout]
     ↓
 SocketCAN Interface
     ↓
@@ -233,6 +369,9 @@ PGN Decoders (Binary → Structured Data)
 Monitors (Vessel/Environmental/Time)
     ↓
 Database (MariaDB) [if time synchronized]
+    ├─ Health Check (every 60s)
+    ├─ Retry Logic (up to 2 attempts)
+    └─ Transactions (atomic vessel status + trip)
 ```
 
 ### Mooring Detection Algorithm
@@ -375,6 +514,34 @@ Continuing without database logging...
 ```
 
 **Solution**: Verify database credentials in `config.json` and ensure database exists
+
+**Note**: The application will automatically retry connection every 60 seconds via health checks
+
+### Database Write Failed
+
+```
+Warning: Failed to insert vessel status, will retry...
+Attempting database reconnection (attempt 1/3)...
+```
+
+**Solution**: 
+- Check database server is running
+- Verify network connectivity
+- The application will automatically retry up to 2 times with 3 reconnection attempts each
+- Failed data will be retained and retried after successful reconnection
+
+### Configuration Validation Errors
+
+```
+Warning: PGN 12345 is outside valid range (50000-200000), removing from filter
+Warning: Source 300 is outside valid range (1-254), removing from filter
+Warning: wind_speed_seconds (10) is outside valid range (30-600), using default: 30
+```
+
+**Solution**: 
+- Check `config.json` for invalid values
+- Run `./target/release/nmea_router --validate-config` to test configuration
+- The application will auto-correct invalid values but may not behave as expected
 
 ### Time Skew Warning
 

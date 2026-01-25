@@ -104,12 +104,51 @@ fn reconnect_database_with_retry(db_url: &str, max_retries: u32) -> Option<Vesse
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // Check for command-line arguments
+    let args: Vec<String> = std::env::args().collect();
+    
+    // Check for help flag
+    if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
+        println!("NMEA2000 Router");
+        println!();
+        println!("USAGE:");
+        println!("    nmea_router [OPTIONS]");
+        println!();
+        println!("OPTIONS:");
+        println!("    --validate-config, --validate, -v    Validate configuration and exit");
+        println!("    --help, -h                           Show this help message");
+        println!();
+        println!("Configuration file: config.json (in current directory)");
+        std::process::exit(0);
+    }
+    
+    let validate_only = args.contains(&"--validate-config".to_string()) 
+                     || args.contains(&"--validate".to_string())
+                     || args.contains(&"-v".to_string());
+    
     // Load configuration
     let config = match Config::from_file("config.json") {
-        Ok(cfg) => cfg,
+        Ok(cfg) => {
+            if validate_only {
+                println!("✓ Configuration validation successful");
+                println!("  CAN interface: {}", cfg.can_interface);
+                println!("  Time skew threshold: {} ms", cfg.time.skew_threshold_ms);
+                println!("  Database: {}@{}", cfg.database.connection.username, cfg.database.connection.host);
+                println!("  Vessel status intervals: moored={}s, underway={}s", 
+                    cfg.database.vessel_status.interval_moored_seconds,
+                    cfg.database.vessel_status.interval_underway_seconds);
+                println!("  PGN source filters: {} entries", cfg.source_filter.pgn_source_map.len());
+                std::process::exit(0);
+            }
+            cfg
+        },
         Err(e) => {
             // Check if this is a CAN interface validation error
             let err_msg = e.to_string();
+            if validate_only {
+                eprintln!("✗ Configuration validation failed: {}", e);
+                std::process::exit(1);
+            }
             if err_msg.contains("CAN interface") {
                 eprintln!("Fatal configuration error: {}", e);
                 eprintln!("Please fix the CAN interface configuration and try again.");

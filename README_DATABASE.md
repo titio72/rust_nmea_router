@@ -1,6 +1,32 @@
 # Database Integration
 
-The NMEA2000 Router now writes vessel status reports to a MariaDB/MySQL database.
+The NMEA2000 Router writes vessel status, environmental data, and trip tracking to a MariaDB/MySQL database with robust resilience features.
+
+## Database Resilience
+
+The application includes comprehensive database reliability features:
+
+### Health Monitoring
+- **Periodic Health Checks**: Every 60 seconds, a lightweight `SELECT 1` query verifies database connectivity
+- **Automatic Detection**: Connection issues are detected proactively before critical writes
+- **Graceful Degradation**: Application continues operating even if database is unavailable
+
+### Automatic Retry Logic
+When a database write fails:
+1. **Data Retention**: Failed data is kept in memory
+2. **Exponential Backoff**: Reconnection attempts use increasing delays (1s, 2s, 4s)
+3. **Multiple Attempts**: Up to 3 reconnection attempts per failure
+4. **Automatic Retry**: Writes are retried up to 2 times after successful reconnection
+5. **No Data Loss**: Transient issues don't cause data loss
+
+### Transaction Atomicity
+- **Vessel Status + Trip**: Updates are wrapped in database transactions
+- **All or Nothing**: Both operations succeed together or both rollback
+- **Data Consistency**: Prevents inconsistent state (e.g., status saved but trip update failed)
+
+### Non-Blocking Operation
+- **Socket Timeout**: 500ms CAN read timeout prevents blocking on database operations
+- **Continuous Operation**: Metrics, health checks, and monitoring continue regardless of database state
 
 ## Database Setup
 
@@ -137,6 +163,7 @@ The system automatically tracks vessel trips, separating sailing time, motoring 
   - Total distance sailed (engine off, underway)
   - Total distance motoring (engine on, underway)
   - Total time sailing, motoring, and moored
+- **Transaction Atomicity**: Vessel status inserts and trip updates are wrapped in a database transaction to ensure both succeed or both rollback together, preventing data inconsistencies
 
 **Database Schema:**
 ```sql
