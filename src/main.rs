@@ -105,11 +105,21 @@ fn reconnect_database_with_retry(db_url: &str, max_retries: u32) -> Option<Vesse
 
 fn main() -> Result<(), Box<dyn Error>> {
     // Load configuration
-    let config = Config::from_file("config.json").unwrap_or_else(|e| {
-        eprintln!("Warning: Could not load config.json: {}", e);
-        eprintln!("Using default configuration");
-        Config::default()
-    });
+    let config = match Config::from_file("config.json") {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            // Check if this is a CAN interface validation error
+            let err_msg = e.to_string();
+            if err_msg.contains("CAN interface") {
+                eprintln!("Fatal configuration error: {}", e);
+                eprintln!("Please fix the CAN interface configuration and try again.");
+                std::process::exit(1);
+            }
+            eprintln!("Warning: Could not load config.json: {}", e);
+            eprintln!("Using default configuration");
+            Config::default()
+        }
+    };
     
     // Initialize logging
     init_logging(&config.logging)?;

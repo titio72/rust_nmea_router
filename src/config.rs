@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
+use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -141,8 +142,128 @@ impl Config {
     /// Load configuration from a JSON file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
         let contents = fs::read_to_string(path)?;
-        let config: Config = serde_json::from_str(&contents)?;
+        let mut config: Config = serde_json::from_str(&contents)?;
+        config.validate_and_fix()?;
         Ok(config)
+    }
+    
+    /// Validate configuration and fix invalid values by reverting to defaults
+    /// Returns an error if CAN interface is invalid (unrecoverable)
+    fn validate_and_fix(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Validate CAN interface - must not be empty
+        if self.can_interface.is_empty() {
+            return Err("Configuration error: CAN interface cannot be empty".into());
+        }
+        
+        // Validate CAN interface is a valid device name (basic check)
+        if !self.can_interface.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+            return Err(format!("Configuration error: Invalid CAN interface name '{}'. Must contain only alphanumeric characters, underscores, or hyphens.", self.can_interface).into());
+        }
+        
+        // Validate time skew threshold (must be >= 100 ms)
+        if self.time.skew_threshold_ms < 100 {
+            warn!("Configuration warning: skew_threshold_ms ({}) is below minimum 100ms. Reverting to default 500ms.", self.time.skew_threshold_ms);
+            self.time.skew_threshold_ms = TimeConfig::default().skew_threshold_ms;
+        }
+        
+        // Validate PGN source filter
+        let mut invalid_pgns = Vec::new();
+        let mut invalid_sources = Vec::new();
+        
+        for (pgn, source) in &self.source_filter.pgn_source_map {
+            // Check PGN range (50000-200000)
+            if *pgn < 50000 || *pgn > 200000 {
+                invalid_pgns.push(*pgn);
+            }
+            // Check source range (1-254)
+            if *source < 1 || *source > 254 {
+                invalid_sources.push((*pgn, *source));
+            }
+        }
+        
+        // Remove invalid entries and warn
+        for pgn in invalid_pgns {
+            warn!("Configuration warning: Invalid PGN {} in source filter (must be 50000-200000). Removing entry.", pgn);
+            self.source_filter.pgn_source_map.remove(&pgn);
+        }
+        
+        for (pgn, source) in invalid_sources {
+            warn!("Configuration warning: Invalid source {} for PGN {} (must be 1-254). Removing entry.", source, pgn);
+            self.source_filter.pgn_source_map.remove(&pgn);
+        }
+        
+        // Validate vessel status intervals
+        self.validate_vessel_status_intervals();
+        
+        // Validate environmental intervals (30 seconds - 10 minutes = 30-600 seconds)
+        self.validate_environmental_intervals();
+        
+        Ok(())
+    }
+    
+    fn validate_vessel_status_intervals(&mut self) {
+        let defaults = VesselStatusConfig::default();
+        
+        // Validate moored interval (30 seconds - 10 minutes)
+        if self.database.vessel_status.interval_moored_seconds < 30 || self.database.vessel_status.interval_moored_seconds > 600 {
+            warn!("Configuration warning: interval_moored_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+                self.database.vessel_status.interval_moored_seconds, defaults.interval_moored_seconds);
+            self.database.vessel_status.interval_moored_seconds = defaults.interval_moored_seconds;
+        }
+        
+        // Validate underway interval (30 seconds - 10 minutes)
+        if self.database.vessel_status.interval_underway_seconds < 30 || self.database.vessel_status.interval_underway_seconds > 600 {
+            warn!("Configuration warning: interval_underway_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+                self.database.vessel_status.interval_underway_seconds, defaults.interval_underway_seconds);
+            self.database.vessel_status.interval_underway_seconds = defaults.interval_underway_seconds;
+        }
+    }
+    
+    fn validate_environmental_intervals(&mut self) {
+        let defaults = EnvironmentalConfig::default();
+        
+        // Validate each environmental interval (30 seconds - 10 minutes = 30-600 seconds)
+        if self.database.environmental.wind_speed_seconds < 30 || self.database.environmental.wind_speed_seconds > 600 {
+            warn!("Configuration warning: wind_speed_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+                self.database.environmental.wind_speed_seconds, defaults.wind_speed_seconds);
+            self.database.environmental.wind_speed_seconds = defaults.wind_speed_seconds;
+        }
+        
+        if self.database.environmental.wind_direction_seconds < 30 || self.database.environmental.wind_direction_seconds > 600 {
+            warn!("Configuration warning: wind_direction_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+                self.database.environmental.wind_direction_seconds, defaults.wind_direction_seconds);
+            self.database.environmental.wind_direction_seconds = defaults.wind_direction_seconds;
+        }
+        
+        if self.database.environmental.roll_seconds < 30 || self.database.environmental.roll_seconds > 600 {
+            warn!("Configuration warning: roll_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+                self.database.environmental.roll_seconds, defaults.roll_seconds);
+            self.database.environmental.roll_seconds = defaults.roll_seconds;
+        }
+        
+        if self.database.environmental.pressure_seconds < 30 || self.database.environmental.pressure_seconds > 600 {
+            warn!("Configuration warning: pressure_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+                self.database.environmental.pressure_seconds, defaults.pressure_seconds);
+            self.database.environmental.pressure_seconds = defaults.pressure_seconds;
+        }
+        
+        if self.database.environmental.cabin_temp_seconds < 30 || self.database.environmental.cabin_temp_seconds > 600 {
+            warn!("Configuration warning: cabin_temp_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+                self.database.environmental.cabin_temp_seconds, defaults.cabin_temp_seconds);
+            self.database.environmental.cabin_temp_seconds = defaults.cabin_temp_seconds;
+        }
+        
+        if self.database.environmental.water_temp_seconds < 30 || self.database.environmental.water_temp_seconds > 600 {
+            warn!("Configuration warning: water_temp_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+                self.database.environmental.water_temp_seconds, defaults.water_temp_seconds);
+            self.database.environmental.water_temp_seconds = defaults.water_temp_seconds;
+        }
+        
+        if self.database.environmental.humidity_seconds < 30 || self.database.environmental.humidity_seconds > 600 {
+            warn!("Configuration warning: humidity_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+                self.database.environmental.humidity_seconds, defaults.humidity_seconds);
+            self.database.environmental.humidity_seconds = defaults.humidity_seconds;
+        }
     }
     
     /// Create default configuration
@@ -419,5 +540,141 @@ mod tests {
         assert_eq!(deserialized.directory, "/var/log/nmea");
         assert_eq!(deserialized.file_prefix, "router");
         assert_eq!(deserialized.level, "debug");
+    }
+
+    #[test]
+    fn test_validation_empty_can_interface() {
+        let json = r#"{
+            "can_interface": "",
+            "time": {"skew_threshold_ms": 500},
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        let result = config.validate_and_fix();
+        
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("CAN interface cannot be empty"));
+    }
+
+    #[test]
+    fn test_validation_invalid_can_interface() {
+        let json = r#"{
+            "can_interface": "can@#$%",
+            "time": {"skew_threshold_ms": 500},
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        let result = config.validate_and_fix();
+        
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid CAN interface name"));
+    }
+
+    #[test]
+    fn test_validation_skew_threshold_too_low() {
+        let json = r#"{
+            "can_interface": "vcan0",
+            "time": {"skew_threshold_ms": 50},
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        config.validate_and_fix().unwrap();
+        
+        // Should be reverted to default
+        assert_eq!(config.time.skew_threshold_ms, 500);
+    }
+
+    #[test]
+    fn test_validation_environmental_period_out_of_range() {
+        let json = r#"{
+            "can_interface": "vcan0",
+            "time": {"skew_threshold_ms": 500},
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 10, "wind_direction_seconds": 700, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        config.validate_and_fix().unwrap();
+        
+        // wind_speed_seconds too low (10 < 30), should be reverted to default
+        assert_eq!(config.database.environmental.wind_speed_seconds, 30);
+        // wind_direction_seconds too high (700 > 600), should be reverted to default
+        assert_eq!(config.database.environmental.wind_direction_seconds, 30);
+    }
+
+    #[test]
+    fn test_validation_pgn_out_of_range() {
+        let json = r#"{
+            "can_interface": "vcan0",
+            "time": {"skew_threshold_ms": 500},
+            "source_filter": {
+                "pgn_source_map": {
+                    "129025": 22,
+                    "30000": 10,
+                    "250000": 5
+                }
+            },
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        config.validate_and_fix().unwrap();
+        
+        // Valid PGN should remain
+        assert_eq!(config.source_filter.pgn_source_map.get(&129025), Some(&22));
+        // Invalid PGNs should be removed
+        assert_eq!(config.source_filter.pgn_source_map.get(&30000), None);
+        assert_eq!(config.source_filter.pgn_source_map.get(&250000), None);
+    }
+
+    #[test]
+    fn test_validation_source_out_of_range() {
+        let json = r#"{
+            "can_interface": "vcan0",
+            "time": {"skew_threshold_ms": 500},
+            "source_filter": {
+                "pgn_source_map": {
+                    "129025": 22,
+                    "129026": 0,
+                    "129029": 255
+                }
+            },
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        config.validate_and_fix().unwrap();
+        
+        // Valid source should remain
+        assert_eq!(config.source_filter.pgn_source_map.get(&129025), Some(&22));
+        // Invalid sources (0, 255) should be removed
+        assert_eq!(config.source_filter.pgn_source_map.get(&129026), None);
+        assert_eq!(config.source_filter.pgn_source_map.get(&129029), None);
     }
 }
