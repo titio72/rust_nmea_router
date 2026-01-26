@@ -1,5 +1,24 @@
 use std::time::{SystemTime as StdSystemTime, UNIX_EPOCH};
 use nmea2k::pgns::NMEASystemTime;
+use nix::time::{ClockId, clock_settime};
+use nix::sys::time::TimeSpec;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeSyncStatus {
+    NotInitialized = 0,
+    TimeSkewDetected = 1,
+    Synchronized = 2,
+}
+
+impl std::fmt::Display for TimeSyncStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            TimeSyncStatus::NotInitialized => write!(f, "Not Initialized"),
+            TimeSyncStatus::TimeSkewDetected => write!(f, "Time Skew Detected"),
+            TimeSyncStatus::Synchronized => write!(f, "Synchronized"),
+        }
+    }
+}
 
 pub struct TimeMonitor {
     last_warning_time: Option<StdSystemTime>,
@@ -8,10 +27,11 @@ pub struct TimeMonitor {
     time_skew_threshold_ms: i64,
     last_measured_skew_ms: i64,
     is_initialized: bool,
+    set_system_time_enabled: bool,
 }
 
 impl TimeMonitor {
-    pub fn new(time_skew_threshold_ms: i64) -> Self {
+    pub fn new(time_skew_threshold_ms: i64, set_system_time_enabled: bool) -> Self {
         Self {
             last_warning_time: None,
             warning_cooldown_secs: 10, // Only warn once every 10 seconds
@@ -19,6 +39,7 @@ impl TimeMonitor {
             time_skew_threshold_ms,
             last_measured_skew_ms: 0,
             is_initialized: false,
+            set_system_time_enabled,
         }
     }
 
@@ -30,8 +51,14 @@ impl TimeMonitor {
         self.last_measured_skew_ms
     }
 
-    pub fn is_valid_and_synced(&self) -> bool {
-        self.is_initialized() && self.is_time_synchronized()
+    pub fn time_sync_status(&self) -> (TimeSyncStatus, i64) {
+        if !self.is_initialized() {
+            (TimeSyncStatus::NotInitialized, 0)
+        } else if self.is_time_synchronized() == false {
+            (TimeSyncStatus::TimeSkewDetected, self.last_measured_skew_ms)
+        } else {
+            (TimeSyncStatus::Synchronized, self.last_measured_skew_ms)
+        }
     }
 
     /// Process a system time message and check for time skew
@@ -70,6 +97,11 @@ impl TimeMonitor {
             if should_warn {
                 self.print_time_skew_warning(time_skew_ms, system_timestamp, nmea_time.date_time.to_unix_timestamp());
                 self.last_warning_time = Some(now);
+                
+                // Attempt to set system time if enabled
+                if self.set_system_time_enabled {
+                    self.set_system_time(nmea_time);
+                }
             }
         } else {
             self.has_time_skew = false;
@@ -84,9 +116,45 @@ impl TimeMonitor {
         !self.has_time_skew
     }
 
+    fn set_system_time(&self, nmea_time: &NMEASystemTime) {
+        let unix_timestamp = nmea_time.date_time.to_unix_timestamp();
+        let millis = nmea_time.date_time.milliseconds() as i64;
+        
+        let timespec = TimeSpec::new(unix_timestamp, millis * 1_000_000);
+        
+        match clock_settime(ClockId::CLOCK_REALTIME, timespec) {
+            Ok(_) => {
+                tracing::info!(
+                    "System time successfully set to NMEA time: {} (Unix timestamp)",
+                    unix_timestamp
+                );
+                println!("\n╔════════════════════════════════════════════════════════════╗");
+                println!("║  SYSTEM TIME UPDATED                                       ║");
+                println!("╠════════════════════════════════════════════════════════════╣");
+                println!("║  System time synchronized with NMEA2000 time source       ║");
+                println!("║  New timestamp: {} (Unix)                        ║", unix_timestamp);
+                println!("╚════════════════════════════════════════════════════════════╝\n");
+            }
+            Err(err) => {
+                tracing::error!(
+                    "Failed to set system time: {}. This typically requires root/sudo privileges.",
+                    err
+                );
+                println!("\n╔════════════════════════════════════════════════════════════╗");
+                println!("║  FAILED TO SET SYSTEM TIME                                 ║");
+                println!("╠════════════════════════════════════════════════════════════╣");
+                println!("║  Error: {}                                          ", err);
+                println!("║                                                            ║");
+                println!("║  This operation requires elevated privileges.              ║");
+                println!("║  Run with: sudo ./nmea_router                              ║");
+                println!("╚════════════════════════════════════════════════════════════╝\n");
+            }
+        }
+    }
+
     fn print_time_skew_warning(&self, skew_ms: i64, system_ts: i64, nmea_ts: i64) {
         println!("\n╔════════════════════════════════════════════════════════════╗");
-        println!("║  ⚠️  TIME SKEW WARNING                                     ║");
+        println!("║  WARNING: TIME SKEW DETECTED                               ║");
         println!("╠════════════════════════════════════════════════════════════╣");
         
         if skew_ms > 0 {
@@ -100,14 +168,20 @@ impl TimeMonitor {
         println!("║  NMEA2000 Time: {} (Unix timestamp)             ║", nmea_ts);
         println!("║                                                            ║");
         println!("║  Threshold: {} ms                                       ║", self.time_skew_threshold_ms);
-        println!("║  ⚠️  DATABASE WRITES DISABLED UNTIL TIME SYNC              ║");
+        
+        if self.set_system_time_enabled {
+            println!("║  Attempting to set system time...                          ║");
+        } else {
+            println!("║  WARNING: DATABASE WRITES DISABLED UNTIL TIME SYNC         ║");
+        }
+        
         println!("╚════════════════════════════════════════════════════════════╝\n");
     }
 }
 
 impl Default for TimeMonitor {
     fn default() -> Self {
-        Self::new(500)
+        Self::new(500, false)
     }
 }
 
@@ -136,20 +210,20 @@ mod tests {
 
     #[test]
     fn test_time_monitor_custom_threshold() {
-        let monitor = TimeMonitor::new(1000);
+        let monitor = TimeMonitor::new(1000, false);
         assert_eq!(monitor.time_skew_threshold_ms, 1000);
     }
 
     #[test]
     fn test_is_time_synchronized_initially() {
-        let monitor = TimeMonitor::new(500);
+        let monitor = TimeMonitor::new(500, false);
         assert!(monitor.is_time_synchronized());
     }
 
     #[test]
     fn test_time_skew_detection_within_threshold() {
         // Use a larger threshold to account for processing delays in tests
-        let mut monitor = TimeMonitor::new(2000);
+        let mut monitor = TimeMonitor::new(2000, false);
         
         // Create a system time close to current time (within threshold)
         let now = StdSystemTime::now();
@@ -178,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_time_skew_detection_beyond_threshold() {
-        let mut monitor = TimeMonitor::new(500);
+        let mut monitor = TimeMonitor::new(500, false);
         
         // Create a system time far in the past (definitely beyond threshold)
         let old_date = 10000; // Days since 1970 (way in the past)

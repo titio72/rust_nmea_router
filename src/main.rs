@@ -24,6 +24,8 @@ use frame_filter::should_process_frame_by_id;
 // Import from nmea2k crate
 use nmea2k::{CanBus, Identifier, MessageHandler, N2kStreamReader};
 
+use crate::time_monitor::TimeSyncStatus;
+
 // ========== Logging Setup ==========
 
 fn init_logging(log_config: &config::LogConfig) -> Result<(), Box<dyn Error>> {
@@ -160,7 +162,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut vessel_monitor = VesselMonitor::new(config.database.vessel_status.clone());
     
     // Create time monitor
-    let mut time_monitor = TimeMonitor::new(config.time.skew_threshold_ms);
+    let mut time_monitor = TimeMonitor::new(
+        config.time.skew_threshold_ms,
+        config.time.set_system_time
+    );
     
     // Create environmental monitor with config
     let mut env_monitor = EnvironmentalMonitor::new(config.database.environmental.clone());
@@ -201,8 +206,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                     if !should_process_frame(&config, &n2k_frame) {
                         continue;
                     }
+                    
                     time_monitor.handle_message(&n2k_frame.message);
-                    if time_monitor.is_valid_and_synced() {
+                    
+                    let (sync_status, skew_ms) = time_monitor.time_sync_status();
+                    metrics.gnss_time_skew = skew_ms;
+                    metrics.gnss_time_skew_status = sync_status;
+                    if sync_status == TimeSyncStatus::Synchronized {
                         vessel_monitor.handle_message(&n2k_frame.message);
                         if let Some(vessel_status) = vessel_monitor.generate_status() && vessel_status.is_valid() {
                             match vessel_status_handler.handle_vessel_status(&vessel_db, vessel_status.clone()) {

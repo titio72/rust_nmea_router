@@ -1,6 +1,8 @@
 use std::time::{Duration, Instant};
 use tracing::info;
 
+use crate::time_monitor::TimeSyncStatus;
+
 /// Application-level metrics for tracking CAN bus and NMEA2000 processing statistics
 /// (not to be confused with environmental metrics like wind, temperature, etc.)
 pub struct AppMetrics {
@@ -14,6 +16,8 @@ pub struct AppMetrics {
     pub env_reports: u64,
     /// Number of CAN bus errors encountered
     pub can_errors: u64,
+    pub gnss_time_skew: i64,
+    pub gnss_time_skew_status: TimeSyncStatus
 }
 
 impl AppMetrics {
@@ -25,6 +29,8 @@ impl AppMetrics {
             vessel_reports: 0,
             env_reports: 0,
             can_errors: 0,
+            gnss_time_skew: 0,
+            gnss_time_skew_status: TimeSyncStatus::NotInitialized,
         }
     }
     
@@ -35,17 +41,21 @@ impl AppMetrics {
         self.vessel_reports = 0;
         self.env_reports = 0;
         self.can_errors = 0;
+        self.gnss_time_skew = 0;
+        // Note: Do not reset gnss_time_skew_status
     }
     
     /// Log current metrics to the info log
     pub fn log(&self) {
         info!(
-            "[Metrics] CAN frames: {}, NMEA messages: {}, Vessel reports: {}, Env reports: {}, CAN errors: {}",
+            "[Metrics] CAN frames: {}, NMEA messages: {}, Vessel reports: {}, Env reports: {}, CAN errors: {}, GNSS time sync: {:?}/{} ms",
             self.can_frames,
             self.nmea_messages,
             self.vessel_reports,
             self.env_reports,
-            self.can_errors
+            self.can_errors,
+            self.gnss_time_skew_status,
+            self.gnss_time_skew
         );
     }
 }

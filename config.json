@@ -14,7 +14,8 @@
     "level": "debug"
   },
   "time": {
-    "skew_threshold_ms": 1000
+    "skew_threshold_ms": 1000,
+    "set_system_time": false
   },
   "database": {
     "connection": {

@@ -1156,6 +1156,7 @@ dependencies = [
  "chrono",
  "log",
  "mysql",
+ "nix",
  "nmea2000",
  "nmea2k",
  "serde",

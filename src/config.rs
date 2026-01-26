@@ -57,15 +57,92 @@ impl SourceFilterConfig {
     }
 }
 
+fn deserialize_bool_safe<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct BoolVisitor;
+
+    impl<'de> Visitor<'de> for BoolVisitor {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a boolean value (true/false), string (\"true\"/\"false\"), or number (1/0)")
+        }
+
+        fn visit_bool<E>(self, value: bool) -> Result<bool, E>
+        where
+            E: de::Error,
+        {
+            Ok(value)
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<bool, E>
+        where
+            E: de::Error,
+        {
+            match value.to_lowercase().as_str() {
+                "true" | "yes" | "1" | "on" | "enabled" => Ok(true),
+                "false" | "no" | "0" | "off" | "disabled" => Ok(false),
+                _ => {
+                    warn!("Invalid boolean value '{}', defaulting to false", value);
+                    Ok(false)
+                }
+            }
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<bool, E>
+        where
+            E: de::Error,
+        {
+            Ok(value != 0)
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<bool, E>
+        where
+            E: de::Error,
+        {
+            Ok(value != 0)
+        }
+
+        fn visit_none<E>(self) -> Result<bool, E>
+        where
+            E: de::Error,
+        {
+            Ok(false)
+        }
+
+        fn visit_unit<E>(self) -> Result<bool, E>
+        where
+            E: de::Error,
+        {
+            Ok(false)
+        }
+    }
+
+    deserializer.deserialize_any(BoolVisitor)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeConfig {
     pub skew_threshold_ms: i64,
+    /// Whether to attempt to set system time when NMEA time is available
+    /// This is useful on systems without NTP/time synchronization
+    /// Requires appropriate permissions (typically root/sudo)
+    /// Accepts: true/false, "true"/"false", 1/0, or various string representations
+    /// Defaults to false on any error or malformed value
+    #[serde(default, deserialize_with = "deserialize_bool_safe")]
+    pub set_system_time: bool,
 }
 
 impl Default for TimeConfig {
     fn default() -> Self {
         Self {
             skew_threshold_ms: 500,
+            set_system_time: false,
         }
     }
 }
@@ -676,5 +753,61 @@ mod tests {
         // Invalid sources (0, 255) should be removed
         assert_eq!(config.source_filter.pgn_source_map.get(&129026), None);
         assert_eq!(config.source_filter.pgn_source_map.get(&129029), None);
+    }
+
+    #[test]
+    fn test_set_system_time_safe_deserialization_bool() {
+        // Test normal boolean values
+        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": true}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.time.set_system_time, true);
+
+        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": false}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.time.set_system_time, false);
+    }
+
+    #[test]
+    fn test_set_system_time_safe_deserialization_string() {
+        // Test string values
+        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": "true"}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.time.set_system_time, true);
+
+        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": "yes"}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.time.set_system_time, true);
+
+        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": "no"}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.time.set_system_time, false);
+    }
+
+    #[test]
+    fn test_set_system_time_safe_deserialization_number() {
+        // Test number values
+        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": 1}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.time.set_system_time, true);
+
+        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": 0}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.time.set_system_time, false);
+    }
+
+    #[test]
+    fn test_set_system_time_safe_deserialization_malformed() {
+        // Test malformed values - should default to false
+        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": "invalid"}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.time.set_system_time, false);
+    }
+
+    #[test]
+    fn test_set_system_time_safe_deserialization_missing() {
+        // Test missing value - should default to false
+        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.time.set_system_time, false);
     }
 }

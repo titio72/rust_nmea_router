@@ -28,7 +28,7 @@ This is a new project spawned from https://github.com/titio72/nmearouter, mostly
 - **Automatic Reconnection**: Retries CAN interface connection every 10 seconds on failure
 - **JSON Configuration**: Externalized configuration for all runtime parameters
 - **Mooring Detection**: Automatically detects when vessel is moored based on position history
-- **Comprehensive Unit Tests**: 86 tests covering core functionality including configuration validation
+- **Comprehensive Unit Tests**: 73 tests covering core functionality including configuration validation and safe deserialization
 
 ## Requirements
 
@@ -124,6 +124,13 @@ Edit `config.json` to customize settings:
 
 #### Time Synchronization
 - `skew_threshold_ms`: Maximum allowed time difference between NMEA2000 and system time in milliseconds. Database writes are blocked when exceeded (default: 500ms, minimum: 100ms)
+- `set_system_time`: Enable automatic system time synchronization from NMEA2000 GPS time (default: false)
+  - **Important**: Requires root/sudo privileges to set system time
+  - Useful for systems without NTP or other time synchronization
+  - When enabled and time skew is detected, automatically sets system time to NMEA2000 time
+  - Recommended for embedded systems or vessels without internet connectivity
+  - **Safe parsing**: Accepts boolean (`true`/`false`), strings (`"true"`, `"yes"`, `"1"`, `"on"`, `"enabled"`, or their negatives), or numbers (`1`/`0`)
+  - **Error handling**: Any malformed or invalid value defaults to `false` (safe behavior)
 
 #### Database Connection
 - `host`: Database server hostname
@@ -392,8 +399,58 @@ To prevent incorrect timestamps in the database:
 1. **Time Skew Monitoring**: Compares NMEA2000 system time (PGN 126992) with server system time
 2. **Threshold Check**: If skew exceeds configured threshold (default 500ms), database writes are blocked
 3. **Warning Display**: Shows formatted warning with current skew and threshold
-4. **Cooldown**: Warnings are displayed every 10 seconds to avoid console spam
-5. **Automatic Recovery**: When time resynchronizes, database writes resume automatically
+4. **Automatic System Time Setting** (optional):
+   - Enable `set_system_time: true` in config to automatically sync system clock
+   - Requires root/sudo privileges: `sudo ./nmea_router`
+   - Ideal for embedded systems or vessels without NTP/internet connectivity
+   - When time skew is detected, sets system time to NMEA2000 GPS time
+   - Success/failure messages displayed with detailed information
+5. **Cooldown**: Warnings are displayed every 10 seconds to avoid console spam
+6. **Automatic Recovery**: When time resynchronizes, database writes resume automatically
+
+**Example Configuration**:
+```json
+{
+  "time": {
+    "skew_threshold_ms": 1000,
+    "set_system_time": true
+  }
+}
+```
+
+**Flexible Configuration Formats**:
+The `set_system_time` field accepts various formats for convenience:
+```json
+// Boolean values
+"set_system_time": true
+"set_system_time": false
+
+// String values (case-insensitive)
+"set_system_time": "true"
+"set_system_time": "yes"
+"set_system_time": "enabled"
+"set_system_time": "on"
+"set_system_time": "1"
+
+// Numeric values
+"set_system_time": 1    // treated as true
+"set_system_time": 0    // treated as false
+```
+
+**Error Handling**:
+- Invalid or malformed values default to `false` (safe behavior)
+- Missing field defaults to `false`
+- Application logs a warning for unrecognized values but continues to run
+
+**Running with System Time Setting**:
+```bash
+# Requires root privileges
+sudo ./target/release/nmea_router
+
+# Or use capabilities (Linux)
+sudo setcap 'cap_sys_time=ep' ./target/release/nmea_router
+./target/release/nmea_router
+```
 
 ### Adaptive Persistence
 
