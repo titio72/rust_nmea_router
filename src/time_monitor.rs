@@ -20,6 +20,21 @@ impl std::fmt::Display for TimeSyncStatus {
     }
 }
 
+pub struct TimeSyncStatusAndSkew {
+    pub status: TimeSyncStatus,
+    pub skew: i64,
+}
+
+impl std::fmt::Display for TimeSyncStatusAndSkew {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self.status {
+            TimeSyncStatus::NotInitialized => write!(f, "Not Initialized"),
+            TimeSyncStatus::TimeSkewDetected => write!(f, "Time Skew Detected ({} ms)", self.skew),
+            TimeSyncStatus::Synchronized => write!(f, "Synchronized ({} ms skew)", self.skew),
+        }
+    }
+}
+
 pub struct TimeMonitor {
     last_warning_time: Option<StdSystemTime>,
     warning_cooldown_secs: u64,
@@ -47,17 +62,22 @@ impl TimeMonitor {
         self.is_initialized
     }
 
-    pub fn last_measured_skew_ms(&self) -> i64 {
-        self.last_measured_skew_ms
-    }
-
-    pub fn time_sync_status(&self) -> (TimeSyncStatus, i64) {
+    pub fn time_sync_status(&self) -> TimeSyncStatusAndSkew {
         if !self.is_initialized() {
-            (TimeSyncStatus::NotInitialized, 0)
+            TimeSyncStatusAndSkew {
+                status: TimeSyncStatus::NotInitialized,
+                skew: 0,
+            }
         } else if self.is_time_synchronized() == false {
-            (TimeSyncStatus::TimeSkewDetected, self.last_measured_skew_ms)
+            TimeSyncStatusAndSkew {
+                status: TimeSyncStatus::TimeSkewDetected,
+                skew: self.last_measured_skew_ms,
+            }  
         } else {
-            (TimeSyncStatus::Synchronized, self.last_measured_skew_ms)
+            TimeSyncStatusAndSkew {
+                status: TimeSyncStatus::Synchronized,
+                skew: self.last_measured_skew_ms,
+            }
         }
     }
 

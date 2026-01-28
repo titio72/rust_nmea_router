@@ -13,6 +13,7 @@ This is a new project spawned from https://github.com/titio72/nmearouter, mostly
   - Attitude/Roll (127257)
   - Depth & Water Speed (128267, 128259)
   - System Time (126992)
+- **REST API**: JSON endpoints for trips, track data, and environmental time series
 - **Adaptive Database Persistence**:
   - Moored vessels: 30-minute intervals
   - Underway vessels: 30-second intervals
@@ -263,6 +264,148 @@ Heading: 243° (Magnetic) | ROT: 2.5°/s (right)
 -------------------
 ...
 ```
+
+## Web Interface
+
+The application includes a built-in web dashboard for visualizing trips, tracks, and environmental metrics.
+
+### Configuration
+
+Add web settings to your `config.json`:
+
+```json
+{
+  "web": {
+    "enabled": true,
+    "port": 8080
+  }
+}
+```
+
+- `enabled`: Enable or disable the web server (default: `true`)
+- `port`: HTTP port to listen on (default: `8080`)
+
+### Accessing the Dashboard
+
+Once the application is running, open your browser and navigate to:
+
+```
+http://localhost:8080
+```
+
+Or from another device on the same network:
+
+```
+http://<your-server-ip>:8080
+```
+
+### Features
+
+#### Trip Dashboard
+- **Trip List**: View all recorded trips with detailed statistics
+- **Filtering**: Filter trips by year or show last 12 months
+- **Trip Cards**: Each trip shows:
+  - Start/end dates and duration
+  - Total distance traveled
+  - Time distribution (sailing/motoring/moored) with visual progress bars
+  - Distance distribution (sailing vs motoring)
+  - Percentages for each activity type
+
+#### Summary Statistics
+- Total number of trips
+- Combined distance, time, and activity breakdowns
+- Real-time updates when new data is recorded
+
+#### REST API Endpoints
+
+The web interface exposes JSON endpoints for programmatic access:
+
+##### GET /api/trips
+List all trips with filtering options.
+
+Query parameters:
+- `year`: Filter by specific year (e.g., `?year=2024`)
+- `last_months`: Show trips from last N months (e.g., `?last_months=12`)
+
+Example response:
+```json
+{
+  "status": "ok",
+  "data": [
+    {
+      "id": 1,
+      "start_date": "2024-01-15 08:30:00",
+      "end_date": "2024-01-15 17:45:00",
+      "total_distance_nm": 25.3,
+      "total_time_ms": 33300000,
+      "sailing_time_ms": 20000000,
+      "motoring_time_ms": 10000000,
+      "moored_time_ms": 3300000,
+      "sailing_distance_nm": 18.5,
+      "motoring_distance_nm": 6.8
+    }
+  ]
+}
+```
+
+##### GET /api/track
+Retrieve vessel track data (GPS points).
+
+Query parameters:
+- `trip_id`: Get track for specific trip (e.g., `?trip_id=1`)
+- `start` & `end`: Get track for date range (e.g., `?start=2024-01-15&end=2024-01-16`)
+
+Example response:
+```json
+{
+  "status": "ok",
+  "data": [
+    {
+      "timestamp": "2024-01-15 08:30:00",
+      "latitude": 43.630127,
+      "longitude": 10.293377,
+      "avg_speed_ms": 2.5,
+      "max_speed_ms": 3.2,
+      "moored": false,
+      "engine_on": true
+    }
+  ]
+}
+```
+
+##### GET /api/metrics
+Retrieve environmental metric time series.
+
+Query parameters:
+- `metric`: Metric ID (required) - e.g., `wind_speed`, `cabin_temp`, `pressure`, `humidity`
+- `trip_id`: Filter by trip
+- `start` & `end`: Filter by date range
+
+Example response:
+```json
+{
+  "status": "ok",
+  "data": [
+    {
+      "timestamp": "2024-01-15 08:30:00",
+      "metric_id": "wind_speed",
+      "avg_value": 5.2,
+      "max_value": 7.8,
+      "min_value": 3.1,
+      "count": 120
+    }
+  ]
+}
+```
+
+### Future Enhancements
+
+Planned features for the web interface:
+- Interactive map with track visualization using Leaflet or similar
+- Real-time metric charts with Chart.js or similar
+- Trip comparison tools
+- Export functionality (CSV, GPX)
+- Mobile-responsive design improvements
 
 ### Database Resilience Features
 
@@ -540,7 +683,7 @@ CREATE TABLE environmental_data (
 - 2: Cabin Temperature (°C)
 - 3: Water Temperature (°C)
 - 4: Humidity (%)
-- 5: Wind Speed (m/s)
+- 5: Wind Speed (Nkots)
 - 6: Wind Direction (degrees)
 - 7: Roll Angle (degrees)
 

@@ -21,6 +21,17 @@ pub enum WindReference {
 }
 
 impl WindData {
+
+    pub fn new_apparent(speed: f64, angle: f64) -> Self {
+        Self {
+            pgn: 130306,
+            sid: 0,
+            speed,
+            angle,
+            reference: WindReference::Apparent,
+        }
+    }
+
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 6 {
             return None;
@@ -39,6 +50,10 @@ impl WindData {
                 _ => WindReference::Apparent,
             },
         })
+    }
+
+    pub fn speed_knots(&self) -> f64 {
+        self.speed * 1.94384
     }
 }
 

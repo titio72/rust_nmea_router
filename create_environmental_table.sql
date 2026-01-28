@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS environmental_data (
     value_avg FLOAT COMMENT 'Average value over the 1-minute interval',
     value_max FLOAT COMMENT 'Maximum value over the 1-minute interval',
     value_min FLOAT COMMENT 'Minimum value over the 1-minute interval',
-    unit CHAR(3) COMMENT 'Unit of measurement: Pa, C, %, m/s, deg',
+    unit CHAR(3) COMMENT 'Unit of measurement: Pa, C, %, Kn, deg',
     
     INDEX idx_timestamp (timestamp),
     INDEX idx_metric_timestamp (metric_id, timestamp),
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS environmental_data (
 -- 2 = 'cabin_temp'  - Cabin temperature in Celsius (°C)
 -- 3 = 'water_temp'  - Water temperature in Celsius (°C)
 -- 4 = 'humidity'    - Relative humidity in percent (%)
--- 5 = 'wind_speed'  - Wind speed in meters per second (m/s)
+-- 5 = 'wind_speed'  - Wind speed in knots (kn)
 -- 6 = 'wind_dir'    - Wind direction in degrees (°)
 -- 7 = 'roll'        - Roll angle in degrees (°)
 
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS environmental_data (
 --     MAX(CASE WHEN metric_id = 2 THEN ROUND(value_avg, 1) END) as cabin_temp_c,
 --     MAX(CASE WHEN metric_id = 3 THEN ROUND(value_avg, 1) END) as water_temp_c,
 --     MAX(CASE WHEN metric_id = 4 THEN ROUND(value_avg, 1) END) as humidity_pct,
---     MAX(CASE WHEN metric_id = 5 THEN ROUND(value_avg * 1.94384, 1) END) as wind_speed_kt,
+--     MAX(CASE WHEN metric_id = 5 THEN ROUND(value_avg, 1) END) as wind_speed_kt,
 --     MAX(CASE WHEN metric_id = 6 THEN ROUND(value_avg, 0) END) as wind_dir_deg
 -- FROM environmental_data
 -- WHERE timestamp >= NOW() - INTERVAL 24 HOUR

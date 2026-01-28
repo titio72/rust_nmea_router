@@ -68,7 +68,7 @@ The `metric_id` field uses compact integer values for efficient storage and inde
 - `2` = cabin_temp - Cabin temperature (°C)
 - `3` = water_temp - Water temperature (°C)
 - `4` = humidity - Relative humidity (%)
-- `5` = wind_speed - Wind speed (m/s)
+- `5` = wind_speed - Wind speed (Kn)
 - `6` = wind_dir - Wind direction (degrees)
 - `7` = roll - Roll angle (degrees)
 
@@ -122,7 +122,7 @@ SELECT
     MAX(CASE WHEN metric_id = 2 THEN ROUND(value_avg, 1) END) as cabin_temp_c,
     MAX(CASE WHEN metric_id = 3 THEN ROUND(value_avg, 1) END) as water_temp_c,
     MAX(CASE WHEN metric_id = 4 THEN ROUND(value_avg, 1) END) as humidity_pct,
-    MAX(CASE WHEN metric_id = 5 THEN ROUND(value_avg * 1.94384, 1) END) as wind_speed_kt,
+    MAX(CASE WHEN metric_id = 5 THEN ROUND(value_avg, 1) END) as wind_speed_kt,
     MAX(CASE WHEN metric_id = 6 THEN ROUND(value_avg, 0) END) as wind_dir_deg
 FROM environmental_data
 WHERE timestamp >= NOW() - INTERVAL 24 HOUR
@@ -160,8 +160,8 @@ GROUP BY DATE(timestamp);
 ### Wind statistics for the last hour
 ```sql
 SELECT 
-    ROUND(AVG(value_avg) * 1.94384, 1) as avg_wind_kt,
-    ROUND(MAX(value_max) * 1.94384, 1) as max_gust_kt
+    ROUND(AVG(value_avg), 1) as avg_wind_kt,
+    ROUND(MAX(value_max), 1) as max_gust_kt
 FROM environmental_data
 WHERE metric_id = 5  -- wind_speed
   AND timestamp >= NOW() - INTERVAL 1 HOUR;

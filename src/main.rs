@@ -11,6 +11,9 @@ mod vessel_status_handler;
 mod environmental_status_handler;
 mod app_metrics;
 mod frame_filter;
+mod web;
+mod udp_broadcaster;
+pub mod utilities;
 
 use vessel_monitor::VesselMonitor;
 use time_monitor::TimeMonitor;
@@ -20,6 +23,7 @@ use config::Config;
 use app_metrics::{AppMetrics, MetricsLogger};
 use frame_filter::should_process_frame;
 use frame_filter::should_process_frame_by_id;
+use udp_broadcaster::UdpBroadcaster;
 
 // Import from nmea2k crate
 use nmea2k::{CanBus, Identifier, MessageHandler, N2kStreamReader};
@@ -176,9 +180,43 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Create environmental status handler
     let mut environmental_status_handler = environmental_status_handler::EnvironmentalStatusHandler::new(env_monitor.db_periods());
     
+    // Create UDP broadcaster with config
+    let mut udp_broadcaster = UdpBroadcaster::new(
+        config.udp.address.clone(),
+        config.udp.enabled
+    );
+    
+    if config.udp.enabled {
+        info!("UDP broadcaster enabled: {}", config.udp.address);
+    }
+    
     // Load the last trip from database if available
     if let Some(ref db) = vessel_db {
         vessel_status_handler.load_last_trip(db);
+    }
+
+    // Start web server if enabled and database is available
+    if config.web.enabled {
+        if let Some(ref db) = vessel_db {
+            let db_arc = std::sync::Arc::new(db.clone());
+            let web_port = config.web.port;
+            
+            // Spawn web server in a separate thread
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                rt.block_on(async {
+                    if let Err(e) = web::start_web_server(db_arc, web_port).await {
+                        warn!("Web server error: {}", e);
+                    }
+                });
+            });
+            
+            info!("Web server started on port {}", config.web.port);
+        } else {
+            warn!("Web server disabled - database connection unavailable");
+        }
+    } else {
+        info!("Web server disabled in configuration");
     }
 
     // Application metrics tracking
@@ -209,10 +247,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                     
                     time_monitor.handle_message(&n2k_frame.message);
                     
-                    let (sync_status, skew_ms) = time_monitor.time_sync_status();
-                    metrics.gnss_time_skew = skew_ms;
-                    metrics.gnss_time_skew_status = sync_status;
-                    if sync_status == TimeSyncStatus::Synchronized {
+                    // Broadcast message via UDP (if enabled)
+                    udp_broadcaster.handle_message_with_metadata(
+                        &n2k_frame.message,
+                        n2k_frame.identifier.source(),
+                        n2k_frame.identifier.priority()
+                    );
+                    
+                    let sync_status_and_skew = time_monitor.time_sync_status();
+                    metrics.gnss_time_skew = sync_status_and_skew.skew;
+                    metrics.gnss_time_skew_status = sync_status_and_skew.status;
+                    if sync_status_and_skew.status == TimeSyncStatus::Synchronized {
                         vessel_monitor.handle_message(&n2k_frame.message);
                         if let Some(vessel_status) = vessel_monitor.generate_status() && vessel_status.is_valid() {
                             match vessel_status_handler.handle_vessel_status(&vessel_db, vessel_status.clone()) {
@@ -232,7 +277,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                         }
                     } else {
-                        warn!("Skipping message processing - time not synchronized - skew {} ms", time_monitor.last_measured_skew_ms());
+                        warn!("Skipping message processing - time not synchronized - skew {}", sync_status_and_skew);
                     }
                 }
             }

@@ -13,6 +13,64 @@ pub struct Config {
     pub source_filter: SourceFilterConfig,
     #[serde(default)]
     pub logging: LogConfig,
+    #[serde(default)]
+    pub web: WebConfig,
+    #[serde(default)]
+    pub udp: UdpConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebConfig {
+    /// Enable or disable the web interface
+    #[serde(default = "default_web_enabled")]
+    pub enabled: bool,
+    /// Port for the web server to listen on
+    #[serde(default = "default_web_port")]
+    pub port: u16,
+}
+
+fn default_web_enabled() -> bool {
+    true
+}
+
+fn default_web_port() -> u16 {
+    8080
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            port: 8080,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UdpConfig {
+    /// Enable or disable UDP broadcasting
+    #[serde(default = "default_udp_enabled")]
+    pub enabled: bool,
+    /// UDP destination address (e.g., "192.168.1.255:10110" or "224.0.0.1:10110" for multicast)
+    #[serde(default = "default_udp_address")]
+    pub address: String,
+}
+
+fn default_udp_enabled() -> bool {
+    false
+}
+
+fn default_udp_address() -> String {
+    "192.168.1.255:10110".to_string()
+}
+
+impl Default for UdpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            address: "192.168.1.255:10110".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -355,6 +413,8 @@ impl Config {
             },
             source_filter: SourceFilterConfig::default(),
             logging: LogConfig::default(),
+            web: WebConfig::default(),
+            udp: UdpConfig::default(),
         }
     }
 }

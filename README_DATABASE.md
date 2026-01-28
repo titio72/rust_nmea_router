@@ -115,8 +115,10 @@ Every 30 seconds, the following vessel status data is written to the database:
 | `timestamp` | DATETIME(3) | Report generation time (millisecond precision) |
 | `latitude` | DOUBLE | Vessel latitude in decimal degrees (NULL if no fix) |
 | `longitude` | DOUBLE | Vessel longitude in decimal degrees (NULL if no fix) |
-| `average_speed_ms` | DOUBLE | Average speed over last 30 seconds (m/s) |
-| `max_speed_ms` | DOUBLE | Maximum speed over last 30 seconds (m/s) |
+| `average_speed_kn` | DOUBLE | Average speed over last 30 seconds (Kn) |
+| `max_speed_kn` | DOUBLE | Maximum speed over last 30 seconds (Kn) |
+| `average_wind_speed_kn` | Average wind speed over reporting period in knots (NULL if no wind data) |
+| `average_wind_angle_deg` | Average wind direction over reporting period in degrees (NULL if no wind data) |
 | `is_moored` | BOOLEAN | TRUE if moored (stable position for 2+ min) |
 | `engine_on` | BOOLEAN | TRUE if engine is running |
 | `total_distance_m` | DOUBLE | Distance traveled since last report (meters) |
@@ -131,7 +133,7 @@ Environmental data is collected and persisted on a metric-by-metric basis with c
 - **Cabin Temperature** (metric_id=2): Inside cabin temperature in Celsius (°C)
 - **Water Temperature** (metric_id=3): Sea water temperature in Celsius (°C)
 - **Humidity** (metric_id=4): Relative humidity in percent (%)
-- **Wind Speed** (metric_id=5): Wind speed in meters per second (m/s)
+- **Wind Speed** (metric_id=5): Wind speed in Knots (Kn)
 - **Wind Direction** (metric_id=6): Wind direction in degrees (°)
 - **Roll** (metric_id=7): Vessel roll angle in degrees (°)
 
@@ -189,8 +191,8 @@ CREATE TABLE trips (
 SELECT 
     timestamp,
     CONCAT(latitude, '° N, ', longitude, '° E') as position,
-    ROUND(average_speed_ms * 1.94384, 2) as avg_speed_knots,
-    ROUND(max_speed_ms * 1.94384, 2) as max_speed_knots,
+    ROUND(average_speed_kn, 2) as avg_speed_knots,
+    ROUND(max_speed_kn, 2) as max_speed_knots,
     ROUND(total_distance_nm, 3) as distance_nm,
     IF(engine_on, '🟢 ON', '⚫ OFF') as engine,
     IF(is_moored, '⚓ MOORED', '⛵ UNDERWAY') as status
@@ -203,7 +205,7 @@ LIMIT 1;
 
 ```sql
 SELECT 
-    ROUND(AVG(average_speed_ms) * 1.94384, 2) as avg_speed_knots
+    ROUND(AVG(average_speed_kn), 2) as avg_speed_knots
 FROM vessel_status 
 WHERE timestamp > NOW() - INTERVAL 1 HOUR;
 ```
@@ -249,8 +251,8 @@ ORDER BY start_timestamp DESC;
 
 ```sql
 SELECT 
-    ROUND(AVG(average_speed_ms) * 1.94384, 2) as avg_speed_knots,
-    ROUND(MAX(max_speed_ms) * 1.94384, 2) as max_speed_knots
+    ROUND(AVG(average_speed_kn), 2) as avg_speed_knots,
+    ROUND(MAX(max_speed_kn), 2) as max_speed_knots
 FROM vessel_status 
 WHERE timestamp >= NOW() - INTERVAL 1 HOUR;
 ```
@@ -280,8 +282,8 @@ SELECT
     timestamp,
     latitude,
     longitude,
-    ROUND(average_speed_ms * 1.94384, 2) as speed_knots,
-    ROUND(total_distance_m, 1) as distance_m,
+    ROUND(average_speed_kn, 2) as speed_knots,
+    ROUND(total_distance_nm, 1) as distance_nm,
     engine_on,
     is_moored
 FROM vessel_status
@@ -300,7 +302,7 @@ SELECT
     MAX(CASE WHEN metric_id = 2 THEN ROUND(value_avg, 1) END) as cabin_temp_c,
     MAX(CASE WHEN metric_id = 3 THEN ROUND(value_avg, 1) END) as water_temp_c,
     MAX(CASE WHEN metric_id = 4 THEN ROUND(value_avg, 1) END) as humidity_pct,
-    MAX(CASE WHEN metric_id = 5 THEN ROUND(value_avg * 1.94384, 1) END) as wind_speed_kt,
+    MAX(CASE WHEN metric_id = 5 THEN ROUND(value_avg, 1) END) as wind_speed_kt,
     MAX(CASE WHEN metric_id = 6 THEN ROUND(value_avg, 0) END) as wind_dir_deg,
     MAX(CASE WHEN metric_id = 7 THEN ROUND(value_avg, 1) END) as roll_deg
 FROM environmental_data
@@ -328,8 +330,8 @@ ORDER BY timestamp ASC;
 
 ```sql
 SELECT 
-    AVG(CASE WHEN metric_id = 5 THEN value_avg * 1.94384 END) as avg_wind_kt,
-    MAX(CASE WHEN metric_id = 5 THEN value_max * 1.94384 END) as max_gust_kt,
+    AVG(CASE WHEN metric_id = 5 THEN value_avg END) as avg_wind_kt,
+    MAX(CASE WHEN metric_id = 5 THEN value_max END) as max_gust_kt,
     AVG(CASE WHEN metric_id = 6 THEN value_avg END) as avg_direction_deg
 FROM environmental_data
 WHERE metric_id IN (5, 6)  -- Wind speed and direction

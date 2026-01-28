@@ -26,3 +26,5 @@ pub use pgn130306::WindData;
 pub use pgn130312::Temperature;
 pub use pgn130313::Humidity;
 pub use pgn130314::ActualPressure;
+pub use pgn127250::VesselHeading;
+pub use pgn127250::HeadingReference;

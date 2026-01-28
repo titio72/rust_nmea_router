@@ -24,6 +24,14 @@ impl CogSogRapidUpdate {
             sog: u16::from_le_bytes([data[4], data[5]]) as f64 * 0.01,
         })
     }
+
+    pub fn sog_knots(&self) -> f64 {
+        self.sog * 1.94384
+    }
+
+    pub fn cog_degrees(&self) -> f64 {
+        self.cog.to_degrees()
+    }
 }
 
 impl fmt::Display for CogSogRapidUpdate {

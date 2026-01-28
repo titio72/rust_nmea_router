@@ -20,6 +20,10 @@ impl SpeedWaterReferenced {
             speed: u16::from_le_bytes([data[1], data[2]]) as f64 * 0.01,
         })
     }
+
+    pub fn speed_knots(&self) -> f64 {
+        self.speed * 1.94384
+    }
 }
 
 impl fmt::Display for SpeedWaterReferenced {

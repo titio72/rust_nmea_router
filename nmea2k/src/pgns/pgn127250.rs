@@ -12,7 +12,7 @@ pub struct VesselHeading {
     pub reference: HeadingReference,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeadingReference {
     True,
     Magnetic,

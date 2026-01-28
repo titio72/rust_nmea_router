@@ -42,21 +42,21 @@ impl VesselStatusHandler {
         status: VesselStatus,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let effective_position = status.get_effective_position();
-        debug!("Vessel Status: latitude={:.6}, longitude={:.6}, m/s, max_speed={:.2} m/s, moored={}", 
+        debug!("Vessel Status: latitude={:.6}, longitude={:.6}, max_speed={:.2}, avg_wind={:.2?}, avg_wind_direction={:.2?} knots, moored={}", 
             effective_position.latitude,
             effective_position.longitude,
-            status.max_speed, status.is_moored);
+            status.max_speed_kn, status.wind_speed_kn, status.wind_angle_deg, status.is_moored);
     
         // Write to database if connected, time to persist, and time is synchronized
-        if let Some(ref db) = *vessel_db && self.state.should_persist_to_db(status.is_moored) {
+        if let Some(ref db) = *vessel_db && status.is_valid() && self.state.should_persist_to_db(status.is_moored) {
             let position = status.get_effective_position();
             let latitude = position.latitude;
             let longitude = position.longitude;
             let (total_distance_nm, total_time_ms) = status.get_total_distance_and_time_from_last_report(&mut self.state.last_vessel_status);
             let time: Instant = status.timestamp;
-            let average_speed = if total_time_ms > 0 { total_distance_nm / (total_time_ms as f64 / 1000.0) } else { 0.0 };
-            let max_speed = if self.state.last_reported_max_speed > status.max_speed { self.state.last_reported_max_speed } else { status.max_speed };
-            self.state.last_reported_max_speed = max_speed;
+            let average_speed_kn = if total_time_ms > 0 { total_distance_nm / (total_time_ms as f64 / 3600000.0) } else { 0.0 };
+            let max_speed_kn = if self.state.last_reported_max_speed > status.max_speed_kn { self.state.last_reported_max_speed } else { status.max_speed_kn };
+            self.state.last_reported_max_speed = max_speed_kn;
 
             // Determine trip operation (create, update, or none)
             let trip_operation = Self::determine_trip_operation(&mut self.state.current_trip, &status, total_distance_nm, total_time_ms);
@@ -66,19 +66,23 @@ impl VesselStatusHandler {
                 time,
                 latitude,
                 longitude,
-                average_speed,
-                max_speed,
+                average_speed_kn: average_speed_kn,
+                max_speed_kn: max_speed_kn,
                 is_moored: status.is_moored,
                 engine_on: status.engine_on,
                 total_distance_nm,
                 total_time_ms,
+                average_wind_speed_kn: status.wind_speed_kn,
+                wind_speed_variance: status.wind_speed_variance,
+                average_wind_angle_deg: status.wind_angle_deg,
+                wind_angle_variance: status.wind_angle_variance,
             };
             
             // Perform atomic insert of vessel status and trip operation
             match db.insert_status_and_trip(status_operation, trip_operation) {
                 Ok(new_trip_id) => {
-                    debug!("Vessel status written to database: lat={:.6}, lon={:.6}, avg_speed={:.2} m/s, distance={:.3} nm, time={} ms, moored={}", 
-                        position.latitude, position.longitude, average_speed, total_distance_nm, total_time_ms, status.is_moored);
+                    debug!("Vessel status written to database: lat={:.6}, lon={:.6}, avg_speed={:.2} knots, distance={:.3} nm, time={} ms, moored={}", 
+                        position.latitude, position.longitude, average_speed_kn, total_distance_nm, total_time_ms, status.is_moored);
                     self.state.mark_db_persisted();
                     self.state.last_vessel_status = Some(status.clone());
                     self.state.last_reported_max_speed = 0.0;
