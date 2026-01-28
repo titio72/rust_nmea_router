@@ -13,6 +13,22 @@ pub struct Temperature {
 }
 
 impl Temperature {
+    // Constructor
+    // instance: sensor instance
+    // source: sensor source
+    // temperature: Kelvin
+    // set_temperature: Kelvin (optional)
+    pub fn new(instance: u8, source: u8, temperature: f64, set_temperature: Option<f64>) -> Self {
+        Self {
+            pgn: 130312,
+            sid: 0,
+            instance,
+            source,
+            temperature,
+            set_temperature,
+        }
+    }
+
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 6 {
             return None;

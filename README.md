@@ -1,8 +1,9 @@
 # NMEA2000 Router
 
-A robust Rust application for monitoring NMEA2000 marine data networks, with intelligent database persistence and automatic time synchronization.
-This is a new project spawned from https://github.com/titio72/nmearouter, mostly to learn rust and get familiar with my friend Claude.
-Thanks to See https://github.com/canboat/canboat for the exhaustive reverse engineering work of the NMEA2000 specs.
+
+A robust Rust application for monitoring NMEA2000 marine data networks, with intelligent database persistence, automatic time synchronization, and advanced wind data/statistics handling.
+
+This project is a learning and production-grade effort, inspired by https://github.com/titio72/nmearouter and leveraging the excellent reverse engineering work at https://github.com/canboat/canboat.
 
 ## Features
 
@@ -30,7 +31,8 @@ Thanks to See https://github.com/canboat/canboat for the exhaustive reverse engi
 - **Automatic Reconnection**: Retries CAN interface connection every 10 seconds on failure
 - **JSON Configuration**: Externalized configuration for all runtime parameters
 - **Mooring Detection**: Automatically detects when vessel is moored based on position history
-- **Comprehensive Unit Tests**: 73 tests covering core functionality including configuration validation and safe deserialization
+- **Comprehensive Unit Tests**: 80+ tests covering core functionality, wind calculations, configuration validation, and safe deserialization
+- **Advanced Wind Data Handling**: Calculates and persists true wind speed/angle, with robust rolling window averaging and test coverage
 
 ## Requirements
 
@@ -48,9 +50,10 @@ cd rust_nmea_router
 cargo build --release
 ```
 
+
 ### 2. Set Up Database
 
-See [Database Setup Guide](README_DATABASE.md) for detailed instructions.
+See [README_DATABASE.md](README_DATABASE.md) for detailed instructions and schema explanations.
 
 Quick setup:
 
@@ -62,7 +65,6 @@ sudo mysql -e "GRANT ALL PRIVILEGES ON nmea_router.* TO 'nmea'@'localhost';"
 
 # Load schema
 mysql -u nmea -pnmea nmea_router < schema.sql
-mysql -u nmea -pnmea nmea_router < create_environmental_table.sql
 ```
 
 ### 3. Configure CAN Interface
@@ -684,7 +686,7 @@ CREATE TABLE environmental_data (
 - 2: Cabin Temperature (°C)
 - 3: Water Temperature (°C)
 - 4: Humidity (%)
-- 5: Wind Speed (Nkots)
+- 5: Wind Speed (knots)
 - 6: Wind Direction (degrees)
 - 7: Roll Angle (degrees)
 
@@ -760,7 +762,8 @@ Warning: wind_speed_seconds (10) is outside valid range (30-600), using default:
 - Verify system time is correct
 - Adjust `skew_threshold_ms` in config if needed
 
-## Development
+
+## Development & Testing
 
 ### Running Tests
 
@@ -774,6 +777,7 @@ cargo test -- --nocapture
 # Specific module
 cargo test config::tests
 cargo test vessel_monitor::tests
+cargo test utilities::tests  # wind calculation and angle math
 ```
 
 ### Code Structure
@@ -804,14 +808,15 @@ src/
     └── pgn130314.rs          # Actual Pressure
 ```
 
+
 ## License
 
-[Add your license here]
+MIT or Apache-2.0 (choose one and update as appropriate)
 
 ## Contributing
 
-[Add contributing guidelines here]
+Pull requests and issues welcome! See CONTRIBUTING.md for guidelines.
 
 ## Authors
 
-[Add author information here]
+See AUTHORS.md or repository contributors.

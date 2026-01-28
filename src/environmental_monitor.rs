@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use nmea2k::pgns::{ActualPressure, Attitude, Humidity, Temperature, VesselHeading, WindData};
-use crate::config::EnvironmentalConfig;
 use crate::utilities::calculate_true_wind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -86,7 +85,6 @@ pub struct Sample<T> {
 }
 
 pub struct EnvironmentalMonitor {
-    db_periods: [Duration; 7],
     pub data_samples: [VecDeque<Sample<f64>>; 7],
     last_heading_event: Option<Instant>,
     last_heading_degrees: Option<f64>,
@@ -95,7 +93,7 @@ pub struct EnvironmentalMonitor {
 }
 
 impl EnvironmentalMonitor {
-    pub fn new(config: EnvironmentalConfig) -> Self {
+    pub fn new() -> Self {
         let res = Self {
             data_samples: [
                 VecDeque::new(), // Pressure    
@@ -105,15 +103,6 @@ impl EnvironmentalMonitor {
                 VecDeque::new(), // WindSpeed
                 VecDeque::new(), // WindDir
                 VecDeque::new(), // Roll
-            ],
-            db_periods: [
-                config.wind_speed_interval(),
-                config.wind_direction_interval(),
-                config.roll_interval(),
-                config.pressure_interval(),
-                config.cabin_temp_interval(),
-                config.water_temp_interval(),
-                config.humidity_interval(),
             ],
             last_heading_event: None,
             last_heading_degrees: None,
@@ -274,16 +263,11 @@ impl EnvironmentalMonitor {
     pub fn has_samples(&self, metric: MetricId) -> bool {
         !self.data_samples[metric.as_index()].is_empty()
     }
-    
-    /// Get the database persistence periods for all metrics
-    pub fn db_periods(&self) -> [Duration; 7] {
-        self.db_periods
-    }
 }
 
 impl Default for EnvironmentalMonitor {
     fn default() -> Self {
-        Self::new(crate::config::EnvironmentalConfig::default())
+        Self::new()
     }
 }
 
@@ -355,16 +339,14 @@ mod tests {
 
     #[test]
     fn test_environmental_monitor_creation() {
-        let config = EnvironmentalConfig::default();
-        let monitor = EnvironmentalMonitor::new(config);
+        let monitor = EnvironmentalMonitor::new();
         assert_eq!(monitor.data_samples[MetricId::Pressure.as_index()].len(), 0);
         assert_eq!(monitor.data_samples[MetricId::CabinTemp.as_index()].len(), 0);
     }
 
     #[test]
     fn test_process_pressure() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
+        let mut monitor = EnvironmentalMonitor::new();
         
         // Create pressure message using from_bytes: 101325 Pa (1 atm)
         let data = vec![
@@ -381,8 +363,7 @@ mod tests {
 
     #[test]
     fn test_process_temperature_cabin() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
+        let mut monitor = EnvironmentalMonitor::new();
         
         // Create temperature message: 20.5°C = 293.65 K
         // Source must be 4 (Inside Ambient) for cabin temp
@@ -401,8 +382,7 @@ mod tests {
 
     #[test]
     fn test_process_temperature_water() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
+        let mut monitor = EnvironmentalMonitor::new();
         
         // Create temperature message: 15.5°C = 288.65 K
         // Source must be 0 (Water) and instance=0 for water temp
@@ -421,8 +401,7 @@ mod tests {
 
     #[test]
     fn test_process_humidity() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
+        let mut monitor = EnvironmentalMonitor::new();
         
         // Create humidity message: 65.0%
         // Need at least 6 bytes for Humidity::from_bytes
@@ -441,8 +420,7 @@ mod tests {
 
     #[test]
     fn test_process_wind_but_no_boat_speed() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
+        let mut monitor = EnvironmentalMonitor::new();
         
         // Create wind message: 5.5 m/s, 180° (pi radians)
         let data = vec![
@@ -460,8 +438,7 @@ mod tests {
 
     #[test]
     fn test_process_wind_with_boat_speed_and_heading() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
+        let mut monitor = EnvironmentalMonitor::new();
         
         monitor.last_boat_speed_knots = Some(0.0); // Simulate boat speed available - boat is not moving
         monitor.last_boat_speed_event = Some(Instant::now());
@@ -485,8 +462,7 @@ mod tests {
 
     #[test]
     fn test_process_attitude_roll() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
+        let mut monitor = EnvironmentalMonitor::new();
         
         let attitude_msg = Attitude::from_bytes(&vec![
             0x01,

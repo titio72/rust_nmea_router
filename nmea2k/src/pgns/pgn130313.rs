@@ -13,6 +13,22 @@ pub struct Humidity {
 }
 
 impl Humidity {
+    // Constructor
+    // instance: sensor instance
+    // source: sensor source
+    // actual_humidity: percent (0-100%)
+    // set_humidity: percent (0-100%) (optional)
+    pub fn new(instance: u8, source: u8, actual_humidity: f64, set_humidity: Option<f64>) -> Self {
+        Self {
+            pgn: 130313,
+            sid: 0,
+            instance,
+            source,
+            actual_humidity,
+            set_humidity,
+        }
+    }
+
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 6 {
             return None;

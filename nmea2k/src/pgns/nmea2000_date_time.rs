@@ -1,4 +1,4 @@
-use chrono::DateTime;
+use chrono::{DateTime, Timelike};
 
 #[derive(Debug, Clone)]
 pub struct N2kDateTime {
@@ -11,7 +11,29 @@ impl N2kDateTime {
         Some(Self {
             date,
             time,
-        })    }
+        })    
+    }
+
+    pub fn from_date_time(date_time: &DateTime<chrono::Utc>) -> Self {
+        let epoch = DateTime::<chrono::Utc>::from_timestamp(0, 0);
+        let duration = date_time.signed_duration_since(epoch.unwrap());
+        let total_days = duration.num_days() as u16;
+        let seconds_since_midnight = (date_time.hour() * 3600 + date_time.minute() * 60 + date_time.second()) as f64
+            + (date_time.timestamp_subsec_micros() as f64) * 0.000001;
+        N2kDateTime {
+            date: total_days,
+            time: seconds_since_midnight,
+        }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        if data.len() < 6 {
+            return None;
+        }
+        let date = u16::from_le_bytes([data[0], data[1]]);
+        let time = u32::from_le_bytes([data[2], data[3], data[4], data[5]]) as f64;
+        Some(N2kDateTime { date, time })
+    }
 
     /// Convert NMEA2000 date/time to Unix timestamp (seconds since epoch)
     pub fn to_unix_timestamp(&self) -> i64 {

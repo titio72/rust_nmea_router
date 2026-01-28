@@ -11,6 +11,25 @@ pub struct EngineRapidUpdate {
 }
 
 impl EngineRapidUpdate {
+    // Constructor
+    // engine_instance: engine instance
+    // engine_speed: RPM (optional)
+    // engine_boost_pressure: Pa (optional)
+    // engine_tilt_trim: % (optional)
+    pub fn new(
+        engine_instance: u8,
+        engine_speed: Option<f64>,
+    ) -> Self {
+        Self {
+            pgn: 127488,
+            engine_instance,
+            engine_speed,
+            engine_boost_pressure: None,
+            engine_tilt_trim: None,
+        }
+    }
+
+
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 8 {
             return None;

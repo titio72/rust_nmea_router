@@ -172,13 +172,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     
     // Create environmental monitor with config
-    let mut env_monitor = EnvironmentalMonitor::new(config.database.environmental.clone());
+    let mut env_monitor = EnvironmentalMonitor::new();
     
     // Create vessel status handler
     let mut vessel_status_handler = vessel_status_handler::VesselStatusHandler::new(config.database.vessel_status.clone());
     
     // Create environmental status handler
-    let mut environmental_status_handler = environmental_status_handler::EnvironmentalStatusHandler::new(env_monitor.db_periods());
+    let mut environmental_status_handler = environmental_status_handler::EnvironmentalStatusHandler::new(&config.database.environmental);
     
     // Create UDP broadcaster with config
     let mut udp_broadcaster = UdpBroadcaster::new(

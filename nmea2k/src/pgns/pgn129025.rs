@@ -9,6 +9,14 @@ pub struct PositionRapidUpdate {
 }
 
 impl PositionRapidUpdate {
+    pub fn new(latitude: f64, longitude: f64) -> Self {
+        Self {
+            pgn: 129025,
+            latitude,
+            longitude,
+        }
+    }
+
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 8 {
             return None;
