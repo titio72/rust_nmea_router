@@ -6,6 +6,7 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
+use tracing::{info, error};
 use std::sync::Arc;
 
 use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData};
@@ -72,9 +73,13 @@ pub async fn get_trips(
     State(state): State<AppState>,
     Query(params): Query<TripsQuery>,
 ) -> Result<Json<ApiResponse<Vec<TripSummary>>>, StatusCode> {
+    info!(?params, "GET /api/trips called");
     match state.db.fetch_trips(params.year, params.last_months) {
         Ok(trips) => Ok(Json(ApiResponse::ok(trips))),
-        Err(e) => Ok(Json(ApiResponse::error(e.to_string()))),
+        Err(e) => {
+            error!(error = %e, "Failed to fetch trips");
+            Ok(Json(ApiResponse::error(e.to_string())))
+        }
     }
 }
 
@@ -82,15 +87,20 @@ pub async fn get_trip(
     State(state): State<AppState>,
     Query(params): Query<TripIdQuery>,
 ) -> Result<Json<ApiResponse<TripSummary>>, StatusCode> {
+    info!(?params, "GET /api/trip called");
     match state.db.fetch_trips(None, None) {
         Ok(trips) => {
             if let Some(trip) = trips.into_iter().find(|t| t.id == params.id) {
                 Ok(Json(ApiResponse::ok(trip)))
             } else {
+                error!(trip_id = params.id, "Trip not found");
                 Ok(Json(ApiResponse::error(format!("Trip {} not found", params.id))))
             }
         }
-        Err(e) => Ok(Json(ApiResponse::error(e.to_string()))),
+        Err(e) => {
+            error!(error = %e, "Failed to fetch trip");
+            Ok(Json(ApiResponse::error(e.to_string())))
+        }
     }
 }
 
@@ -98,13 +108,17 @@ pub async fn get_track(
     State(state): State<AppState>,
     Query(params): Query<TrackQuery>,
 ) -> Result<Json<ApiResponse<Vec<TrackPoint>>>, StatusCode> {
+    info!(?params, "GET /api/track called");
     match state.db.fetch_track(
         params.trip_id,
         params.start.as_deref(),
         params.end.as_deref(),
     ) {
         Ok(track) => Ok(Json(ApiResponse::ok(track))),
-        Err(e) => Ok(Json(ApiResponse::error(e.to_string()))),
+        Err(e) => {
+            error!(error = %e, "Failed to fetch track");
+            Ok(Json(ApiResponse::error(e.to_string())))
+        }
     }
 }
 
@@ -112,6 +126,7 @@ pub async fn get_metrics(
     State(state): State<AppState>,
     Query(params): Query<MetricsQuery>,
 ) -> Result<Json<ApiResponse<Vec<WebMetricData>>>, StatusCode> {
+    info!(?params, "GET /api/metrics called");
     match state.db.fetch_metrics(
         &params.metric,
         params.trip_id,
@@ -119,7 +134,10 @@ pub async fn get_metrics(
         params.end.as_deref(),
     ) {
         Ok(metrics) => Ok(Json(ApiResponse::ok(metrics))),
-        Err(e) => Ok(Json(ApiResponse::error(e.to_string()))),
+        Err(e) => {
+            error!(error = %e, "Failed to fetch metrics");
+            Ok(Json(ApiResponse::error(e.to_string())))
+        }
     }
 }
 

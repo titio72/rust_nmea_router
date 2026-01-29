@@ -43,7 +43,14 @@ impl VesselStatus {
     }
 
     pub fn get_total_distance_and_time_from_last_report(&self, _last_status: &mut Option<VesselStatus>) -> (f64, u64) {
-        (0.0, 0)
+        if let previous = Some(VesselStatus)
+        {
+            let distance_nm = previous.get_effective_position().distance_to_nm(&self.get_effective_position());
+            let time_secs = self.timestamp.duration_since(previous.timestamp).as_millis();
+            (distance_nm, time_secs)
+        }
+        else 
+            (0.0, 0)
     }
 }
 
@@ -94,6 +101,7 @@ pub struct VesselMonitor {
     winds: VecDeque<WindSample>,
     last_event_time: Instant,
     engine_on: bool,
+    rolling_median_position: Option<Position>,
 }
 
 impl VesselMonitor {
@@ -105,6 +113,7 @@ impl VesselMonitor {
             winds: VecDeque::new(),
             last_event_time: now,
             engine_on: false,
+            rolling_median_position: None,
         }
     }
     
