@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::Json,
     routing::get,
+    routing::post,
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,13 @@ pub struct TripIdQuery {
     pub id: u32,
 }
 
+// Query parameters
+#[derive(Debug, Deserialize)]
+pub struct TripDescriptionQuery {
+    pub id: u32,
+    pub description: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct TrackQuery {
     pub trip_id: Option<u32>,
@@ -68,7 +76,6 @@ pub struct TripsQuery {
     pub last_months: Option<u32>,
 }
 
-// API Handlers
 pub async fn get_trips(
     State(state): State<AppState>,
     Query(params): Query<TripsQuery>,
@@ -88,9 +95,9 @@ pub async fn get_trip(
     Query(params): Query<TripIdQuery>,
 ) -> Result<Json<ApiResponse<TripSummary>>, StatusCode> {
     info!(?params, "GET /api/trip called");
-    match state.db.fetch_trips(None, None) {
-        Ok(trips) => {
-            if let Some(trip) = trips.into_iter().find(|t| t.id == params.id) {
+    match state.db.fetch_trip(params.id) {
+        Ok(res_trip) => {
+            if let Some(trip) = res_trip {
                 Ok(Json(ApiResponse::ok(trip)))
             } else {
                 error!(trip_id = params.id, "Trip not found");
@@ -141,8 +148,25 @@ pub async fn get_metrics(
     }
 }
 
+pub async fn update_trip_description(
+    State(state): State<AppState>,
+    Json(params): Json<TripDescriptionQuery>,
+) -> Result<Json<ApiResponse<()>>, StatusCode> {
+
+    info!(?params, "POST /api/trip_description called");
+    
+    match state.db.update_trip_description(params.id as i64, &params.description) {
+        Ok(()) => Ok(Json(ApiResponse::ok(()))),
+        Err(e) => {
+            error!(error = %e, "Failed to update trip description");
+            Ok(Json(ApiResponse::error(e.to_string())))
+        }
+    }
+}
+
 pub fn create_api_router(state: AppState) -> Router {
     Router::new()
+        .route("/trip_description", post(update_trip_description))
         .route("/trips", get(get_trips))
         .route("/trip", get(get_trip))
         .route("/track", get(get_track))

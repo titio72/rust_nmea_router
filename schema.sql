@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS vessel_status (
     engine_on BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'TRUE if engine is running',
     total_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Distance traveled since last report in nautical miles (straight-line Haversine)',
     total_time_ms BIGINT NOT NULL DEFAULT 0 COMMENT 'Time elapsed since last report in milliseconds',
+    cog_deg DECIMAL(6,3) COMMENT 'Course over ground over reporting period in degrees (NULL if no position fix)',
+    average_heading_deg DECIMAL(6,3) COMMENT 'Average heading over reporting period in degrees (NULL if no heading data)',
     INDEX idx_timestamp (timestamp),
     INDEX idx_moored (is_moored, timestamp)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

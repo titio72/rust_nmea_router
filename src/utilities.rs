@@ -81,6 +81,32 @@ pub fn average_angle(angles_radians: &[f64]) -> f64 {
     (avg_radians.to_degrees() + 360.0) % 360.0
 }
 
+/// Calculate the initial heading (bearing) from position1 to position2 using the haversine formula.
+/// All lat/lon values are in degrees. Returns heading in degrees (0 = North, 90 = East).
+pub fn haversine_heading(lat1_deg: f64, lon1_deg: f64, lat2_deg: f64, lon2_deg: f64) -> f64 {
+    let lat1_rad = lat1_deg.to_radians();
+    let lat2_rad = lat2_deg.to_radians();
+    let dlon_rad = (lon2_deg - lon1_deg).to_radians();
+
+    let y = dlon_rad.sin() * lat2_rad.cos();
+    let x = lat1_rad.cos() * lat2_rad.sin() - lat1_rad.sin() * lat2_rad.cos() * dlon_rad.cos();
+    let initial_bearing = y.atan2(x).to_degrees();
+    (initial_bearing + 360.0) % 360.0
+}
+
+pub fn haversine_distance_nm(lat1_deg: f64, lon1_deg: f64, lat2_deg: f64, lon2_deg: f64) -> f64 {
+    let radius_earth_nm = 3440.065; // Earth's radius in nautical miles
+
+    let dlat_rad = (lat2_deg - lat1_deg).to_radians();
+    let dlon_rad = (lon2_deg - lon1_deg).to_radians();
+
+    let a = (dlat_rad / 2.0).sin().powi(2)
+        + lat1_deg.to_radians().cos() * lat2_deg.to_radians().cos() * (dlon_rad / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().asin();
+
+    radius_earth_nm * c
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

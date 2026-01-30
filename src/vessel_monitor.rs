@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
-use nmea2k::pgns::{PositionRapidUpdate, CogSogRapidUpdate};
+use nmea2k::pgns::{CogSogRapidUpdate, HeadingReference, PositionRapidUpdate};
 use crate::config::VesselStatusConfig;
-use crate::utilities::{angle_diff, average_angle, calculate_true_wind};
+use crate::utilities::{angle_diff, average_angle, calculate_true_wind, haversine_distance_nm};
 
 const EVENT_INTERVAL: Duration = Duration::from_secs(10);
 const MOORING_DETECTION_WINDOW: Duration = Duration::from_secs(120); // 2 minutes
@@ -25,6 +25,28 @@ pub struct VesselStatus {
     pub wind_angle_deg: Option<f64>,
     pub wind_angle_variance: Option<f64>,
     pub timestamp: Instant,
+    pub average_heading_deg: Option<f64>,
+}
+
+pub struct VesselVector {
+    #[allow(dead_code)]
+    pub position_1: Position,
+    #[allow(dead_code)]
+    pub position_2: Position,
+    pub delta_time_ms: u64,
+    pub distance_nm: f64,
+    pub course_deg: f64,
+}
+
+impl VesselVector {
+
+    pub fn average_speed_kn(&self) -> f64 {
+        if self.delta_time_ms > 0 {
+            self.distance_nm / (self.delta_time_ms as f64 / 3600000.0)
+        } else {
+            0.0
+        }
+    }  
 }
 
 impl VesselStatus {
@@ -41,15 +63,23 @@ impl VesselStatus {
         self.current_position
     }
 
-    pub fn get_total_distance_and_time_from_last_report(&self, last_status: &Option<VesselStatus>) -> (f64, u64) {
-        if let Some(previous) = last_status
-        {
-            let distance_nm = previous.get_effective_position().distance_to_nm(&self.get_effective_position());
+    pub fn get_vector_from(&self, last_status: &Option<VesselStatus>) -> Option<VesselVector> {
+        if let Some(previous) = last_status {
+            let position_1 = previous.get_effective_position();
+            let position_2 = self.get_effective_position();
+            let distance_nm = position_1.distance_to_nm(&position_2);
+            let course_from_deg = position_1.course_from_deg(&position_2);
             let time_msecs = self.timestamp.duration_since(previous.timestamp).as_millis() as u64;
-            (distance_nm, time_msecs)
+            Some(VesselVector {
+                position_1,
+                position_2,
+                delta_time_ms: time_msecs,
+                distance_nm,
+                course_deg: course_from_deg,
+            })
         }
         else {
-            (0.0, 0)
+            None
         }
     }
 }
@@ -57,16 +87,11 @@ impl VesselStatus {
 impl Position {
     /// Returns the distance to another position in nautical miles (using Haversine formula)
     pub fn distance_to_nm(&self, other: &Position) -> f64 {
-        let r = 6371.0; // Earth radius in km
-        let dlat = (other.latitude - self.latitude).to_radians();
-        let dlon = (other.longitude - self.longitude).to_radians();
-        let lat1 = self.latitude.to_radians();
-        let lat2 = other.latitude.to_radians();
-        let a = (dlat / 2.0).sin().powi(2)
-            + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
-        let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
-        let distance_km = r * c;
-        distance_km / 1.852 // convert km to nautical miles
+        haversine_distance_nm(self.latitude, self.longitude, other.latitude, other.longitude)
+    }
+
+    pub fn course_from_deg(&self, other: &Position) -> f64 {
+        crate::utilities::haversine_heading(self.latitude, self.longitude, other.latitude, other.longitude)
     }
 }
 
@@ -95,10 +120,19 @@ struct SpeedSample {
     timestamp: Instant,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct HeadingSample {
+    heading_deg: f64,
+    timestamp: Instant,
+}
+
+#[derive(Debug)]
+
 pub struct VesselMonitor {
     positions: VecDeque<PositionSample>,
     speeds: VecDeque<SpeedSample>,
     winds: VecDeque<WindSample>,
+    headings: VecDeque<HeadingSample>,
     last_event_time: Instant,
     engine_on: bool,
 }
@@ -110,6 +144,7 @@ impl VesselMonitor {
             positions: VecDeque::new(),
             speeds: VecDeque::new(),
             winds: VecDeque::new(),
+            headings: VecDeque::new(),
             last_event_time: now,
             engine_on: false,
         }
@@ -235,7 +270,6 @@ impl VesselMonitor {
                     timestamp: timestamp,
                 });
             }
-
         }
 
         // Clean up old wind samples (keep only last 10 minutes + buffer)
@@ -253,6 +287,27 @@ impl VesselMonitor {
     pub fn process_engine(&mut self, engine_msg: &nmea2k::pgns::EngineRapidUpdate, _timestamp: Instant) {
         self.engine_on = engine_msg.is_engine_running();
     }
+
+    pub fn process_heading(&mut self, heading_msg: &nmea2k::pgns::VesselHeading, timestamp: Instant) {
+        if heading_msg.reference == HeadingReference::Magnetic {
+            let _heading_deg = heading_msg.heading.to_degrees();
+            self.headings.push_back(HeadingSample {
+                heading_deg: _heading_deg,
+                timestamp: timestamp,
+            });
+        }
+
+        // Clean up old heading samples (keep only last 30s + buffer)
+        let cutoff = timestamp - EVENT_INTERVAL - Duration::from_secs(5);
+        while let Some(sample) = self.headings.front() {
+            if sample.timestamp < cutoff {
+                self.headings.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+
 
     /// Check if it's time to generate a status event
     pub fn should_generate_event(&self, now: Instant) -> bool {
@@ -272,6 +327,7 @@ impl VesselMonitor {
         let (_, _, max_speed_kn) = self.calculate_average_and_max_speed(EVENT_INTERVAL);
         let is_moored = self.is_vessel_moored();
         let (wind_speed_kn, wind_speed_variance, wind_angle_deg, wind_angle_variance_deg) = self.calculate_wind_statistics(&self.winds, EVENT_INTERVAL);
+        let average_heading = self.calculate_average_heading(EVENT_INTERVAL);
 
         // Use the timestamp of the last position in the buffer, or current time if no positions
         let timestamp = self.positions.back()
@@ -290,7 +346,24 @@ impl VesselMonitor {
             wind_speed_variance,
             wind_angle_deg,
             wind_angle_variance: wind_angle_variance_deg,
+            average_heading_deg: average_heading,
         })
+    }
+
+    fn calculate_average_heading(&self, window: Duration) -> Option<f64> {
+        let now = Instant::now();
+        let cutoff = now - window;
+
+        let relevant_headings: Vec<&HeadingSample> = self.headings.iter().rev()
+            .take_while(|h| h.timestamp >= cutoff)
+            .collect();
+
+        if relevant_headings.is_empty() {
+            return None;
+        }
+
+        let mean_heading: f64 = average_angle(&relevant_headings.iter().map(|h| h.heading_deg).collect::<Vec<f64>>());
+        Some(mean_heading)
     }
 
     fn calculate_wind_statistics(&self, winds: &VecDeque<WindSample>, window: Duration) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
@@ -402,6 +475,9 @@ impl nmea2k::MessageHandler for VesselMonitor {
             }
             nmea2k::pgns::N2kMessage::EngineRapidUpdate(engine) => {
                 self.process_engine(engine, timestamp);
+            }
+            nmea2k::pgns::N2kMessage::VesselHeading(heading) => {
+                self.process_heading(heading, timestamp);
             }
             _ => {} // Ignore messages we're not interested in
         }
