@@ -1,11 +1,11 @@
-use std::time::Instant;
+use std::{time::{SystemTime}};
 
 #[derive(Debug, Clone)]
 pub struct Trip {
     pub id: Option<i64>,
     pub description: String,
-    pub start_timestamp: Instant,
-    pub end_timestamp: Instant,
+    pub start_timestamp: SystemTime,
+    pub end_timestamp: SystemTime,
     pub total_distance_sailed: f64,  // nautical miles
     pub total_distance_motoring: f64, // nautical miles
     pub total_time_sailing: u64,     // milliseconds
@@ -15,7 +15,7 @@ pub struct Trip {
 
 impl Trip {
     /// Create a new trip with the given start time
-    pub fn new(start_timestamp: Instant, description: String) -> Self {
+    pub fn new(start_timestamp: SystemTime, description: String) -> Self {
         Self {
             id: None,
             description,
@@ -31,7 +31,7 @@ impl Trip {
     
     /// Update the trip with new vessel status data
     pub fn update(&mut self, 
-        end_timestamp: Instant,
+        end_timestamp: SystemTime,
         distance: f64, 
         time_ms: u64, 
         engine_on: bool, 
@@ -50,14 +50,17 @@ impl Trip {
     }
     
     /// Check if the trip is still active (end timestamp is within 24 hours of the given time)
-    pub fn is_active(&self, current_time: Instant) -> bool {
+    pub fn is_active(&self, current_time: SystemTime) -> bool {
         let duration = if current_time > self.end_timestamp {
             current_time.duration_since(self.end_timestamp)
         } else {
             self.end_timestamp.duration_since(current_time)
         };
         
-        duration.as_secs() <= 24 * 60 * 60 // 24 hours
+        match duration {
+            Err(_) => return false, // SystemTime error
+            Ok(d) => return d.as_secs() <= 24 * 60 * 60 // 24 hours
+        };
     }
     
     /// Get total distance (sailing + motoring)
@@ -78,7 +81,7 @@ mod tests {
 
     #[test]
     fn test_new_trip() {
-        let now = Instant::now();
+        let now = SystemTime::now();
         let trip = Trip::new(now, "Test Trip".to_string());
         
         assert_eq!(trip.description, "Test Trip");
@@ -91,7 +94,7 @@ mod tests {
 
     #[test]
     fn test_update_sailing() {
-        let now = Instant::now();
+        let now = SystemTime::now();
         let mut trip = Trip::new(now, "Test Trip".to_string());
         
         let later = now + Duration::from_secs(100);
@@ -106,7 +109,7 @@ mod tests {
 
     #[test]
     fn test_update_motoring() {
-        let now = Instant::now();
+        let now = SystemTime::now();
         let mut trip = Trip::new(now, "Test Trip".to_string());
         
         let later = now + Duration::from_secs(100);
@@ -121,7 +124,7 @@ mod tests {
 
     #[test]
     fn test_update_moored() {
-        let now = Instant::now();
+        let now = SystemTime::now();
         let mut trip = Trip::new(now, "Test Trip".to_string());
         
         let later = now + Duration::from_secs(100);
@@ -136,7 +139,7 @@ mod tests {
 
     #[test]
     fn test_is_active_within_24h() {
-        let now = Instant::now();
+        let now = SystemTime::now();
         let trip = Trip::new(now, "Test Trip".to_string());
         
         let later = now + Duration::from_secs(23 * 60 * 60); // 23 hours later
@@ -145,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_is_active_after_24h() {
-        let now = Instant::now();
+        let now = SystemTime::now();
         let trip = Trip::new(now, "Test Trip".to_string());
         
         let later = now + Duration::from_secs(25 * 60 * 60); // 25 hours later
@@ -154,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_total_distance() {
-        let now = Instant::now();
+        let now = SystemTime::now();
         let mut trip = Trip::new(now, "Test Trip".to_string());
         
         let later = now + Duration::from_secs(100);
@@ -166,7 +169,7 @@ mod tests {
 
     #[test]
     fn test_total_time() {
-        let now = Instant::now();
+        let now = SystemTime::now();
         let mut trip = Trip::new(now, "Test Trip".to_string());
         
         let later = now + Duration::from_secs(100);

@@ -10,13 +10,12 @@ const MOORING_THRESHOLD_METERS: f64 = 30.0; // 30 meters radius
 const MOORING_ACCURACY: f64 = 0.90; // 90% of positions within threshold
 const MAX_VALID_SOG_KN: f64 = 25.0; // 25 knots (noise filter)
 const MAX_POSITION_DEVIATION_METERS: f64 = 100.0; // Maximum distance from median (noise filter)
-const POSITION_VALIDATION_WINDOW: Duration = Duration::from_secs(10); // Time window for median calculation
 const MIN_SAMPLES_FOR_VALIDATION: usize = 10; // Minimum samples required for validation 
 
 #[derive(Debug, Clone)]
 pub struct VesselStatus {
     pub current_position: Position,
-    pub average_position: Option<Position>,
+    pub median_position: Option<Position>,
     pub number_of_samples: usize,
     pub max_speed_kn: f64,       // Knots
     pub is_moored: bool,
@@ -35,22 +34,23 @@ impl VesselStatus {
 
     pub fn get_effective_position(&self) -> Position {
         if self.is_moored {
-            if let Some(avg_pos) = self.average_position {
-                return avg_pos;
+            if let Some(median_pos) = self.median_position {
+                return median_pos;
             }
         }
         self.current_position
     }
 
-    pub fn get_total_distance_and_time_from_last_report(&self, _last_status: &mut Option<VesselStatus>) -> (f64, u64) {
-        if let previous = Some(VesselStatus)
+    pub fn get_total_distance_and_time_from_last_report(&self, last_status: &Option<VesselStatus>) -> (f64, u64) {
+        if let Some(previous) = last_status
         {
             let distance_nm = previous.get_effective_position().distance_to_nm(&self.get_effective_position());
-            let time_secs = self.timestamp.duration_since(previous.timestamp).as_millis();
-            (distance_nm, time_secs)
+            let time_msecs = self.timestamp.duration_since(previous.timestamp).as_millis() as u64;
+            (distance_nm, time_msecs)
         }
-        else 
+        else {
             (0.0, 0)
+        }
     }
 }
 
@@ -101,7 +101,6 @@ pub struct VesselMonitor {
     winds: VecDeque<WindSample>,
     last_event_time: Instant,
     engine_on: bool,
-    rolling_median_position: Option<Position>,
 }
 
 impl VesselMonitor {
@@ -113,145 +112,32 @@ impl VesselMonitor {
             winds: VecDeque::new(),
             last_event_time: now,
             engine_on: false,
-            rolling_median_position: None,
-        }
-    }
-    
-    fn process_wind(&mut self, wind_msg: &nmea2k::pgns::WindData) {
-                // For test diagnosis: print the decoded values
-                    // Removed print statement for wind_msg
-            // For test diagnosis: print the decoded values
-                // Removed print statement for wind_msg
-        let now = Instant::now();
-
-        let wind_speed_kn = wind_msg.speed_knots(); // knots
-        let wind_angle_deg = wind_msg.angle.to_degrees();
-        // verify if the speed sample is recent enough
-        let speed_sample = self.speeds.back();
-        if let Some(speed_sample) = speed_sample {
-            let speed_kn = speed_sample.speed_kn;
-            if speed_sample.timestamp + Duration::from_secs(5) < now {
-                // the speed sample is not recent enough - calculation of true wind not possible
-                return;
-            } else {
-                let (true_wind_speed_kn, true_wind_angle_deg) = calculate_true_wind(wind_speed_kn, wind_angle_deg, speed_kn);
-                self.winds.push_back(WindSample {
-                    wind_speed_kn: true_wind_speed_kn,
-                    wind_angle_deg: crate::utilities::normalize0_360(true_wind_angle_deg),
-                    timestamp: now,
-                });
-            }
-
-        }
-
-        // Clean up old wind samples (keep only last 10 minutes + buffer)
-        let cutoff = now - Duration::from_secs(600) - Duration::from_secs(30);
-        while let Some(sample) = self.winds.front() {
-            if sample.timestamp < cutoff {
-                self.winds.pop_front();
-            } else {
-                break;
-            }
         }
     }
 
-    /// Process a position rapid update message
-    pub fn process_position(&mut self, position_msg: &PositionRapidUpdate) {
-        let now = Instant::now();
-        let position = Position {
-            latitude: position_msg.latitude,
-            longitude: position_msg.longitude,
-        };
-
-        // Noise filter: Check distance from median of last samples
-        if !self.is_valid_position(&position) {
-            return; // Reject noisy position
-        }
-        self.positions.push_back(PositionSample {
-            position,
-            timestamp: now,
-        });
-
-        // Clean up old position samples (keep only last 2 minutes + 30s buffer)
-        let cutoff = now - MOORING_DETECTION_WINDOW - Duration::from_secs(30);
-        while let Some(sample) = self.positions.front() {
-            if sample.timestamp < cutoff {
-                self.positions.pop_front();
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Process a COG & SOG rapid update message
-    pub fn process_cog_sog(&mut self, cog_sog_msg: &CogSogRapidUpdate) {
-        let now = Instant::now();
-        let sog_kn = cog_sog_msg.sog_knots();
-        
-        // Noise filter: Reject unrealistic SOG values (> 25 knots)
-        if sog_kn > MAX_VALID_SOG_KN {
-            return; // Reject noisy speed reading
-        }
-
-        self.speeds.push_back(SpeedSample {
-            speed_kn: sog_kn,
-            timestamp: now,
-        });
-
-        // Clean up old speed samples (keep only last 30s + buffer)
-        let cutoff = now - EVENT_INTERVAL - Duration::from_secs(5);
-        while let Some(sample) = self.speeds.front() {
-            if sample.timestamp < cutoff {
-                self.speeds.pop_front();
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Process engine rapid update to determine engine status
-    pub fn process_engine(&mut self, engine_msg: &nmea2k::pgns::EngineRapidUpdate) {
-        self.engine_on = engine_msg.is_engine_running();
-    }
-
-    /// Validate position against median of recent samples (noise filter)
-    fn is_valid_position(&self, position: &Position) -> bool {
-        let now = Instant::now();
-        let cutoff = now - POSITION_VALIDATION_WINDOW;
-        
-        // Get samples from the last 10 seconds
+    /// Get rolling median position over a cutoff duration    
+    fn get_rolling_median_position(&self, cutoff: Duration, min_num_samples: usize, now: Instant) -> (usize, Option<Position>) {
         let recent_positions: Vec<&Position> = self.positions
             .iter()
             .rev()
-            .take_while(|s| s.timestamp >= cutoff)
+            .take_while(|s| s.timestamp >= now - cutoff)
             .map(|s| &s.position)
             .collect();
         
-        // If we don't have enough samples yet, accept to build up the buffer
-        if recent_positions.len() < MIN_SAMPLES_FOR_VALIDATION {
-            return true; // Accept during bootstrap phase
+        if recent_positions.is_empty() {
+            return (0, None);
         }
 
-        // Calculate median position
-        let median = self.calculate_median_position(&recent_positions);
-        
-        // Check distance from median
-        let distance = position.distance_to_nm(&median) * 1852.0; // Convert nm to meters
-        distance <= MAX_POSITION_DEVIATION_METERS
-    }
-
-    /// Calculate median position from a set of positions
-    fn calculate_median_position(&self, positions: &[&Position]) -> Position {
-        if positions.is_empty() {
-            return Position { latitude: 0.0, longitude: 0.0 };
-        }
-
-        let mut lats: Vec<f64> = positions.iter().map(|p| p.latitude).collect();
-        let mut lons: Vec<f64> = positions.iter().map(|p| p.longitude).collect();
+        let mut lats: Vec<f64> = recent_positions.iter().map(|p| p.latitude).collect();
+        let mut lons: Vec<f64> = recent_positions.iter().map(|p| p.longitude).collect();
         
         lats.sort_by(|a, b| a.partial_cmp(b).unwrap());
         lons.sort_by(|a, b| a.partial_cmp(b).unwrap());
         
+        if lats.len() < min_num_samples {
+            return (lats.len(), None);
+        }
+
         let mid = lats.len() / 2;
         let median_lat = if lats.len() % 2 == 0 {
             (lats[mid - 1] + lats[mid]) / 2.0
@@ -265,41 +151,138 @@ impl VesselMonitor {
             lons[mid]
         };
         
-        Position {
+        (lats.len(), Some(Position {
             latitude: median_lat,
             longitude: median_lon,
+        }))
+    }
+
+    /// Process a position rapid update message
+    pub fn process_position(&mut self, position_msg: &PositionRapidUpdate, timestamp: Instant) {
+        let position = Position {
+            latitude: position_msg.latitude,
+            longitude: position_msg.longitude,
+        };
+
+        let cutoff = EVENT_INTERVAL;
+        let median_position = self.get_rolling_median_position(cutoff, MIN_SAMPLES_FOR_VALIDATION, timestamp);
+
+        // if we have enough samples, validate against median and reject if too far
+        if let Some(median) = median_position.1 {
+            let distance = position.distance_to_nm(&median) * 1852.0; // Convert nm to meters
+            if distance > MAX_POSITION_DEVIATION_METERS {
+                return; // Reject noisy position
+            }
         }
+
+        self.positions.push_back(PositionSample {
+            position,
+            timestamp: timestamp,
+        });
+
+        // Clean up old position samples (keep only enuogh to calculate the mooring status + 30s buffer)
+        let cutoff = timestamp - MOORING_DETECTION_WINDOW - Duration::from_secs(30);
+        while let Some(sample) = self.positions.front() {
+            if sample.timestamp < cutoff {
+                self.positions.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Process a COG & SOG rapid update message
+    pub fn process_cog_sog(&mut self, cog_sog_msg: &CogSogRapidUpdate, timestamp: Instant) {
+        let sog_kn = cog_sog_msg.sog_knots();
+        
+        // Noise filter: Reject unrealistic SOG values (> 25 knots)
+        if sog_kn > MAX_VALID_SOG_KN {
+            return; // Reject noisy speed reading
+        }
+
+        self.speeds.push_back(SpeedSample {
+            speed_kn: sog_kn,
+            timestamp: timestamp,
+        });
+
+        // Clean up old speed samples (keep only last 30s + buffer)
+        let cutoff = timestamp - EVENT_INTERVAL - Duration::from_secs(5);
+        while let Some(sample) = self.speeds.front() {
+            if sample.timestamp < cutoff {
+                self.speeds.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Process a wind data message
+    fn process_wind(&mut self, wind_msg: &nmea2k::pgns::WindData, timestamp: Instant) {
+        let wind_speed_kn = wind_msg.speed_knots(); // knots
+        let wind_angle_deg = wind_msg.angle.to_degrees();
+        // verify if the speed sample is recent enough
+        let speed_sample = self.speeds.back();
+        if let Some(speed_sample) = speed_sample {
+            let speed_kn = speed_sample.speed_kn;
+            if speed_sample.timestamp + Duration::from_secs(5) < timestamp {
+                // the speed sample is not recent enough - calculation of true wind not possible
+                return;
+            } else {
+                let (true_wind_speed_kn, true_wind_angle_deg) = calculate_true_wind(wind_speed_kn, wind_angle_deg, speed_kn);
+                self.winds.push_back(WindSample {
+                    wind_speed_kn: true_wind_speed_kn,
+                    wind_angle_deg: crate::utilities::normalize0_360(true_wind_angle_deg),
+                    timestamp: timestamp,
+                });
+            }
+
+        }
+
+        // Clean up old wind samples (keep only last 10 minutes + buffer)
+        let cutoff = timestamp - Duration::from_secs(600) - Duration::from_secs(30);
+        while let Some(sample) = self.winds.front() {
+            if sample.timestamp < cutoff {
+                self.winds.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Process engine rapid update to determine engine status
+    pub fn process_engine(&mut self, engine_msg: &nmea2k::pgns::EngineRapidUpdate, _timestamp: Instant) {
+        self.engine_on = engine_msg.is_engine_running();
     }
 
     /// Check if it's time to generate a status event
-    pub fn should_generate_event(&self) -> bool {
-        Instant::now().duration_since(self.last_event_time) >= EVENT_INTERVAL
+    pub fn should_generate_event(&self, now: Instant) -> bool {
+        now.duration_since(self.last_event_time) >= EVENT_INTERVAL && self.positions.len() >= MIN_SAMPLES_FOR_VALIDATION
     }
 
     /// Generate a vessel status event
-    pub fn generate_status(&mut self) -> Option<VesselStatus> {
-        if !self.should_generate_event() || self.positions.is_empty() {
+    pub fn generate_status(&mut self, now: Instant) -> Option<VesselStatus> {
+        if !self.should_generate_event(now) {
             return None;
         }
 
+        self.last_event_time = now;
+
         let current_position = self.positions.back().unwrap().position;
-        let (sample_count, average_position) = self.calculate_average_position(EVENT_INTERVAL);
-        let (_, _, max_speed) = self.calculate_average_and_max_speed(EVENT_INTERVAL);
+        let (number_of_samples, median_position) = self.get_rolling_median_position(EVENT_INTERVAL, MIN_SAMPLES_FOR_VALIDATION, now);
+        let (_, _, max_speed_kn) = self.calculate_average_and_max_speed(EVENT_INTERVAL);
         let is_moored = self.is_vessel_moored();
         let (wind_speed_kn, wind_speed_variance, wind_angle_deg, wind_angle_variance_deg) = self.calculate_wind_statistics(&self.winds, EVENT_INTERVAL);
 
         // Use the timestamp of the last position in the buffer, or current time if no positions
         let timestamp = self.positions.back()
             .map(|sample| sample.timestamp)
-            .unwrap_or_else(|| Instant::now());
+            .unwrap_or(now);
         
-        self.last_event_time = Instant::now();
-
         Some(VesselStatus {
             current_position,
-            average_position,
-            number_of_samples: sample_count,
-            max_speed_kn: max_speed,
+            median_position,
+            number_of_samples,
+            max_speed_kn,
             is_moored,
             engine_on: self.engine_on,
             timestamp,
@@ -338,32 +321,6 @@ impl VesselMonitor {
 
         (Some(mean_speed), Some(variance_speed), Some(mean_angle), Some(variance_angle))
     }
-
-    fn calculate_average_position(&mut self, window: Duration) -> (usize, Option<Position>) {
-        let mut avg_latitude = 0.0;
-        let mut avg_longitude = 0.0;
-        let mut sample_count = 0;
-        
-        let iterator = self.positions.iter().rev();
-        for p in iterator {
-            if p.timestamp.duration_since(self.last_event_time) > window {
-                break; // go back until last event time, then stop
-            }
-            avg_latitude += p.position.latitude;
-            avg_longitude += p.position.longitude;
-            sample_count += 1;  
-        }
-    
-        let average_position = if sample_count > 0 {
-            Some(Position {
-                latitude: avg_latitude / sample_count as f64,
-                longitude: avg_longitude / sample_count as f64,
-            })
-        } else {
-            None
-        };
-        (sample_count, average_position)
-    }
     
     fn calculate_average_and_max_speed(&self, window: Duration) -> (usize, f64, f64) {
         let now = Instant::now();
@@ -391,6 +348,8 @@ impl VesselMonitor {
         (count, average_speed_kn, max_speed_kn)
     }
 
+    /// Determine if the vessel is moored based on position stability
+    /// Roughly, it checks if 90% of positions in the last 2 minutes are within 30 meters of the average position
     fn is_vessel_moored(&self) -> bool {
         if self.positions.len() < 2 {
             return false;
@@ -430,19 +389,19 @@ impl VesselMonitor {
 }
 
 impl nmea2k::MessageHandler for VesselMonitor {
-    fn handle_message(&mut self, message: &nmea2k::N2kMessage) {
-        match message {
+    fn handle_message(&mut self, frame: &nmea2k::N2kFrame, timestamp: std::time::Instant) {
+        match &frame.message {
             nmea2k::pgns::N2kMessage::WindData(wind) => {
-                self.process_wind(wind);
+                self.process_wind(wind, timestamp);
             }
             nmea2k::pgns::N2kMessage::PositionRapidUpdate(pos) => {
-                self.process_position(pos);
+                self.process_position(pos, timestamp);
             }
             nmea2k::pgns::N2kMessage::CogSogRapidUpdate(cog_sog) => {
-                self.process_cog_sog(cog_sog);
+                self.process_cog_sog(cog_sog, timestamp);
             }
             nmea2k::pgns::N2kMessage::EngineRapidUpdate(engine) => {
-                self.process_engine(engine);
+                self.process_engine(engine, timestamp);
             }
             _ => {} // Ignore messages we're not interested in
         }
@@ -459,7 +418,7 @@ impl Default for VesselMonitor {
 mod tests {
         use nmea2k::pgns::WindData;
 
-        fn make_speed_sample(monitor: &mut VesselMonitor, sog_kn: f64) {
+        fn make_speed_sample(monitor: &mut VesselMonitor, sog_kn: f64, now: std::time::Instant) {
             // Helper to inject a speed sample
             // SOG in knots, convert to m/s for the message (1 kn = 0.514444 m/s)
             let sog_ms = sog_kn * 0.514444;
@@ -469,17 +428,17 @@ mod tests {
             data[4] = (sog_cmps & 0xFF) as u8;
             data[5] = (sog_cmps >> 8) as u8;
             let cog_sog_msg = CogSogRapidUpdate::from_bytes(&data).unwrap();
-            monitor.process_cog_sog(&cog_sog_msg);
+            monitor.process_cog_sog(&cog_sog_msg, now);
         }
 
-        fn make_wind_sample(monitor: &mut VesselMonitor, speed_kn: f64, angle_deg: f64) {
+        fn make_wind_sample(monitor: &mut VesselMonitor, speed_kn: f64, angle_deg: f64, now: std::time::Instant) {
             // For test diagnosis: print the encoded and decoded values
             let speed_mps = speed_kn * 0.514444;
             let angle_rad = angle_deg.to_radians();
             println!("Encoding wind: {} kn ({:.3} m/s), angle {} deg ({:.3} rad)", speed_kn, speed_mps, angle_deg, angle_rad);
             let wind_msg = WindData::new_apparent(speed_mps, angle_rad);
             // Removed print statement for wind_msg
-            monitor.process_wind(&wind_msg);
+            monitor.process_wind(&wind_msg, now);
         }
 
 
@@ -494,11 +453,11 @@ mod tests {
                     latitude: 45.0,
                     longitude: -122.0,
                 };
-                monitor.process_position(&position_msg);
+                monitor.process_position(&position_msg, Instant::now());
                 std::thread::sleep(Duration::from_millis(10));
             }
             // No speed sample yet
-            make_wind_sample(&mut monitor, 10.0, 90.0);
+            make_wind_sample(&mut monitor, 10.0, 90.0, Instant::now());
             // Wind buffer should remain empty
             assert_eq!(monitor.winds.len(), 0);
         }
@@ -514,13 +473,13 @@ mod tests {
                     latitude: 45.0,
                     longitude: -122.0,
                 };
-                monitor.process_position(&position_msg);
+                monitor.process_position(&position_msg, Instant::now());
                 std::thread::sleep(Duration::from_millis(10));
             }
             // Add a speed sample, but wait so it becomes outdated
-            make_speed_sample(&mut monitor, 5.0);
+            make_speed_sample(&mut monitor, 5.0, Instant::now());
             std::thread::sleep(Duration::from_secs(6)); // >5s, so speed sample is outdated
-            make_wind_sample(&mut monitor, 10.0, 90.0);
+            make_wind_sample(&mut monitor, 10.0, 90.0, Instant::now());
             // Wind buffer should remain empty
             assert_eq!(monitor.winds.len(), 0);
         }
@@ -536,22 +495,22 @@ mod tests {
                     latitude: 45.0,
                     longitude: -122.0,
                 };
-                monitor.process_position(&position_msg);
+                monitor.process_position(&position_msg, Instant::now());
             }
             // Add a speed sample
-            make_speed_sample(&mut monitor, 5.0);
+            make_speed_sample(&mut monitor, 5.0, Instant::now());
             // Add wind samples, then manually set their timestamps to simulate old samples
             use std::time::Instant;
             let now = Instant::now();
             for i in 0..15 {
-                make_wind_sample(&mut monitor, 10.0 + i as f64, 45.0);
+                make_wind_sample(&mut monitor, 10.0 + i as f64, 45.0, Instant::now());
                 // Set the timestamp of the last wind sample to simulate it being old
                 if let Some(last) = monitor.winds.back_mut() {
                     last.timestamp = now - Duration::from_secs(700 + i * 10); // spread over 700..840s ago
                 }
             }
             // Add another wind sample with a current timestamp
-            make_wind_sample(&mut monitor, 20.0, 90.0);
+            make_wind_sample(&mut monitor, 20.0, 90.0, Instant::now());
             // Only recent samples should remain (<= 10 min + 30s buffer)
             let cutoff = now - Duration::from_secs(600) - Duration::from_secs(30);
             let all_recent = monitor.winds.iter().all(|w| w.timestamp >= cutoff);
@@ -571,11 +530,11 @@ mod tests {
                 latitude: 45.0,
                 longitude: -122.0,
             };
-            monitor.process_position(&position_msg);
+            monitor.process_position(&position_msg, Instant::now());
         }
         // Add a speed sample (required for true wind calculation)
         let boat_speed_kn = 5.0;
-        make_speed_sample(&mut monitor, boat_speed_kn);
+        make_speed_sample(&mut monitor, boat_speed_kn, Instant::now());
 
         // Add several wind samples
         let wind_samples = vec![(10.0, 45.0), (12.0, 50.0), (8.0, 40.0)];
@@ -585,11 +544,11 @@ mod tests {
             let (tw_speed, tw_angle) = crate::utilities::calculate_true_wind(*ws, *wa, boat_speed_kn);
             expected_speeds.push(tw_speed);
             expected_angles.push(crate::utilities::normalize0_360(tw_angle));
-            make_wind_sample(&mut monitor, *ws, *wa);
+            make_wind_sample(&mut monitor, *ws, *wa, Instant::now());
         }
         // Force last_event_time to the past to allow status generation
         monitor.last_event_time = std::time::Instant::now() - EVENT_INTERVAL - Duration::from_secs(1);
-        let status = monitor.generate_status().unwrap();
+        let status = monitor.generate_status(Instant::now()).unwrap();
         // Wind statistics should be present
         assert!(status.wind_speed_kn.is_some());
         assert!(status.wind_angle_deg.is_some());
@@ -619,7 +578,7 @@ mod tests {
                 latitude: 45.0,
                 longitude: -122.0,
             };
-            monitor.process_position(&position_msg);
+            monitor.process_position(&position_msg, Instant::now());
             std::thread::sleep(Duration::from_millis(50));
         }
         
@@ -629,7 +588,7 @@ mod tests {
             latitude: 45.0,
             longitude: -122.0,
         };
-        monitor.process_position(&position_msg);
+        monitor.process_position(&position_msg, Instant::now());
         
         assert_eq!(monitor.positions.len(), 11);
         let pos = monitor.positions.back().unwrap().position;
@@ -652,7 +611,7 @@ mod tests {
         ];
         let cog_sog_msg = CogSogRapidUpdate::from_bytes(&data).unwrap();
         
-        monitor.process_cog_sog(&cog_sog_msg);
+        monitor.process_cog_sog(&cog_sog_msg, Instant::now());
         
         assert_eq!(monitor.speeds.len(), 1);
     }
@@ -670,7 +629,7 @@ mod tests {
             0x00, 0x00,
         ];
         let cog_sog_msg = CogSogRapidUpdate::from_bytes(&data_high).unwrap();
-        monitor.process_cog_sog(&cog_sog_msg);
+        monitor.process_cog_sog(&cog_sog_msg, Instant::now());
         
         // Speed buffer should be empty (rejected)
         assert_eq!(monitor.speeds.len(), 0);
@@ -683,7 +642,7 @@ mod tests {
             0x00, 0x00,
         ];
         let cog_sog_msg_valid = CogSogRapidUpdate::from_bytes(&data_valid).unwrap();
-        monitor.process_cog_sog(&cog_sog_msg_valid);
+        monitor.process_cog_sog(&cog_sog_msg_valid, Instant::now());
         
         // Speed buffer should have one sample
         assert_eq!(monitor.speeds.len(), 1);
@@ -702,7 +661,7 @@ mod tests {
                 latitude: 45.0,
                 longitude: -122.0,
             };
-            monitor.process_position(&position_msg);
+            monitor.process_position(&position_msg, Instant::now());
             std::thread::sleep(Duration::from_millis(50)); // Small delay to ensure timestamps differ
         }
         
@@ -715,7 +674,7 @@ mod tests {
             latitude: 45.01, // ~1.1 km away
             longitude: -122.0,
         };
-        monitor.process_position(&distant_position);
+        monitor.process_position(&distant_position, Instant::now());
         
         // Should still have 10 positions (distant one rejected)
         assert_eq!(monitor.positions.len(), 10);
@@ -726,7 +685,7 @@ mod tests {
             latitude: 45.0001, // ~11 meters away
             longitude: -122.0,
         };
-        monitor.process_position(&close_position);
+        monitor.process_position(&close_position, Instant::now());
         
         // Should now have 11 positions (close one accepted)
         assert_eq!(monitor.positions.len(), 11);
@@ -744,7 +703,7 @@ mod tests {
                 latitude: 45.0,
                 longitude: -122.0,
             };
-            monitor.process_position(&position_msg);
+            monitor.process_position(&position_msg, Instant::now());
             std::thread::sleep(Duration::from_millis(50));
         }
         
@@ -758,7 +717,7 @@ mod tests {
                 latitude: 45.0,
                 longitude: -122.0,
             };
-            monitor.process_position(&position_msg);
+            monitor.process_position(&position_msg, Instant::now());
             std::thread::sleep(Duration::from_millis(50));
         }
         
@@ -771,7 +730,7 @@ mod tests {
             latitude: 45.01, // ~1.1 km away
             longitude: -122.0,
         };
-        monitor.process_position(&distant_position);
+        monitor.process_position(&distant_position, Instant::now());
         
         // Should still have 15 positions (distant one rejected)
         assert_eq!(monitor.positions.len(), 15);
@@ -791,7 +750,7 @@ mod tests {
         
         // Add 15 positions with delays to ensure we have enough samples
         for _ in 0..15 {
-            monitor.process_position(&position_msg);
+            monitor.process_position(&position_msg, Instant::now());
             std::thread::sleep(Duration::from_millis(50));
         }
         
@@ -814,7 +773,7 @@ mod tests {
                 latitude: 45.0,
                 longitude: -122.0,
             };
-            monitor.process_position(&position_msg);
+            monitor.process_position(&position_msg, Instant::now());
             std::thread::sleep(Duration::from_millis(50));
         }
         
@@ -825,12 +784,12 @@ mod tests {
             0x00, 0x00,
         ];
         let cog_sog_msg = CogSogRapidUpdate::from_bytes(&data).unwrap();
-        monitor.process_cog_sog(&cog_sog_msg);
+        monitor.process_cog_sog(&cog_sog_msg, Instant::now());
         
         // Wait for event interval (10 seconds)
         std::thread::sleep(EVENT_INTERVAL + Duration::from_millis(100));
         
-        let status = monitor.generate_status();
+        let status = monitor.generate_status(Instant::now());
         assert!(status.is_some());
     }
 }

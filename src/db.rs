@@ -1,8 +1,8 @@
 use mysql::*;
 use mysql::prelude::*;
 use std::{error::Error, time::{Duration, Instant}};
-use std::time::{SystemTime, UNIX_EPOCH};
-use crate::environmental_monitor::{MetricData, MetricId};
+use std::time::{SystemTime};
+use crate::{environmental_monitor::{MetricData, MetricId}, utilities::dirty_instant_to_systemtime};
 use crate::trip::Trip;
 use chrono::NaiveDateTime;
 use tracing::{info, warn};
@@ -50,12 +50,14 @@ impl VesselDatabase {
     ///     timestamp DATETIME(3) NOT NULL COMMENT 'UTC timezone',
     ///     latitude DOUBLE,
     ///     longitude DOUBLE,
-    ///     average_speed_kn DOUBLE NOT NULL,
-    ///     max_speed_kn DOUBLE NOT NULL,
+    ///     average_speed_kn DECIMAL(6,3) NOT NULL,
+    ///     max_speed_kn DECIMAL(6,3) NOT NULL,
     ///     is_moored BOOLEAN NOT NULL,
     ///     engine_on BOOLEAN NOT NULL DEFAULT 0,
     ///     total_distance_nm DOUBLE NOT NULL DEFAULT 0,
     ///     total_time_ms BIGINT NOT NULL DEFAULT 0,
+    ///     average_wind_speed_kn DECIMAL(6,3),
+    ///     average_wind_angle_deg DECIMAL(6,3),
     ///     INDEX idx_timestamp (timestamp)
     /// );
     /// ```
@@ -85,9 +87,7 @@ impl VesselDatabase {
         let mut tx = conn.start_transaction(TxOpts::default())?;
         
         // Insert vessel status
-        let delta = Instant::now().duration_since(status_op.time);
-        let system_time = SystemTime::now().checked_sub(delta).unwrap_or(UNIX_EPOCH);
-        let timestamp = chrono::DateTime::<chrono::Utc>::from(system_time);
+        let timestamp = chrono::DateTime::<chrono::Utc>::from(dirty_instant_to_systemtime(status_op.time));
                
                 tx.exec_drop(
                         r"INSERT INTO vessel_status 
@@ -111,14 +111,9 @@ impl VesselDatabase {
         // Handle trip operation
         let trip_id = match trip_operation {
             TripOperation::CreateTrip(trip) => {
-                let delta_start = Instant::now().duration_since(trip.start_timestamp);
-                let delta_end = Instant::now().duration_since(trip.end_timestamp);
-                
-                let start_system = SystemTime::now().checked_sub(delta_start).unwrap_or(UNIX_EPOCH);
-                let end_system = SystemTime::now().checked_sub(delta_end).unwrap_or(UNIX_EPOCH);
-                
-                let start_timestamp = chrono::DateTime::<chrono::Utc>::from(start_system);
-                let end_timestamp = chrono::DateTime::<chrono::Utc>::from(end_system);
+               
+                let start_timestamp = chrono::DateTime::<chrono::Utc>::from(trip.start_timestamp);
+                let end_timestamp = chrono::DateTime::<chrono::Utc>::from(trip.end_timestamp);
                 
                 tx.exec_drop(
                     r"INSERT INTO trips 
@@ -144,9 +139,7 @@ impl VesselDatabase {
             }
             TripOperation::UpdateTrip(trip) => {
                 if let Some(trip_id) = trip.id {
-                    let delta_end = Instant::now().duration_since(trip.end_timestamp);
-                    let end_system = SystemTime::now().checked_sub(delta_end).unwrap_or(UNIX_EPOCH);
-                    let end_timestamp = chrono::DateTime::<chrono::Utc>::from(end_system);
+                    let end_timestamp = chrono::DateTime::<chrono::Utc>::from(trip.end_timestamp);
                     
                     tx.exec_drop(
                         r"UPDATE trips 
@@ -182,12 +175,12 @@ impl VesselDatabase {
     pub fn insert_environmental_metrics(
         &self, 
         data: &MetricData, 
-        metric_id: MetricId
+        metric_id: MetricId,
+        now: std::time::SystemTime,
     ) -> Result<(), Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
         
         // Get current system time and convert to UTC
-        let now = std::time::SystemTime::now();
         let timestamp = chrono::DateTime::<chrono::Utc>::from(now);
         let timestamp_str = timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
         
@@ -263,28 +256,16 @@ impl VesselDatabase {
             let end_dt = NaiveDateTime::parse_from_str(&end_ts, "%Y-%m-%d %H:%M:%S%.6f")?;
             
             // Convert to SystemTime then to Instant (approximate)
-            let start_system = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start_dt, chrono::Utc);
-            let end_system = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(end_dt, chrono::Utc);
-            
-            let now_system = SystemTime::now();
-            let now_instant = Instant::now();
-            
-            // Calculate duration from end_timestamp to now
-            let duration_since_end = now_system.duration_since(SystemTime::UNIX_EPOCH)?
-                .saturating_sub(std::time::Duration::from_secs(end_system.timestamp() as u64));
-            
-            let duration_since_start = now_system.duration_since(SystemTime::UNIX_EPOCH)?
-                .saturating_sub(std::time::Duration::from_secs(start_system.timestamp() as u64));
-            
-            // Reconstruct Instant by subtracting from now
-            let end_instant = now_instant.checked_sub(duration_since_end).unwrap_or(now_instant);
-            let start_instant = now_instant.checked_sub(duration_since_start).unwrap_or(now_instant);
-            
+            let start_datetime = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start_dt, chrono::Utc);
+            let end_datetime = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(end_dt, chrono::Utc);
+            let start_timestamp = SystemTime::from(start_datetime);
+            let end_timestamp = SystemTime::from(end_datetime);
+
             Ok(Some(Trip {
                 id: Some(id),
                 description,
-                start_timestamp: start_instant,
-                end_timestamp: end_instant,
+                start_timestamp,
+                end_timestamp,
                 total_distance_sailed,
                 total_distance_motoring,
                 total_time_sailing,

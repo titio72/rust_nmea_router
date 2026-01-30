@@ -1,4 +1,5 @@
-use crate::pgns::N2kMessage;
+use crate::N2kFrame;
+
 
 /// Trait for components that handle NMEA2000 messages
 /// 
@@ -10,5 +11,5 @@ pub trait MessageHandler {
     /// 
     /// Implementations should check the message type and handle only the
     /// messages they're interested in, ignoring others.
-    fn handle_message(&mut self, message: &N2kMessage);
+    fn handle_message(&mut self, frame_and_message: &N2kFrame, timestamp: std::time::Instant);
 }

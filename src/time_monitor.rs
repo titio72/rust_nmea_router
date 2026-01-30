@@ -206,8 +206,8 @@ impl Default for TimeMonitor {
 }
 
 impl nmea2k::MessageHandler for TimeMonitor {
-    fn handle_message(&mut self, message: &nmea2k::N2kMessage) {
-        match message {
+    fn handle_message(&mut self, frame: &nmea2k::N2kFrame, _timestamp: std::time::Instant) {
+        match &frame.message {
             nmea2k::pgns::N2kMessage::NMEASystemTime(sys_time) => {
                 self.process_system_time(sys_time);
             }

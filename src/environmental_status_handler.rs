@@ -4,6 +4,7 @@ use tracing::{debug, warn};
 use crate::config::EnvironmentalConfig;
 use crate::db::VesselDatabase;
 use crate::environmental_monitor::{EnvironmentalMonitor, MetricId};
+use crate::utilities::dirty_instant_to_systemtime;
 
 /// State for tracking environmental metric persistence
 struct EnvironmentalStatusState {
@@ -100,8 +101,9 @@ impl EnvironmentalStatusHandler {
         &mut self,
         vessel_db: &Option<VesselDatabase>,
         env_monitor: &mut EnvironmentalMonitor,
+        now: Instant,
     ) -> Result<usize, Box<dyn std::error::Error>> {
-        handle_environment_status(vessel_db, env_monitor, &mut self.state)
+        handle_environment_status(vessel_db, env_monitor, &mut self.state, now)
     }
 }
 
@@ -113,11 +115,12 @@ fn handle_environment_status(
     vessel_db: &Option<VesselDatabase>,
     env_monitor: &mut EnvironmentalMonitor,
     state: &mut EnvironmentalStatusState,
+    now: Instant,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     let mut written_count = 0;
     // Write to database if connected, time to persist, and time is synchronized
     if let Some(ref db) = *vessel_db {
-        let now = Instant::now();
+        let now_timestamp = dirty_instant_to_systemtime(now); // used for database timestamp
         let metrics_to_persist = state.get_metrics_to_persist(env_monitor, now);
         if !metrics_to_persist.is_empty() {
             for metricid in metrics_to_persist.iter() {
@@ -130,7 +133,7 @@ fn handle_environment_status(
                         metric_data.max, 
                         metric_data.min,
                         metric_data.count);
-                    if let Err(e) = db.insert_environmental_metrics(&metric_data, *metricid) {
+                    if let Err(e) = db.insert_environmental_metrics(&metric_data, *metricid, now_timestamp) {
                         warn!("Error writing {} data to database: {}", metricid.name(), e);
                         return Err(e);
                     } else {
@@ -158,7 +161,7 @@ mod tests {
     #[test]
     fn test_mark_metric_persisted() {
         let db_periods = EnvironmentalConfig::default();
-        let mut state = EnvironmentalStatusState::new(db_periods);
+        let mut state = EnvironmentalStatusState::new(&db_periods);
         
         let now = Instant::now();   
         state.mark_metric_persisted(MetricId::Pressure, now);
@@ -173,7 +176,7 @@ mod tests {
     fn test_get_metrics_to_persist_initial() {
         let config = EnvironmentalConfig::default();
         let monitor = EnvironmentalMonitor::new();
-        let state = EnvironmentalStatusState::new(config);
+        let state = EnvironmentalStatusState::new(&config);
         
         // Initially, no metrics have data, so nothing to persist
         let metrics = state.get_metrics_to_persist(&monitor, Instant::now());
@@ -184,7 +187,7 @@ mod tests {
     fn test_get_metrics_to_persist_with_data() {
         let config = EnvironmentalConfig::default();
         let mut monitor = EnvironmentalMonitor::new();
-        let state = EnvironmentalStatusState::new(config);
+        let state = EnvironmentalStatusState::new(&config);
 
         // Add dummy data for all metrics
         let now = Instant::now();

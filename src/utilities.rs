@@ -1,5 +1,7 @@
 /// Utility functions for NMEA2000 router
 
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
 /// Calculate true wind speed and angle from apparent wind and boat speed.
 /// 
 /// # Arguments
@@ -38,6 +40,18 @@ pub fn calculate_true_wind(
     let tw_angle_deg = tw_angle_rad.to_degrees();
 
     (tw_speed, tw_angle_deg)
+}
+
+pub fn dirty_instant_to_systemtime(instant: Instant) -> SystemTime {
+    let now_instant = Instant::now();
+    let now_systemtime = SystemTime::now();
+    if instant <= now_instant {
+        let duration_ago = now_instant.duration_since(instant);
+        now_systemtime.checked_sub(duration_ago).unwrap_or(UNIX_EPOCH)
+    } else {
+        let duration_ahead = instant.duration_since(now_instant);
+        now_systemtime.checked_add(duration_ahead).unwrap_or(SystemTime::UNIX_EPOCH + Duration::from_secs(u64::MAX))
+    }
 }
 
 // given two anles in degrees, compute the smallest difference between a and b (i.e., a - b)

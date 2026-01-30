@@ -647,19 +647,26 @@ Each metric is persisted independently based on its configured interval.
 
 ### `vessel_status` Table
 
-Stores vessel position, speed, and navigation data.
+Stores vessel position, speed, wind, and navigation data.
 
 ```sql
 CREATE TABLE vessel_status (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    timestamp DATETIME(3) NOT NULL,
-    latitude DECIMAL(10, 7),
-    longitude DECIMAL(11, 7),
-    avg_speed_30s DECIMAL(6, 2),
-    max_speed_30s DECIMAL(6, 2),
-    is_moored BOOLEAN DEFAULT FALSE,
-    INDEX idx_timestamp (timestamp)
-);
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  timestamp DATETIME(3) NOT NULL COMMENT 'Report generation time in UTC with millisecond precision',
+  latitude DOUBLE COMMENT 'Vessel latitude in decimal degrees (NULL if no position fix)',
+  longitude DOUBLE COMMENT 'Vessel longitude in decimal degrees (NULL if no position fix)',
+  average_speed_kn DECIMAL(6,3) NOT NULL COMMENT 'Average speed over reporting period in knots',
+  max_speed_kn DECIMAL(6,3) NOT NULL COMMENT 'Maximum speed over reporting period in knots',
+  average_wind_speed_kn DECIMAL(6,3) COMMENT 'Average wind speed over reporting period in knots (NULL if no wind data)',
+  average_wind_angle_deg DECIMAL(6,3) COMMENT 'Average wind direction over reporting period in degrees (NULL if no wind data)',
+  is_moored BOOLEAN NOT NULL COMMENT 'TRUE if vessel is moored (position stable for 2+ minutes within 30m radius)',
+  engine_on BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'TRUE if engine is running',
+  total_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Distance traveled since last report in nautical miles (straight-line Haversine)',
+  total_time_ms BIGINT NOT NULL DEFAULT 0 COMMENT 'Time elapsed since last report in milliseconds',
+  INDEX idx_timestamp (timestamp),
+  INDEX idx_moored (is_moored, timestamp)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='Stores vessel navigation status reports';
 ```
 
 ### `environmental_data` Table
