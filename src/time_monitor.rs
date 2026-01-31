@@ -137,8 +137,8 @@ impl TimeMonitor {
     }
 
     fn set_system_time(&self, nmea_time: &NMEASystemTime) {
-        let unix_timestamp = nmea_time.date_time.to_unix_timestamp();
-        let millis = nmea_time.date_time.milliseconds() as i64;
+        let unix_timestamp = nmea_time.date_time.to_unix_timestamp() as i32;
+        let millis = nmea_time.date_time.milliseconds() as i32;
         
         let timespec = TimeSpec::new(unix_timestamp, millis * 1_000_000);
         
