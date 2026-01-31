@@ -43,10 +43,12 @@ impl VesselStatusHandler {
         status: VesselStatus,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let effective_position = status.get_effective_position();
-        debug!("Vessel Status: latitude={:.6}, longitude={:.6}, max_speed={:.2}, avg_wind={:.2?}, avg_wind_direction={:.2?} knots, moored={}", 
+        debug!("Vessel Status: latitude={:.6}, longitude={:.6}, max_speed={:.2}, avg_wind={:.2?}, avg_wind_direction={:.2?} knots, Head {:.2?} moored={}", 
             effective_position.latitude,
             effective_position.longitude,
-            status.max_speed_kn, status.wind_speed_kn, status.wind_angle_deg, status.is_moored);
+            status.max_speed_kn, status.wind_speed_kn, status.wind_angle_deg, 
+            status.average_heading_deg,
+            status.is_moored);
     
         // Write to database if connected, time to persist, and time is synchronized
         if let Some(ref db) = *vessel_db && status.is_valid() && self.state.should_persist_to_db(status.is_moored) {

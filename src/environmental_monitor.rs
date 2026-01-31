@@ -220,6 +220,9 @@ impl EnvironmentalMonitor {
     }
 
     fn process_vessel_heading(&mut self, msg_heading: &VesselHeading, now: Instant) {
+        if msg_heading.reference != nmea2k::pgns::HeadingReference::True {
+            return;
+        }
         self.last_heading_event = Some(now);
         self.last_heading_degrees = Some(msg_heading.heading.to_degrees());
     }

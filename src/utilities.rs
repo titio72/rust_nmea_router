@@ -69,11 +69,11 @@ pub fn normalize0_360(angle: f64) -> f64 {
     (angle % 360.0 + 360.0) % 360.0
 }
 
-pub fn average_angle(angles_radians: &[f64]) -> f64 {
+pub fn average_angle(angles_deg: &[f64]) -> f64 {
     let mut x = 0.0;
     let mut y = 0.0;
-    for w in angles_radians {
-        let radians = *w;
+    for w in angles_deg {
+        let radians = w.to_radians();
         x += radians.cos();
         y += radians.sin();
     }
@@ -176,14 +176,14 @@ mod tests {
 
     #[test]
     fn test_average_angle() {
-        let angles = vec![90.0_f64.to_radians(), 180.0_f64.to_radians()];
+        let angles = vec![90.0_f64, 180.0_f64];
         let avg_angle = average_angle(&angles);
         assert!((avg_angle - 135.0).abs() < 1e-6);
     }
     
     #[test]
     fn test_average_angle_cross_north() {
-        let angles = vec![5.1_f64.to_radians(), 355.1_f64.to_radians(), 10.1_f64.to_radians(), 350.1_f64.to_radians()];
+        let angles = vec![5.1_f64, 355.1_f64, 10.1_f64, 350.1_f64];
         let avg_angle = average_angle(&angles);
         assert!((avg_angle - 0.1).abs() < 1e-6);
     }

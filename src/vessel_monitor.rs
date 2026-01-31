@@ -289,10 +289,11 @@ impl VesselMonitor {
     }
 
     pub fn process_heading(&mut self, heading_msg: &nmea2k::pgns::VesselHeading, timestamp: Instant) {
-        if heading_msg.reference == HeadingReference::Magnetic {
-            let _heading_deg = heading_msg.heading.to_degrees();
+        if heading_msg.reference == HeadingReference::True {
+            let heading_deg = heading_msg.heading.to_degrees();
+            //println!("True heading received: {:.2} deg", heading_deg);
             self.headings.push_back(HeadingSample {
-                heading_deg: _heading_deg,
+                heading_deg: heading_deg,
                 timestamp: timestamp,
             });
         }
@@ -380,7 +381,7 @@ impl VesselMonitor {
 
         let count: f64 = relevant_winds.len() as f64;
         let mean_speed: f64 = relevant_winds.iter().map(|w| w.wind_speed_kn).sum::<f64>() / count;
-        let mean_angle: f64 = average_angle(&relevant_winds.iter().map(|w| w.wind_angle_deg.to_radians()).collect::<Vec<f64>>());
+        let mean_angle: f64 = average_angle(&relevant_winds.iter().map(|w| w.wind_angle_deg).collect::<Vec<f64>>());
         
         // Calculate variance of wind angle
         let mut variance_speed = 0.0;
