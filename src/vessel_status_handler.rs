@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 use tracing::{info, warn, debug};
 
+use crate::utilities::dirty_instant_to_systemtime;
 use crate::vessel_monitor::{VesselStatus};
 use crate::db::{VesselDatabase, TripOperation, VesselStatusOperation};
 use crate::trip::Trip;
@@ -49,14 +50,17 @@ impl VesselStatusHandler {
     
         // Write to database if connected, time to persist, and time is synchronized
         if let Some(ref db) = *vessel_db && status.is_valid() && self.state.should_persist_to_db(status.is_moored) {
+            let time: Instant = status.timestamp;
             let position = status.get_effective_position();
             let latitude = position.latitude;
             let longitude = position.longitude;
-            let (total_distance_nm, total_time_ms) = status.get_total_distance_and_time_from_last_report(&mut self.state.last_vessel_status);
-            let time: Instant = status.timestamp;
-            let average_speed_kn = if total_time_ms > 0 { total_distance_nm / (total_time_ms as f64 / 3600000.0) } else { 0.0 };
-            let max_speed_kn = if self.state.last_reported_max_speed > status.max_speed_kn { self.state.last_reported_max_speed } else { status.max_speed_kn };
-            self.state.last_reported_max_speed = max_speed_kn;
+            let vessel_vector = status.get_vector_from(&mut self.state.last_vessel_status);
+            let total_distance_nm = if let Some(ref vessel_vector) = vessel_vector { vessel_vector.distance_nm } else { 0.0 };
+            let total_time_ms = if let Some(ref vessel_vector) = vessel_vector { vessel_vector.delta_time_ms } else { 0 };
+            let average_speed_kn = if let Some(ref vessel_vector) = vessel_vector { vessel_vector.average_speed_kn() } else { 0.0 };
+            let cog_deg: Option<f64> = if let Some(ref vessel_vector) = vessel_vector { Some(vessel_vector.course_deg) } else { None };
+            let average_heading_deg: Option<f64> = status.average_heading_deg;
+            self.state.last_reported_max_speed = self.state.last_reported_max_speed.max(status.max_speed_kn);
 
             // Determine trip operation (create, update, or none)
             let trip_operation = Self::determine_trip_operation(&mut self.state.current_trip, &status, total_distance_nm, total_time_ms);
@@ -67,7 +71,7 @@ impl VesselStatusHandler {
                 latitude,
                 longitude,
                 average_speed_kn: average_speed_kn,
-                max_speed_kn: max_speed_kn,
+                max_speed_kn: self.state.last_reported_max_speed,
                 is_moored: status.is_moored,
                 engine_on: status.engine_on,
                 total_distance_nm,
@@ -76,6 +80,8 @@ impl VesselStatusHandler {
                 wind_speed_variance: status.wind_speed_variance,
                 average_wind_angle_deg: status.wind_angle_deg,
                 wind_angle_variance: status.wind_angle_variance,
+                cog_deg,
+                average_heading_deg,
             };
             
             // Perform atomic insert of vessel status and trip operation
@@ -110,35 +116,33 @@ impl VesselStatusHandler {
     }
 
     /// Determine the trip operation to perform
-    fn determine_trip_operation(current_trip: &mut Option<Trip>, status: &VesselStatus, distance: f64, time_ms: u64) -> TripOperation {
+    fn determine_trip_operation(current_trip: &mut Option<Trip>, status: &VesselStatus, distance: f64, delta_time_ms: u64) -> TripOperation {
         let report_time = status.timestamp;
-        
+        let report_systemtime = dirty_instant_to_systemtime(report_time);
         // Check if we need to create a new trip or update existing
         let should_create_new = if let Some(ref trip) = *current_trip {
-            !trip.is_active(report_time)
+            !trip.is_active(report_systemtime)
         } else {
             true // No current trip, create new one
         };
         
         if should_create_new {
             // Create new trip
-            let start_time = report_time;
+            let start_time = report_systemtime;
             
             // Format description with date
-            let delta = Instant::now().duration_since(start_time);
-            let system_time = std::time::SystemTime::now().checked_sub(delta).unwrap_or(std::time::UNIX_EPOCH);
-            let datetime = chrono::DateTime::<chrono::Utc>::from(system_time);
+            let datetime = chrono::DateTime::<chrono::Utc>::from(start_time);
             let description = format!("Trip {}", datetime.format("%Y-%m-%d"));
             
             let mut new_trip = Trip::new(start_time, description);
-            new_trip.update(report_time, distance, time_ms, status.engine_on, status.is_moored);
+            new_trip.update(report_systemtime, distance, delta_time_ms, status.engine_on, status.is_moored);
             
             *current_trip = Some(new_trip.clone());
             TripOperation::CreateTrip(new_trip)
         } else {
             // Update existing trip
             if let Some(ref mut trip) = *current_trip {
-                trip.update(report_time, distance, time_ms, status.engine_on, status.is_moored);
+                trip.update(report_systemtime, distance, delta_time_ms, status.engine_on, status.is_moored);
                 TripOperation::UpdateTrip(trip.clone())
             } else {
                 TripOperation::None

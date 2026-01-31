@@ -10,6 +10,22 @@ pub struct Attitude {
 }
 
 impl Attitude {
+    // Constructor
+    // sid: sequence ID
+    // yaw: radians (optional)
+    // pitch: radians (optional)
+    // roll: radians (optional)
+    pub fn new(sid: u8, yaw: Option<f64>, pitch: Option<f64>, roll: Option<f64>) -> Self {
+        Self {
+            pgn: 127257,
+            sid,
+            yaw,
+            pitch,
+            roll,
+        }
+    }
+
+
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() >= 7 {
             let sid = data[0];

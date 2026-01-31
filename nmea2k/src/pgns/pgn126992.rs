@@ -14,6 +14,19 @@ pub struct NMEASystemTime {
 }
 
 impl NMEASystemTime {
+    // Constructor
+    // sid: sequence ID
+    // source: source of time
+    // date_time: N2kDateTime struct
+    pub fn new(sid: u8, source: u8, date_time: N2kDateTime) -> Self {
+        Self {
+            pgn: 126992,
+            sid,
+            source,
+            date_time,
+        }
+    }
+    
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 8 {
             return None;

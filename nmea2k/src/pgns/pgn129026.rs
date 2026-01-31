@@ -12,6 +12,22 @@ pub struct CogSogRapidUpdate {
 }
 
 impl CogSogRapidUpdate {
+
+    // Constructor
+    // cog_reference: true = True, false = Magnetic
+    // cog: radians
+    // sog: m/s
+    // 
+    pub fn new(cog_reference: bool, cog: f64, sog: f64) -> Self {
+        Self {
+            pgn: 129026,
+            sid: 0,
+            cog_reference,
+            cog,
+            sog,
+        }
+    }
+
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 8 {
             return None;

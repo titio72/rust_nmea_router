@@ -2,7 +2,7 @@ use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, warn, error};
 use nmea2k::pgns::N2kMessage;
-use nmea2k::MessageHandler;
+use nmea2k::{MessageHandler, N2kFrame};
 use serde::Serialize;
 
 /// Wrapper struct for serializing NMEA2000 messages to JSON
@@ -85,10 +85,21 @@ impl UdpBroadcaster {
             return;
         }
 
-        let socket_guard = self.socket.lock().unwrap();
-        if socket_guard.is_none() {
-            return;
-        }
+        let socket_guard = match self.socket.lock() {
+            Ok(guard) => {
+                if guard.is_none() {
+                    return;
+                }
+                guard
+            }
+            Err(e) => {
+                if self.error_count < 10 {
+                    warn!("Failed to acquire UDP socket lock: {}", e);
+                }
+                self.error_count += 1;
+                return;
+            }
+        };
 
         // Serialize message to JSON
         let wrapper = match self.serialize_message(message, source, priority) {
@@ -275,18 +286,10 @@ impl UdpBroadcaster {
 }
 
 impl MessageHandler for UdpBroadcaster {
-    fn handle_message(&mut self, message: &N2kMessage) {
+    fn handle_message(&mut self, frame: &N2kFrame, _timestamp: std::time::Instant) {
         // For now, use dummy source and priority values
         // These will be passed from the actual frame in the main loop
-        self.broadcast_message(message, 0, 0);
-    }
-}
-
-impl UdpBroadcaster {
-    /// Handle message with frame metadata (source and priority)
-    /// This is the preferred method to call from the main loop
-    pub fn handle_message_with_metadata(&mut self, message: &N2kMessage, source: u8, priority: u8) {
-        self.broadcast_message(message, source, priority);
+        self.broadcast_message(&frame.message, frame.identifier.source(), frame.identifier.priority());
     }
 }
 

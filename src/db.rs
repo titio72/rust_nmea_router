@@ -1,8 +1,8 @@
 use mysql::*;
 use mysql::prelude::*;
 use std::{error::Error, time::{Duration, Instant}};
-use std::time::{SystemTime, UNIX_EPOCH};
-use crate::environmental_monitor::{MetricData, MetricId};
+use std::time::{SystemTime};
+use crate::{environmental_monitor::{MetricData, MetricId}, utilities::dirty_instant_to_systemtime};
 use crate::trip::Trip;
 use chrono::NaiveDateTime;
 use tracing::{info, warn};
@@ -24,6 +24,8 @@ pub struct VesselStatusOperation {
     pub average_wind_angle_deg: Option<f64>,
     #[allow(dead_code)]
     pub wind_angle_variance: Option<f64>,
+    pub cog_deg: Option<f64>,
+    pub average_heading_deg: Option<f64>,
 }
 
 /// Represents a trip operation to be performed atomically with vessel status insert
@@ -50,12 +52,16 @@ impl VesselDatabase {
     ///     timestamp DATETIME(3) NOT NULL COMMENT 'UTC timezone',
     ///     latitude DOUBLE,
     ///     longitude DOUBLE,
-    ///     average_speed_kn DOUBLE NOT NULL,
-    ///     max_speed_kn DOUBLE NOT NULL,
+    ///     average_speed_kn DECIMAL(6,3) NOT NULL,
+    ///     max_speed_kn DECIMAL(6,3) NOT NULL,
     ///     is_moored BOOLEAN NOT NULL,
     ///     engine_on BOOLEAN NOT NULL DEFAULT 0,
     ///     total_distance_nm DOUBLE NOT NULL DEFAULT 0,
     ///     total_time_ms BIGINT NOT NULL DEFAULT 0,
+    ///     average_wind_speed_kn DECIMAL(6,3),
+    ///     average_wind_angle_deg DECIMAL(6,3),
+    ///     cog_deg DECIMAL(6,3),
+    ///     average_heading_deg DECIMAL(6,3),
     ///     INDEX idx_timestamp (timestamp)
     /// );
     /// ```
@@ -74,6 +80,17 @@ impl VesselDatabase {
         Ok(())
     }
     
+
+    pub fn update_trip_description(&self, trip_id: i64, new_description: &str) -> Result<(), Box<dyn Error>> {
+        let mut conn = self.pool.get_conn()?;
+        let query = "UPDATE trips SET description = :description WHERE id = :id";
+        conn.exec_drop(query, mysql::params! {
+            "description" => new_description,
+            "id" => trip_id,
+        })?;
+        Ok(())
+    }
+
     /// Insert vessel status and create/update trip in a single transaction
     /// This ensures atomicity - either both operations succeed or both fail
     pub fn insert_status_and_trip(
@@ -85,14 +102,12 @@ impl VesselDatabase {
         let mut tx = conn.start_transaction(TxOpts::default())?;
         
         // Insert vessel status
-        let delta = Instant::now().duration_since(status_op.time);
-        let system_time = SystemTime::now().checked_sub(delta).unwrap_or(UNIX_EPOCH);
-        let timestamp = chrono::DateTime::<chrono::Utc>::from(system_time);
+        let timestamp = chrono::DateTime::<chrono::Utc>::from(dirty_instant_to_systemtime(status_op.time));
                
                 tx.exec_drop(
                         r"INSERT INTO vessel_status 
-                            (timestamp, latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on, total_distance_nm, total_time_ms, average_wind_speed_kn, average_wind_angle_deg)
-                            VALUES (:timestamp, :latitude, :longitude, :avg_speed, :max_speed, :is_moored, :engine_on, :total_distance, :total_time, :avg_wind_speed, :avg_wind_angle)",
+                            (timestamp, latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on, total_distance_nm, total_time_ms, average_wind_speed_kn, average_wind_angle_deg, cog_deg, average_heading_deg)
+                            VALUES (:timestamp, :latitude, :longitude, :avg_speed, :max_speed, :is_moored, :engine_on, :total_distance, :total_time, :avg_wind_speed, :avg_wind_angle, :cog_deg, :avg_heading_deg)",
                         params! {
                                 "timestamp" => timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
                                 "latitude" => status_op.latitude,
@@ -105,20 +120,17 @@ impl VesselDatabase {
                                 "total_time" => status_op.total_time_ms,
                                 "avg_wind_speed" => status_op.average_wind_speed_kn,
                                 "avg_wind_angle" => status_op.average_wind_angle_deg,
+                                "cog_deg" => status_op.cog_deg,
+                                "avg_heading_deg" => status_op.average_heading_deg,
                         },
                 )?;
         
         // Handle trip operation
         let trip_id = match trip_operation {
             TripOperation::CreateTrip(trip) => {
-                let delta_start = Instant::now().duration_since(trip.start_timestamp);
-                let delta_end = Instant::now().duration_since(trip.end_timestamp);
-                
-                let start_system = SystemTime::now().checked_sub(delta_start).unwrap_or(UNIX_EPOCH);
-                let end_system = SystemTime::now().checked_sub(delta_end).unwrap_or(UNIX_EPOCH);
-                
-                let start_timestamp = chrono::DateTime::<chrono::Utc>::from(start_system);
-                let end_timestamp = chrono::DateTime::<chrono::Utc>::from(end_system);
+               
+                let start_timestamp = chrono::DateTime::<chrono::Utc>::from(trip.start_timestamp);
+                let end_timestamp = chrono::DateTime::<chrono::Utc>::from(trip.end_timestamp);
                 
                 tx.exec_drop(
                     r"INSERT INTO trips 
@@ -144,9 +156,7 @@ impl VesselDatabase {
             }
             TripOperation::UpdateTrip(trip) => {
                 if let Some(trip_id) = trip.id {
-                    let delta_end = Instant::now().duration_since(trip.end_timestamp);
-                    let end_system = SystemTime::now().checked_sub(delta_end).unwrap_or(UNIX_EPOCH);
-                    let end_timestamp = chrono::DateTime::<chrono::Utc>::from(end_system);
+                    let end_timestamp = chrono::DateTime::<chrono::Utc>::from(trip.end_timestamp);
                     
                     tx.exec_drop(
                         r"UPDATE trips 
@@ -182,12 +192,12 @@ impl VesselDatabase {
     pub fn insert_environmental_metrics(
         &self, 
         data: &MetricData, 
-        metric_id: MetricId
+        metric_id: MetricId,
+        now: std::time::SystemTime,
     ) -> Result<(), Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
         
         // Get current system time and convert to UTC
-        let now = std::time::SystemTime::now();
         let timestamp = chrono::DateTime::<chrono::Utc>::from(now);
         let timestamp_str = timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
         
@@ -263,28 +273,16 @@ impl VesselDatabase {
             let end_dt = NaiveDateTime::parse_from_str(&end_ts, "%Y-%m-%d %H:%M:%S%.6f")?;
             
             // Convert to SystemTime then to Instant (approximate)
-            let start_system = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start_dt, chrono::Utc);
-            let end_system = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(end_dt, chrono::Utc);
-            
-            let now_system = SystemTime::now();
-            let now_instant = Instant::now();
-            
-            // Calculate duration from end_timestamp to now
-            let duration_since_end = now_system.duration_since(SystemTime::UNIX_EPOCH)?
-                .saturating_sub(std::time::Duration::from_secs(end_system.timestamp() as u64));
-            
-            let duration_since_start = now_system.duration_since(SystemTime::UNIX_EPOCH)?
-                .saturating_sub(std::time::Duration::from_secs(start_system.timestamp() as u64));
-            
-            // Reconstruct Instant by subtracting from now
-            let end_instant = now_instant.checked_sub(duration_since_end).unwrap_or(now_instant);
-            let start_instant = now_instant.checked_sub(duration_since_start).unwrap_or(now_instant);
-            
+            let start_datetime = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start_dt, chrono::Utc);
+            let end_datetime = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(end_dt, chrono::Utc);
+            let start_timestamp = SystemTime::from(start_datetime);
+            let end_timestamp = SystemTime::from(end_datetime);
+
             Ok(Some(Trip {
                 id: Some(id),
                 description,
-                start_timestamp: start_instant,
-                end_timestamp: end_instant,
+                start_timestamp,
+                end_timestamp,
                 total_distance_sailed,
                 total_distance_motoring,
                 total_time_sailing,
@@ -381,8 +379,9 @@ impl HealthCheckManager {
 #[derive(Debug, serde::Serialize)]
 pub struct TripSummary {
     pub id: u32,
+    pub description: String,
     pub start_date: String,
-    pub end_date: Option<String>,
+    pub end_date: String,
     pub total_distance_nm: f64,
     pub total_time_ms: i64,
     pub sailing_time_ms: i64,
@@ -414,26 +413,68 @@ pub struct WebMetricData {
 }
 
 impl VesselDatabase {
+
+    pub fn fetch_trip(&self, trip_id: u32) -> Result<Option<TripSummary>, Box<dyn std::error::Error>> {
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+        
+        let row: Option<mysql::Row> = conn.exec_first(
+            r"SELECT id, description, 
+                     DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f') as start_ts,
+                     DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S.%f') as end_ts,
+                     total_distance_sailed, total_distance_motoring,
+                     (total_distance_sailed + total_distance_motoring) as total_distance,
+                     total_time_sailing, total_time_motoring, total_time_moored
+              FROM trips
+              WHERE id = :trip_id",
+            params! {
+                "trip_id" => trip_id,
+            },
+        ).map_err(|e| format!("Database query error: {}", e))?;
+        
+        if let Some(row) = row {
+            let trip = TripSummary {
+                id: row.get("id").unwrap_or(0),
+                description: row.get::<String, _>("description").unwrap_or_default(),
+                start_date: row.get::<String, _>("start_ts").unwrap_or_default(),
+                end_date: row.get::<String, _>("end_ts").unwrap_or_default(),
+                total_distance_nm: row.get::<f64, _>("total_distance").unwrap_or(0.0),
+                total_time_ms: row.get::<i64, _>("total_time").unwrap_or(0),
+                sailing_time_ms: row.get::<i64, _>("total_time_sailing").unwrap_or(0),
+                motoring_time_ms: row.get::<i64, _>("total_time_motoring").unwrap_or(0),
+                moored_time_ms: row.get::<i64, _>("total_time_moored").unwrap_or(0),
+                sailing_distance_nm: row.get::<f64, _>("total_distance_sailed").unwrap_or(0.0),
+                motoring_distance_nm: row.get::<f64, _>("total_distance_motoring").unwrap_or(0.0),
+            };
+            Ok(Some(trip))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Fetch trips with optional filtering
     pub fn fetch_trips(&self, year: Option<i32>, last_months: Option<u32>) -> Result<Vec<TripSummary>, Box<dyn std::error::Error>> {
         let mut query = String::from(
             "SELECT id, 
-                    DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S') as start_date,
-                    DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S') as end_date,
+                    description,
+                    DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S') as start_ts,
+                    DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S') as end_ts,
                     (total_distance_sailed + total_distance_motoring) as total_distance,
                     (total_time_sailing + total_time_motoring + total_time_moored) as total_time,
-                    total_time_sailing as sailing_time,
-                    total_time_motoring as motoring_time,
-                    total_time_moored as moored_time,
-                    total_distance_sailed as sailing_distance,
-                    total_distance_motoring as motoring_distance
-             FROM trips WHERE 1=1"
+                    total_time_sailing as total_time_sailing,
+                    total_time_motoring as total_time_motoring,
+                    total_time_moored as total_time_moored,
+                    total_distance_sailed as total_distance_sailed,
+                    total_distance_motoring as total_distance_motoring
+             FROM trips WHERE "
         );
 
         if let Some(year) = year {
-            query.push_str(&format!(" AND YEAR(start_timestamp) = {}", year));
+            query.push_str(&format!(" YEAR(start_timestamp) = {}", year));
         } else if let Some(months) = last_months {
-            query.push_str(&format!(" AND start_timestamp >= DATE_SUB(NOW(), INTERVAL {} MONTH)", months));
+            query.push_str(&format!(" start_timestamp >= DATE_SUB(NOW(), INTERVAL {} MONTH)", months));
+        } else {
+            query.push_str(&format!(" start_timestamp >= DATE_SUB(NOW(), INTERVAL {} MONTH)", 12)); // default last 12 months
         }
 
         query.push_str(" ORDER BY start_timestamp DESC");
@@ -448,15 +489,16 @@ impl VesselDatabase {
             .iter()
             .map(|row| TripSummary {
                 id: row.get("id").unwrap_or(0),
-                start_date: row.get::<String, _>("start_date").unwrap_or_default(),
-                end_date: row.get("end_date"),
+                description: row.get::<String, _>("description").unwrap_or_default(),
+                start_date: row.get::<String, _>("start_ts").unwrap_or_default(),
+                end_date: row.get::<String, _>("end_ts").unwrap_or_default(),
                 total_distance_nm: row.get::<f64, _>("total_distance").unwrap_or(0.0),
                 total_time_ms: row.get::<i64, _>("total_time").unwrap_or(0),
-                sailing_time_ms: row.get::<i64, _>("sailing_time").unwrap_or(0),
-                motoring_time_ms: row.get::<i64, _>("motoring_time").unwrap_or(0),
-                moored_time_ms: row.get::<i64, _>("moored_time").unwrap_or(0),
-                sailing_distance_nm: row.get::<f64, _>("sailing_distance").unwrap_or(0.0),
-                motoring_distance_nm: row.get::<f64, _>("motoring_distance").unwrap_or(0.0),
+                sailing_time_ms: row.get::<i64, _>("total_time_sailing").unwrap_or(0),
+                motoring_time_ms: row.get::<i64, _>("total_time_motoring").unwrap_or(0),
+                moored_time_ms: row.get::<i64, _>("total_time_moored").unwrap_or(0),
+                sailing_distance_nm: row.get::<f64, _>("total_distance_sailed").unwrap_or(0.0),
+                motoring_distance_nm: row.get::<f64, _>("total_distance_motoring").unwrap_or(0.0),
             })
             .collect();
 

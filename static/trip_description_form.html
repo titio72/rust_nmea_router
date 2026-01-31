@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Update Trip Description</title>
+</head>
+<body>
+    <h1>Update Trip Description</h1>
+    <form id="tripForm">
+        <label for="tripId">Trip ID:</label>
+        <input type="number" id="tripId" name="id" required><br><br>
+        <label for="description">Description:</label>
+        <input type="text" id="description" name="description" required><br><br>
+        <button type="submit">Update</button>
+    </form>
+    <div id="result"></div>
+    <script>
+        document.getElementById('tripForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const id = document.getElementById('tripId').value;
+            const description = document.getElementById('description').value;
+            const response = await fetch('/api/trip_description', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ id: Number(id), description })
+            });
+            const resultDiv = document.getElementById('result');
+            if (response.ok) {
+                resultDiv.textContent = 'Trip description updated successfully!';
+            } else {
+                const error = await response.text();
+                resultDiv.textContent = 'Error: ' + error;
+            }
+        });
+    </script>
+</body>
+</html>

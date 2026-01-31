@@ -1,5 +1,7 @@
 /// Utility functions for NMEA2000 router
 
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
 /// Calculate true wind speed and angle from apparent wind and boat speed.
 /// 
 /// # Arguments
@@ -40,6 +42,18 @@ pub fn calculate_true_wind(
     (tw_speed, tw_angle_deg)
 }
 
+pub fn dirty_instant_to_systemtime(instant: Instant) -> SystemTime {
+    let now_instant = Instant::now();
+    let now_systemtime = SystemTime::now();
+    if instant <= now_instant {
+        let duration_ago = now_instant.duration_since(instant);
+        now_systemtime.checked_sub(duration_ago).unwrap_or(UNIX_EPOCH)
+    } else {
+        let duration_ahead = instant.duration_since(now_instant);
+        now_systemtime.checked_add(duration_ahead).unwrap_or(SystemTime::UNIX_EPOCH + Duration::from_secs(u64::MAX))
+    }
+}
+
 // given two anles in degrees, compute the smallest difference between a and b (i.e., a - b)
 pub fn angle_diff(a: f64, b: f64) -> f64 {
     let mut xx = ((a - b) % 360.0 + 360.0) % 360.0;
@@ -65,6 +79,32 @@ pub fn average_angle(angles_radians: &[f64]) -> f64 {
     }
     let avg_radians = y.atan2(x);
     (avg_radians.to_degrees() + 360.0) % 360.0
+}
+
+/// Calculate the initial heading (bearing) from position1 to position2 using the haversine formula.
+/// All lat/lon values are in degrees. Returns heading in degrees (0 = North, 90 = East).
+pub fn haversine_heading(lat1_deg: f64, lon1_deg: f64, lat2_deg: f64, lon2_deg: f64) -> f64 {
+    let lat1_rad = lat1_deg.to_radians();
+    let lat2_rad = lat2_deg.to_radians();
+    let dlon_rad = (lon2_deg - lon1_deg).to_radians();
+
+    let y = dlon_rad.sin() * lat2_rad.cos();
+    let x = lat1_rad.cos() * lat2_rad.sin() - lat1_rad.sin() * lat2_rad.cos() * dlon_rad.cos();
+    let initial_bearing = y.atan2(x).to_degrees();
+    (initial_bearing + 360.0) % 360.0
+}
+
+pub fn haversine_distance_nm(lat1_deg: f64, lon1_deg: f64, lat2_deg: f64, lon2_deg: f64) -> f64 {
+    let radius_earth_nm = 3440.065; // Earth's radius in nautical miles
+
+    let dlat_rad = (lat2_deg - lat1_deg).to_radians();
+    let dlon_rad = (lon2_deg - lon1_deg).to_radians();
+
+    let a = (dlat_rad / 2.0).sin().powi(2)
+        + lat1_deg.to_radians().cos() * lat2_deg.to_radians().cos() * (dlon_rad / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().asin();
+
+    radius_earth_nm * c
 }
 
 #[cfg(test)]

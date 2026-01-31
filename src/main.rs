@@ -21,7 +21,7 @@ use environmental_monitor::EnvironmentalMonitor;
 use db::{VesselDatabase, HealthCheckManager};
 use config::Config;
 use app_metrics::{AppMetrics, MetricsLogger};
-use frame_filter::should_process_frame;
+use frame_filter::should_process_n2k_message;
 use frame_filter::should_process_frame_by_id;
 use udp_broadcaster::UdpBroadcaster;
 
@@ -172,13 +172,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     
     // Create environmental monitor with config
-    let mut env_monitor = EnvironmentalMonitor::new(config.database.environmental.clone());
+    let mut env_monitor = EnvironmentalMonitor::new();
     
     // Create vessel status handler
     let mut vessel_status_handler = vessel_status_handler::VesselStatusHandler::new(config.database.vessel_status.clone());
     
     // Create environmental status handler
-    let mut environmental_status_handler = environmental_status_handler::EnvironmentalStatusHandler::new(env_monitor.db_periods());
+    let mut environmental_status_handler = environmental_status_handler::EnvironmentalStatusHandler::new(&config.database.environmental);
     
     // Create UDP broadcaster with config
     let mut udp_broadcaster = UdpBroadcaster::new(
@@ -237,29 +237,31 @@ fn main() -> Result<(), Box<dyn Error>> {
                     continue;
                 }
 
+                metrics.can_processed_frames += 1;
+
                 // Process the frame through the stream reader
                 if let Some(n2k_frame) = reader.process_frame(extended_id, &data) {
                     metrics.nmea_messages += 1;
                     
-                    if !should_process_frame(&config, &n2k_frame) {
+                    if !should_process_n2k_message(&config, &n2k_frame.message) {
                         continue;
                     }
+
+                    metrics.nmea_processed_messages += 1;
                     
-                    time_monitor.handle_message(&n2k_frame.message);
+                    let now = std::time::Instant::now();
+
+                    time_monitor.handle_message(&n2k_frame, now);
                     
                     // Broadcast message via UDP (if enabled)
-                    udp_broadcaster.handle_message_with_metadata(
-                        &n2k_frame.message,
-                        n2k_frame.identifier.source(),
-                        n2k_frame.identifier.priority()
-                    );
+                    udp_broadcaster.handle_message(&n2k_frame, now);
                     
                     let sync_status_and_skew = time_monitor.time_sync_status();
                     metrics.gnss_time_skew = sync_status_and_skew.skew;
                     metrics.gnss_time_skew_status = sync_status_and_skew.status;
                     if sync_status_and_skew.status == TimeSyncStatus::Synchronized {
-                        vessel_monitor.handle_message(&n2k_frame.message);
-                        if let Some(vessel_status) = vessel_monitor.generate_status() && vessel_status.is_valid() {
+                        vessel_monitor.handle_message(&n2k_frame, now);
+                        if let Some(vessel_status) = vessel_monitor.generate_status(now) && vessel_status.is_valid() {
                             match vessel_status_handler.handle_vessel_status(&vessel_db, vessel_status.clone()) {
                                 Ok(true) => metrics.vessel_reports += 1,
                                 Ok(false) => {},
@@ -269,8 +271,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                         }
 
-                        env_monitor.handle_message(&n2k_frame.message);
-                        match environmental_status_handler.handle_environment_status(&vessel_db, &mut env_monitor) {
+                        env_monitor.handle_message(&n2k_frame, now);
+                        match environmental_status_handler.handle_environment_status(&vessel_db, &mut env_monitor, now) {
                             Ok(count) => metrics.env_reports += count as u64,
                             Err(e) => {
                                 warn!("Database error during environmental write: {}", e);

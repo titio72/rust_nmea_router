@@ -8,8 +8,10 @@ use crate::time_monitor::TimeSyncStatus;
 pub struct AppMetrics {
     /// Number of CAN frames received
     pub can_frames: u64,
+    pub can_processed_frames: u64,
     /// Number of complete NMEA2000 messages assembled
     pub nmea_messages: u64,
+    pub nmea_processed_messages: u64,
     /// Number of vessel status reports written to database
     pub vessel_reports: u64,
     /// Number of environmental data reports written to database
@@ -25,7 +27,9 @@ impl AppMetrics {
     pub fn new() -> Self {
         Self {
             can_frames: 0,
+            can_processed_frames: 0,
             nmea_messages: 0,
+            nmea_processed_messages: 0,
             vessel_reports: 0,
             env_reports: 0,
             can_errors: 0,
@@ -37,7 +41,9 @@ impl AppMetrics {
     /// Reset all counters to zero
     pub fn reset(&mut self) {
         self.can_frames = 0;
+        self.can_processed_frames = 0;
         self.nmea_messages = 0;
+        self.nmea_processed_messages = 0;
         self.vessel_reports = 0;
         self.env_reports = 0;
         self.can_errors = 0;
@@ -48,9 +54,11 @@ impl AppMetrics {
     /// Log current metrics to the info log
     pub fn log(&self) {
         info!(
-            "[Metrics] CAN frames: {}, NMEA messages: {}, Vessel reports: {}, Env reports: {}, CAN errors: {}, GNSS time sync: {:?}/{} ms",
+            "[Metrics] CAN frames: {}, CAN processed frames: {}, NMEA messages: {}, NMEA processed messages: {}, Vessel reports: {}, Env reports: {}, CAN errors: {}, GNSS time sync: {:?}/{} ms",
             self.can_frames,
+            self.can_processed_frames,
             self.nmea_messages,
+            self.nmea_processed_messages,
             self.vessel_reports,
             self.env_reports,
             self.can_errors,
@@ -103,7 +111,9 @@ mod tests {
     fn test_new_metrics_are_zero() {
         let metrics = AppMetrics::new();
         assert_eq!(metrics.can_frames, 0);
+        assert_eq!(metrics.can_processed_frames, 0);
         assert_eq!(metrics.nmea_messages, 0);
+        assert_eq!(metrics.nmea_processed_messages, 0);
         assert_eq!(metrics.vessel_reports, 0);
         assert_eq!(metrics.env_reports, 0);
         assert_eq!(metrics.can_errors, 0);

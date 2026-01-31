@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use nmea2k::pgns::{ActualPressure, Attitude, Humidity, Temperature, VesselHeading, WindData};
-use crate::config::EnvironmentalConfig;
 use crate::utilities::calculate_true_wind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -86,7 +85,6 @@ pub struct Sample<T> {
 }
 
 pub struct EnvironmentalMonitor {
-    db_periods: [Duration; 7],
     pub data_samples: [VecDeque<Sample<f64>>; 7],
     last_heading_event: Option<Instant>,
     last_heading_degrees: Option<f64>,
@@ -95,7 +93,7 @@ pub struct EnvironmentalMonitor {
 }
 
 impl EnvironmentalMonitor {
-    pub fn new(config: EnvironmentalConfig) -> Self {
+    pub fn new() -> Self {
         let res = Self {
             data_samples: [
                 VecDeque::new(), // Pressure    
@@ -105,15 +103,6 @@ impl EnvironmentalMonitor {
                 VecDeque::new(), // WindSpeed
                 VecDeque::new(), // WindDir
                 VecDeque::new(), // Roll
-            ],
-            db_periods: [
-                config.wind_speed_interval(),
-                config.wind_direction_interval(),
-                config.roll_interval(),
-                config.pressure_interval(),
-                config.cabin_temp_interval(),
-                config.water_temp_interval(),
-                config.humidity_interval(),
             ],
             last_heading_event: None,
             last_heading_degrees: None,
@@ -125,9 +114,8 @@ impl EnvironmentalMonitor {
 
     /// Process a temperature message (PGN 130312)
     /// Instance 0 is typically the cabin temperature (and source 4 is "Inside Ambient")
-    pub fn process_temperature(&mut self, temp: &Temperature) {
+    pub fn process_temperature(&mut self, temp: &Temperature, now: Instant) {
         if temp.instance == 0 { // Cabin temperature
-            let now = Instant::now();
             let celsius = temp.temperature - 273.15;
             let source = temp.source;
             let instance = temp.instance;
@@ -149,35 +137,47 @@ impl EnvironmentalMonitor {
     }
 
     /// Process wind data message (PGN 130306)
-    fn process_wind(&mut self, wind: &WindData) {
-        let now = Instant::now();
+    fn process_wind(&mut self, wind: &WindData, now: Instant) {
         
         // To compute wind direction, we need boat heading and speed
-        self.reset_stale_heading(); // prevent using stale heading
+        self.reset_stale_heading(now); // prevent using stale heading
         if self.last_boat_speed_knots.is_none() || self.last_heading_degrees.is_none() {
             // Cannot compute true wind without boat speed and heading
             return;
         }
 
-        let boat_speed = self.last_boat_speed_knots.unwrap();
-        let boat_heading = self.last_heading_degrees.unwrap();
+        //process wind speed
+        let boat_speed = if self.last_boat_speed_knots.is_none() || self.last_boat_speed_event.is_none() || now.duration_since(self.last_boat_speed_event.unwrap()) > Duration::from_secs(1) {
+            // Boat speed data is none or stale
+            return;
+        } else {
+            self.last_boat_speed_knots.unwrap()
+        };
         let (true_wind_speed, true_wind_angle_deg) = calculate_true_wind(wind.speed_knots(), wind.angle.to_degrees(), boat_speed);
+        self.data_samples[MetricId::WindSpeed.as_index()].push_back(Sample {
+            value: true_wind_speed,
+            timestamp: now,
+        });
+        
+        // now process wind angle
+        let boat_heading = if self.last_heading_degrees.is_none() || self.last_heading_event.is_none() || now.duration_since(self.last_heading_event.unwrap()) > Duration::from_secs(1) {
+            // Heading data is none or stale
+            return;
+        } else {
+            self.last_heading_degrees.unwrap()
+        };
+
         let absolute_angle = (boat_heading + true_wind_angle_deg) % 360.0;
         // Store wind direction (convert radians to degrees)
         self.data_samples[MetricId::WindDir.as_index()].push_back(Sample {
             value: absolute_angle,
             timestamp: now,
         });
-        self.data_samples[MetricId::WindSpeed.as_index()].push_back(Sample {
-            value: true_wind_speed,
-            timestamp: now,
-        });
     }
     
     /// Process a humidity message (PGN 130313)
     /// Standalone humidity sensor reading
-    fn process_humidity(&mut self, hum: &Humidity) {
-        let now = Instant::now();
+    fn process_humidity(&mut self, hum: &Humidity, now: Instant) {
         
         self.data_samples[MetricId::Humidity.as_index()].push_back(Sample {
             value: hum.actual_humidity,
@@ -187,8 +187,7 @@ impl EnvironmentalMonitor {
     
     /// Process an actual pressure message (PGN 130314)
     /// Standalone pressure sensor reading
-    fn process_actual_pressure(&mut self, pressure: &ActualPressure) {
-        let now = Instant::now();
+    fn process_actual_pressure(&mut self, pressure: &ActualPressure, now: Instant) {
         let instance = pressure.instance;
         let source = pressure.source;
 
@@ -203,9 +202,8 @@ impl EnvironmentalMonitor {
     
     /// Process an attitude message (PGN 127257)
     /// Extract roll angle in degrees
-    fn process_attitude(&mut self, attitude: &Attitude) {
+    fn process_attitude(&mut self, attitude: &Attitude, now: Instant) {
         if let Some(roll_deg) = attitude.roll_degrees() {
-            let now = Instant::now();
             
             self.data_samples[MetricId::Roll.as_index()].push_back(Sample {
                 value: roll_deg,
@@ -214,21 +212,19 @@ impl EnvironmentalMonitor {
         }
     }
 
-    fn reset_stale_heading(&mut self) {
-        if Instant::now().duration_since(self.last_heading_event.unwrap_or(Instant::now())) > Duration::from_secs(10) {
+    fn reset_stale_heading(&mut self, now: Instant) {
+        if now.duration_since(self.last_heading_event.unwrap_or(now)) > Duration::from_secs(10) {
             self.last_heading_event = None;
             self.last_heading_degrees = None;
         }
     }
 
-    fn process_vessel_heading(&mut self, msg_heading: &VesselHeading) {
-        let now = Instant::now();
+    fn process_vessel_heading(&mut self, msg_heading: &VesselHeading, now: Instant) {
         self.last_heading_event = Some(now);
         self.last_heading_degrees = Some(msg_heading.heading.to_degrees());
     }
 
-    fn process_cog_sog(&mut self, msg_sog: &nmea2k::pgns::CogSogRapidUpdate) {
-        let now = Instant::now();
+    fn process_cog_sog(&mut self, msg_sog: &nmea2k::pgns::CogSogRapidUpdate, now: Instant) {
         self.last_boat_speed_event = Some(now);
         self.last_boat_speed_knots = Some(msg_sog.sog_knots());
     }
@@ -274,42 +270,37 @@ impl EnvironmentalMonitor {
     pub fn has_samples(&self, metric: MetricId) -> bool {
         !self.data_samples[metric.as_index()].is_empty()
     }
-    
-    /// Get the database persistence periods for all metrics
-    pub fn db_periods(&self) -> [Duration; 7] {
-        self.db_periods
-    }
 }
 
 impl Default for EnvironmentalMonitor {
     fn default() -> Self {
-        Self::new(crate::config::EnvironmentalConfig::default())
+        Self::new()
     }
 }
 
 impl nmea2k::MessageHandler for EnvironmentalMonitor {
-    fn handle_message(&mut self, message: &nmea2k::N2kMessage) {
-        match message {
+    fn handle_message(&mut self, frame: &nmea2k::N2kFrame, now: Instant) {
+        match &frame.message {
             nmea2k::pgns::N2kMessage::Temperature(temp) => {
-                self.process_temperature(temp);
+                self.process_temperature(temp, now);
             }
             nmea2k::pgns::N2kMessage::WindData(wind) => {
-                self.process_wind(wind);
+                self.process_wind(wind, now);
             }
             nmea2k::pgns::N2kMessage::Humidity(hum) => {
-                self.process_humidity(hum);
+                self.process_humidity(hum, now);
             }
             nmea2k::pgns::N2kMessage::ActualPressure(pressure) => {
-                self.process_actual_pressure(pressure);
+                self.process_actual_pressure(pressure, now);
             }
             nmea2k::pgns::N2kMessage::Attitude(attitude) => {
-                self.process_attitude(attitude);
+                self.process_attitude(attitude, now);
             }
             nmea2k::pgns::N2kMessage::VesselHeading(heading) => {
-                self.process_vessel_heading(heading);
+                self.process_vessel_heading(heading, now);
             }
             nmea2k::pgns::N2kMessage::CogSogRapidUpdate(sog) => {
-                self.process_cog_sog(sog);
+                self.process_cog_sog(sog, now);
             }
             _ => {} // Ignore messages we're not interested in
         }
@@ -355,16 +346,14 @@ mod tests {
 
     #[test]
     fn test_environmental_monitor_creation() {
-        let config = EnvironmentalConfig::default();
-        let monitor = EnvironmentalMonitor::new(config);
+        let monitor = EnvironmentalMonitor::new();
         assert_eq!(monitor.data_samples[MetricId::Pressure.as_index()].len(), 0);
         assert_eq!(monitor.data_samples[MetricId::CabinTemp.as_index()].len(), 0);
     }
 
     #[test]
     fn test_process_pressure() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
+        let mut monitor = EnvironmentalMonitor::new();
         
         // Create pressure message using from_bytes: 101325 Pa (1 atm)
         let data = vec![
@@ -375,14 +364,13 @@ mod tests {
         ];
         let pressure_msg = ActualPressure::from_bytes(&data).unwrap();
         
-        monitor.process_actual_pressure(&pressure_msg);
+        monitor.process_actual_pressure(&pressure_msg, Instant::now());
         assert_eq!(monitor.data_samples[MetricId::Pressure.as_index()].len(), 1);
     }
 
     #[test]
     fn test_process_temperature_cabin() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
+        let mut monitor = EnvironmentalMonitor::new();
         
         // Create temperature message: 20.5°C = 293.65 K
         // Source must be 4 (Inside Ambient) for cabin temp
@@ -395,14 +383,13 @@ mod tests {
         ];
         let temp_msg = Temperature::from_bytes(&data).unwrap();
         
-        monitor.process_temperature(&temp_msg);
+        monitor.process_temperature(&temp_msg, Instant::now());
         assert_eq!(monitor.data_samples[MetricId::CabinTemp.as_index()].len(), 1);
     }
 
     #[test]
     fn test_process_temperature_water() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
+        let mut monitor = EnvironmentalMonitor::new();
         
         // Create temperature message: 15.5°C = 288.65 K
         // Source must be 0 (Water) and instance=0 for water temp
@@ -415,14 +402,13 @@ mod tests {
         ];
         let temp_msg = Temperature::from_bytes(&data).unwrap();
         
-        monitor.process_temperature(&temp_msg);
+        monitor.process_temperature(&temp_msg, Instant::now());
         assert_eq!(monitor.data_samples[MetricId::WaterTemp.as_index()].len(), 1);
     }
 
     #[test]
     fn test_process_humidity() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
+        let mut monitor = EnvironmentalMonitor::new();
         
         // Create humidity message: 65.0%
         // Need at least 6 bytes for Humidity::from_bytes
@@ -435,14 +421,13 @@ mod tests {
         ];
         let humidity_msg = Humidity::from_bytes(&data).unwrap();
         
-        monitor.process_humidity(&humidity_msg);
+        monitor.process_humidity(&humidity_msg, Instant::now());
         assert_eq!(monitor.data_samples[MetricId::Humidity.as_index()].len(), 1);
     }
 
     #[test]
     fn test_process_wind_but_no_boat_speed() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
+        let mut monitor = EnvironmentalMonitor::new();
         
         // Create wind message: 5.5 m/s, 180° (pi radians)
         let data = vec![
@@ -453,15 +438,14 @@ mod tests {
         ];
         let wind_msg = WindData::from_bytes(&data).unwrap();
         
-        monitor.process_wind(&wind_msg);
+        monitor.process_wind(&wind_msg, Instant::now());
         assert_eq!(monitor.data_samples[MetricId::WindSpeed.as_index()].len(), 0);
         assert_eq!(monitor.data_samples[MetricId::WindDir.as_index()].len(), 0);
     }
 
     #[test]
     fn test_process_wind_with_boat_speed_and_heading() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
+        let mut monitor = EnvironmentalMonitor::new();
         
         monitor.last_boat_speed_knots = Some(0.0); // Simulate boat speed available - boat is not moving
         monitor.last_boat_speed_event = Some(Instant::now());
@@ -478,15 +462,14 @@ mod tests {
         ];
         let wind_msg = WindData::from_bytes(&data).unwrap();
         
-        monitor.process_wind(&wind_msg);
+        monitor.process_wind(&wind_msg, Instant::now());
         assert_eq!(monitor.data_samples[MetricId::WindSpeed.as_index()].len(), 1);
         assert_eq!(monitor.data_samples[MetricId::WindDir.as_index()].len(), 1);
     }
 
     #[test]
     fn test_process_attitude_roll() {
-        let config = EnvironmentalConfig::default();
-        let mut monitor = EnvironmentalMonitor::new(config);
+        let mut monitor = EnvironmentalMonitor::new();
         
         let attitude_msg = Attitude::from_bytes(&vec![
             0x01,
@@ -495,7 +478,7 @@ mod tests {
             0xE8, 0x03, // Roll = 1000 * 0.0001 = 0.1 rad ≈ 5.73°
         ]).unwrap();
         
-        monitor.process_attitude(&attitude_msg);
+        monitor.process_attitude(&attitude_msg, Instant::now());
         assert_eq!(monitor.data_samples[MetricId::Roll.as_index()].len(), 1);
     }
 

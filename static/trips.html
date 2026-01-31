@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Trips List</title>
+</head>
+<body>
+    <h1>Trips</h1>
+    <table border="1">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Description</th>
+                <th>Start Date</th>
+                <th>End Date</th>
+                <th>Total Distance (NM)</th>
+                <th>Sailing Distance (NM)</th>
+                <th>Motoring Distance (NM)</th>
+            </tr>
+        </thead>
+        <tbody id="tripsBody">
+            <!-- Trips will be inserted here -->
+        </tbody>
+    </table>
+    <script>
+        async function loadTrips() {
+            const response = await fetch('/api/trips');
+            if (!response.ok) {
+                document.getElementById('tripsBody').innerHTML = '<tr><td colspan="4">Failed to load trips</td></tr>';
+                return;
+            }
+            const trips = await response.json();
+            const tbody = document.getElementById('tripsBody');
+            tbody.innerHTML = '';
+            for (const trip of trips.data) {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${trip.id}</td>
+                    <td>${trip.description || ''}</td>
+                    <td>${trip.start_date || ''}</td>
+                    <td>${trip.end_date || ''}</td>
+                    <td>${trip.total_distance_nm.toFixed(2)}</td>
+                    <td>${trip.sailing_distance_nm.toFixed(2)}</td>
+                    <td>${trip.motoring_distance_nm.toFixed(2)}</td>
+                `;
+                tbody.appendChild(row);
+            }
+        }
+        loadTrips();
+    </script>
+</body>
+</html>

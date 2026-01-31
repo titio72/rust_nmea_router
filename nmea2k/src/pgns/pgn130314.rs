@@ -12,6 +12,20 @@ pub struct ActualPressure {
 }
 
 impl ActualPressure {
+    // Constructor
+    // instance: sensor instance
+    // source: sensor source
+    // pressure: Pascals
+    pub fn new(instance: u8, source: u8, pressure: f64) -> Self {
+        Self {
+            pgn: 130314,
+            sid: 0,
+            instance,
+            source,
+            pressure,
+        }
+    }
+
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 6 {
             return None;

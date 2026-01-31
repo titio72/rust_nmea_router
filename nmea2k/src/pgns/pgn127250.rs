@@ -21,6 +21,18 @@ pub enum HeadingReference {
 }
 
 impl VesselHeading {
+
+    pub fn new(heading: f64, reference: HeadingReference) -> Self {
+        Self {
+            pgn: 127250,
+            sid: 0,
+            heading,
+            deviation: None,
+            variation: None,
+            reference,
+        }
+    }
+
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 8 {
             return None;
