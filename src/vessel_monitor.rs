@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use nmea2k::pgns::{CogSogRapidUpdate, HeadingReference, PositionRapidUpdate};
-use crate::config::VesselStatusConfig;
+use crate::application_state::ApplicationState;
 use crate::utilities::{angle_diff, average_angle, calculate_true_wind, haversine_distance_nm};
 
 const EVENT_INTERVAL: Duration = Duration::from_secs(10);
@@ -84,6 +85,12 @@ impl VesselStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Position {
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
 impl Position {
     /// Returns the distance to another position in nautical miles (using Haversine formula)
     pub fn distance_to_nm(&self, other: &Position) -> f64 {
@@ -93,12 +100,6 @@ impl Position {
     pub fn course_from_deg(&self, other: &Position) -> f64 {
         crate::utilities::haversine_heading(self.latitude, self.longitude, other.latitude, other.longitude)
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Position {
-    pub latitude: f64,
-    pub longitude: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -135,10 +136,11 @@ pub struct VesselMonitor {
     headings: VecDeque<HeadingSample>,
     last_event_time: Instant,
     engine_on: bool,
+    application_state: Arc<Mutex<ApplicationState>>,
 }
 
 impl VesselMonitor {
-    pub fn new(_config: VesselStatusConfig) -> Self {
+    pub fn new(application_state: Arc<Mutex<ApplicationState>>) -> Self {
         let now = Instant::now();
         VesselMonitor {
             positions: VecDeque::new(),
@@ -147,6 +149,7 @@ impl VesselMonitor {
             headings: VecDeque::new(),
             last_event_time: now,
             engine_on: false,
+            application_state,
         }
     }
 
@@ -214,6 +217,8 @@ impl VesselMonitor {
             position,
             timestamp: timestamp,
         });
+
+        self.application_state.lock().unwrap().update_position(position, median_position.1.unwrap_or(position), timestamp);
 
         // Clean up old position samples (keep only enuogh to calculate the mooring status + 30s buffer)
         let cutoff = timestamp - MOORING_DETECTION_WINDOW - Duration::from_secs(30);
@@ -289,16 +294,31 @@ impl VesselMonitor {
     }
 
     pub fn process_heading(&mut self, heading_msg: &nmea2k::pgns::VesselHeading, timestamp: Instant) {
-        if heading_msg.reference == HeadingReference::True {
-            let heading_deg = heading_msg.heading.to_degrees();
-            //println!("True heading received: {:.2} deg", heading_deg);
-            self.headings.push_back(HeadingSample {
-                heading_deg: heading_deg,
-                timestamp: timestamp,
-            });
+        if heading_msg.reference == HeadingReference::Magnetic {
+            // For magnetic heading, we would need to apply variation correction
+            // For simplicity, we skip magnetic headings in this implementation
+            if let Some(pos) = self.positions.back() {
+                let heading_deg = heading_msg.heading.to_degrees();
+                let var = match crate::utilities::get_variation_deg(pos.position.latitude, pos.position.longitude, chrono::Utc::now()) {
+                    Ok(v) => v,
+                    Err(_) => 0.0, // Unable to get variation, revert to magnetic - better than nothing
+                };
+                let true_heading_deg = crate::utilities::normalize0_360(heading_deg + var);
+                self.headings.push_back(HeadingSample {
+                    heading_deg: true_heading_deg,
+                    timestamp: timestamp,
+                });
+                self.application_state.lock().unwrap().update_heading(true_heading_deg, timestamp);
+            } else {
+                // No position available to calculate variation, but better magnetic than nothing
+                self.headings.push_back(HeadingSample {
+                    heading_deg: heading_msg.heading.to_degrees(),
+                    timestamp: timestamp,
+                });
+            }
         }
 
-        // Clean up old heading samples (keep only last 30s + buffer)
+        // Clean up old heading samples (keep only last interval + buffer)
         let cutoff = timestamp - EVENT_INTERVAL - Duration::from_secs(5);
         while let Some(sample) = self.headings.front() {
             if sample.timestamp < cutoff {
@@ -487,7 +507,11 @@ impl nmea2k::MessageHandler for VesselMonitor {
 
 impl Default for VesselMonitor {
     fn default() -> Self {
-        Self::new(VesselStatusConfig::default())
+        use std::sync::{Arc, Mutex};
+        use crate::config::Config;
+        let config = Config::default();
+        let app_state = Arc::new(Mutex::new(ApplicationState::new(config)));
+        Self::new(app_state)
     }
 }
 
@@ -521,8 +545,7 @@ mod tests {
 
         #[test]
         fn test_wind_sample_ignored_if_no_recent_speed() {
-            let config = VesselStatusConfig::default();
-            let mut monitor = VesselMonitor::new(config);
+            let mut monitor = VesselMonitor::new();
             // Add position samples
             for _ in 0..10 {
                 let position_msg = PositionRapidUpdate {
@@ -541,8 +564,7 @@ mod tests {
 
         #[test]
         fn test_wind_sample_ignored_if_speed_outdated() {
-            let config = VesselStatusConfig::default();
-            let mut monitor = VesselMonitor::new(config);
+            let mut monitor = VesselMonitor::new();
             // Add position samples
             for _ in 0..10 {
                 let position_msg = PositionRapidUpdate {
@@ -563,8 +585,7 @@ mod tests {
 
         #[test]
         fn test_wind_rolling_window() {
-            let config = VesselStatusConfig::default();
-            let mut monitor = VesselMonitor::new(config);
+            let mut monitor = VesselMonitor::new();
             // Add position samples
             for _ in 0..10 {
                 let position_msg = PositionRapidUpdate {
@@ -598,8 +619,7 @@ mod tests {
 
     #[test]
     fn test_vessel_status_creation() {
-        let config = VesselStatusConfig::default();
-        let mut monitor = VesselMonitor::new(config);
+        let mut monitor = VesselMonitor::new();
         // Add position samples to allow status generation
         for _ in 0..10 {
             let position_msg = PositionRapidUpdate {
@@ -645,8 +665,7 @@ mod tests {
     }
     #[test]
     fn test_process_position() {
-        let config = VesselStatusConfig::default();
-        let mut monitor = VesselMonitor::new(config);
+        let mut monitor = VesselMonitor::new();
         
         // Add 10 positions to meet minimum requirement
         for _ in 0..10 {
@@ -675,8 +694,7 @@ mod tests {
 
     #[test]
     fn test_process_cog_sog() {
-        let config = VesselStatusConfig::default();
-        let mut monitor = VesselMonitor::new(config);
+        let mut monitor = VesselMonitor::new();
         
         // Create a valid COG/SOG message using from_bytes
         let data = vec![
@@ -695,8 +713,7 @@ mod tests {
 
     #[test]
     fn test_noise_filter_rejects_high_sog() {
-        let config = VesselStatusConfig::default();
-        let mut monitor = VesselMonitor::new(config);
+        let mut monitor = VesselMonitor::new();
         
         // Try to add a speed sample > 25 knots (should be rejected)
         let data_high = vec![
@@ -727,8 +744,7 @@ mod tests {
 
     #[test]
     fn test_noise_filter_rejects_distant_position() {
-        let config = VesselStatusConfig::default();
-        let mut monitor = VesselMonitor::new(config);
+        let mut monitor = VesselMonitor::new();
         
         // Add several positions at approximately the same location
         // Need at least 10 samples for validation to work
@@ -770,8 +786,7 @@ mod tests {
 
     #[test]
     fn test_noise_filter_requires_minimum_samples() {
-        let config = VesselStatusConfig::default();
-        let mut monitor = VesselMonitor::new(config);
+        let mut monitor = VesselMonitor::new();
         
         // Add only 5 positions (less than minimum required) - these should be accepted during bootstrap
         for _ in 0..5 {
@@ -815,8 +830,7 @@ mod tests {
 
     #[test]
     fn test_mooring_detection_stationary() {
-        let config = VesselStatusConfig::default();
-        let mut monitor = VesselMonitor::new(config);
+        let mut monitor = VesselMonitor::new();
         
         // Add multiple positions at the same location over time
         let position_msg = PositionRapidUpdate {
@@ -840,8 +854,7 @@ mod tests {
 
     #[test]
     fn test_vessel_status_generation() {
-        let config = VesselStatusConfig::default();
-        let mut monitor = VesselMonitor::new(config);
+        let mut monitor = VesselMonitor::new();
         
         // Add enough position samples to meet minimum requirement
         for _ in 0..10 {

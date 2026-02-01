@@ -1,8 +1,10 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
+use tracing::{info, warn};
 
 use nmea2k::pgns::{ActualPressure, Attitude, Humidity, Temperature, VesselHeading, WindData};
 use crate::utilities::calculate_true_wind;
+use crate::vessel_monitor::Position;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -90,11 +92,13 @@ pub struct EnvironmentalMonitor {
     last_heading_degrees: Option<f64>,
     last_boat_speed_knots: Option<f64>,
     last_boat_speed_event: Option<Instant>,
+    last_position_event: Option<Instant>,
+    last_position: Option<Position>,
 }
 
 impl EnvironmentalMonitor {
     pub fn new() -> Self {
-        let res = Self {
+        Self {
             data_samples: [
                 VecDeque::new(), // Pressure    
                 VecDeque::new(), // CabinTemp
@@ -108,8 +112,9 @@ impl EnvironmentalMonitor {
             last_heading_degrees: None,
             last_boat_speed_knots: None,
             last_boat_speed_event: None,
-        };
-        res
+            last_position_event: None,
+            last_position: None,
+        }
     }
 
     /// Process a temperature message (PGN 130312)
@@ -220,11 +225,31 @@ impl EnvironmentalMonitor {
     }
 
     fn process_vessel_heading(&mut self, msg_heading: &VesselHeading, now: Instant) {
-        if msg_heading.reference != nmea2k::pgns::HeadingReference::True {
-            return;
+        if msg_heading.reference == nmea2k::pgns::HeadingReference::Magnetic {
+            if let Some(pos) = self.last_position {
+                let heading_deg = msg_heading.heading.to_degrees();
+                let var = match crate::utilities::get_variation_deg(pos.latitude, pos.longitude, chrono::Utc::now()) {
+                    Ok(v) => v,
+                    Err(_) => 0.0, // Unable to get variation, revert to magnetic - better than nothing
+                };
+                let true_heading_deg = crate::utilities::normalize0_360(heading_deg + var);
+                self.last_heading_event = Some(now);
+                self.last_heading_degrees = Some(true_heading_deg);
+            } else {
+                // No position available to calculate variation, but better magnetic than nothing
+                warn!("No position available to compute magnetic variation, using magnetic heading as-is");
+                self.last_heading_event = Some(now);
+                self.last_heading_degrees = Some(msg_heading.heading.to_degrees());}
         }
-        self.last_heading_event = Some(now);
-        self.last_heading_degrees = Some(msg_heading.heading.to_degrees());
+    }
+
+    fn process_position(&mut self, msg_position: &nmea2k::pgns::PositionRapidUpdate, now: Instant) {
+        let position = Position {
+            latitude: msg_position.latitude,
+            longitude: msg_position.longitude,
+        };
+        self.last_position_event = Some(now);
+        self.last_position = Some(position);
     }
 
     fn process_cog_sog(&mut self, msg_sog: &nmea2k::pgns::CogSogRapidUpdate, now: Instant) {
@@ -275,6 +300,7 @@ impl EnvironmentalMonitor {
     }
 }
 
+
 impl Default for EnvironmentalMonitor {
     fn default() -> Self {
         Self::new()
@@ -304,6 +330,9 @@ impl nmea2k::MessageHandler for EnvironmentalMonitor {
             }
             nmea2k::pgns::N2kMessage::CogSogRapidUpdate(sog) => {
                 self.process_cog_sog(sog, now);
+            }
+            nmea2k::pgns::N2kMessage::PositionRapidUpdate(position) => {
+                self.process_position(position, now);
             }
             _ => {} // Ignore messages we're not interested in
         }

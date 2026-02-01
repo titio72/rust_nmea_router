@@ -2,6 +2,10 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::{DateTime, Datelike};
+use time::Date;
+use world_magnetic_model::{GeomagneticField, uom::si::{angle::degree, f32::{Angle, Length}, length::meter}};
+
 /// Calculate true wind speed and angle from apparent wind and boat speed.
 /// 
 /// # Arguments
@@ -106,6 +110,32 @@ pub fn haversine_distance_nm(lat1_deg: f64, lon1_deg: f64, lat2_deg: f64, lon2_d
 
     radius_earth_nm * c
 }
+
+#[derive(Debug)]
+pub enum VariationError {
+    InvalidDate,
+    MagneticFieldError,
+}
+
+pub fn get_variation_deg(lat_deg: f64, lon_deg: f64, timestamp: DateTime<chrono::Utc>) -> Result<f64, VariationError> {
+    let date = Date::from_ordinal_date(timestamp.year(), timestamp.ordinal() as u16)
+        .map_err(|_| VariationError::InvalidDate)?;
+
+    let geomagnetic_field_result = GeomagneticField::new(
+        Length::new::<meter>(0.0),
+        Angle::new::<degree>(lat_deg as f32),
+        Angle::new::<degree>(lon_deg as f32),
+        date,
+    );
+
+    let declination = geomagnetic_field_result
+        .map_err(|_| VariationError::MagneticFieldError)?
+        .declination()
+        .get::<degree>() as f64;
+
+    Ok(declination)
+}
+
 
 #[cfg(test)]
 mod tests {
