@@ -6,7 +6,7 @@ use crate::application_state::ApplicationState;
 use crate::utilities::{angle_diff, average_angle, calculate_true_wind, haversine_distance_nm};
 
 const EVENT_INTERVAL: Duration = Duration::from_secs(10);
-const MOORING_DETECTION_WINDOW: Duration = Duration::from_secs(120); // 2 minutes
+const MOORING_DETECTION_WINDOW: Duration = Duration::from_secs(180); // 3 minutes
 const MOORING_THRESHOLD_METERS: f64 = 30.0; // 30 meters radius
 const MOORING_ACCURACY: f64 = 0.90; // 90% of positions within threshold
 const MAX_VALID_SOG_KN: f64 = 25.0; // 25 knots (noise filter)
@@ -545,7 +545,7 @@ mod tests {
 
         #[test]
         fn test_wind_sample_ignored_if_no_recent_speed() {
-            let mut monitor = VesselMonitor::new();
+            let mut monitor = VesselMonitor::default();
             // Add position samples
             for _ in 0..10 {
                 let position_msg = PositionRapidUpdate {
@@ -564,7 +564,7 @@ mod tests {
 
         #[test]
         fn test_wind_sample_ignored_if_speed_outdated() {
-            let mut monitor = VesselMonitor::new();
+            let mut monitor = VesselMonitor::default();
             // Add position samples
             for _ in 0..10 {
                 let position_msg = PositionRapidUpdate {
@@ -585,7 +585,7 @@ mod tests {
 
         #[test]
         fn test_wind_rolling_window() {
-            let mut monitor = VesselMonitor::new();
+            let mut monitor = VesselMonitor::default();
             // Add position samples
             for _ in 0..10 {
                 let position_msg = PositionRapidUpdate {
@@ -619,7 +619,7 @@ mod tests {
 
     #[test]
     fn test_vessel_status_creation() {
-        let mut monitor = VesselMonitor::new();
+        let mut monitor = VesselMonitor::default();
         // Add position samples to allow status generation
         for _ in 0..10 {
             let position_msg = PositionRapidUpdate {
@@ -665,7 +665,7 @@ mod tests {
     }
     #[test]
     fn test_process_position() {
-        let mut monitor = VesselMonitor::new();
+        let mut monitor = VesselMonitor::default();
         
         // Add 10 positions to meet minimum requirement
         for _ in 0..10 {
@@ -694,7 +694,7 @@ mod tests {
 
     #[test]
     fn test_process_cog_sog() {
-        let mut monitor = VesselMonitor::new();
+        let mut monitor = VesselMonitor::default();
         
         // Create a valid COG/SOG message using from_bytes
         let data = vec![
@@ -713,7 +713,7 @@ mod tests {
 
     #[test]
     fn test_noise_filter_rejects_high_sog() {
-        let mut monitor = VesselMonitor::new();
+        let mut monitor = VesselMonitor::default();
         
         // Try to add a speed sample > 25 knots (should be rejected)
         let data_high = vec![
@@ -744,7 +744,7 @@ mod tests {
 
     #[test]
     fn test_noise_filter_rejects_distant_position() {
-        let mut monitor = VesselMonitor::new();
+        let mut monitor = VesselMonitor::default();
         
         // Add several positions at approximately the same location
         // Need at least 10 samples for validation to work
@@ -786,7 +786,7 @@ mod tests {
 
     #[test]
     fn test_noise_filter_requires_minimum_samples() {
-        let mut monitor = VesselMonitor::new();
+        let mut monitor = VesselMonitor::default();
         
         // Add only 5 positions (less than minimum required) - these should be accepted during bootstrap
         for _ in 0..5 {
@@ -830,7 +830,7 @@ mod tests {
 
     #[test]
     fn test_mooring_detection_stationary() {
-        let mut monitor = VesselMonitor::new();
+        let mut monitor = VesselMonitor::default();
         
         // Add multiple positions at the same location over time
         let position_msg = PositionRapidUpdate {
@@ -854,7 +854,7 @@ mod tests {
 
     #[test]
     fn test_vessel_status_generation() {
-        let mut monitor = VesselMonitor::new();
+        let mut monitor = VesselMonitor::default();
         
         // Add enough position samples to meet minimum requirement
         for _ in 0..10 {

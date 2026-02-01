@@ -144,10 +144,16 @@ impl TimeMonitor {
     }
 
     fn set_system_time(&self, nmea_time: &NMEASystemTime) {
-        let unix_timestamp = nmea_time.date_time.to_unix_timestamp();// as i32;
-        let millis = nmea_time.date_time.milliseconds() as i64;// as i32;
+        let unix_timestamp = nmea_time.date_time.to_unix_timestamp();
+        let millis = nmea_time.date_time.milliseconds() as i64;
         
+        // TimeSpec expects different types on 32-bit vs 64-bit systems
+        // On 64-bit: (i64, i64), on 32-bit: (i32, i32)
+        #[cfg(target_pointer_width = "64")]
         let timespec = TimeSpec::new(unix_timestamp, millis * 1_000_000);
+        
+        #[cfg(target_pointer_width = "32")]
+        let timespec = TimeSpec::new(unix_timestamp as i32, (millis * 1_000_000) as i32);
         
         match clock_settime(ClockId::CLOCK_REALTIME, timespec) {
             Ok(_) => {
@@ -240,20 +246,23 @@ mod tests {
 
     #[test]
     fn test_time_monitor_custom_threshold() {
-        let monitor = TimeMonitor::new(1000, false);
-        assert_eq!(monitor.time_skew_threshold_ms, 1000);
+        let monitor = TimeMonitor::default();
+        assert_eq!(monitor.time_skew_threshold_ms, 500);
     }
 
     #[test]
     fn test_is_time_synchronized_initially() {
-        let monitor = TimeMonitor::new(500, false);
+        let monitor = TimeMonitor::default();
         assert!(monitor.is_time_synchronized());
     }
 
     #[test]
     fn test_time_skew_detection_within_threshold() {
         // Use a larger threshold to account for processing delays in tests
-        let mut monitor = TimeMonitor::new(2000, false);
+        use crate::config::Config;
+        let config = Config::default();
+        let app_state = Arc::new(Mutex::new(ApplicationState::new(config)));
+        let mut monitor = TimeMonitor::new(app_state, 2000, false);
         
         // Create a system time close to current time (within threshold)
         let now = StdSystemTime::now();
@@ -282,7 +291,7 @@ mod tests {
 
     #[test]
     fn test_time_skew_detection_beyond_threshold() {
-        let mut monitor = TimeMonitor::new(500, false);
+        let mut monitor = TimeMonitor::default();
         
         // Create a system time far in the past (definitely beyond threshold)
         let old_date = 10000; // Days since 1970 (way in the past)

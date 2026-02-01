@@ -128,6 +128,8 @@ impl VesselStatusHandler {
             true // No current trip, create new one
         };
         
+        let effective_distance = if status.is_moored { 0.0 } else { distance };
+
         if should_create_new {
             // Create new trip
             let start_time = report_systemtime;
@@ -137,14 +139,14 @@ impl VesselStatusHandler {
             let description = format!("Trip {}", datetime.format("%Y-%m-%d"));
             
             let mut new_trip = Trip::new(start_time, description);
-            new_trip.update(report_systemtime, distance, delta_time_ms, status.engine_on, status.is_moored);
+            new_trip.update(report_systemtime, effective_distance, delta_time_ms, status.engine_on, status.is_moored);
             
             *current_trip = Some(new_trip.clone());
             TripOperation::CreateTrip(new_trip)
         } else {
             // Update existing trip
             if let Some(ref mut trip) = *current_trip {
-                trip.update(report_systemtime, distance, delta_time_ms, status.engine_on, status.is_moored);
+                trip.update(report_systemtime, effective_distance, delta_time_ms, status.engine_on, status.is_moored);
                 TripOperation::UpdateTrip(trip.clone())
             } else {
                 TripOperation::None

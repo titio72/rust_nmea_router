@@ -91,7 +91,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("    --validate-config, --validate, -v    Validate configuration and exit");
         println!("    --help, -h                           Show this help message");
         println!();
-        println!("Configuration file: config.json (in current directory)");
+        println!("Configuration file:");
+        println!("  Checked in order: /etc/nmea_router/config.json, ./config.json");
         std::process::exit(0);
     }
     
@@ -99,8 +100,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                      || args.contains(&"--validate".to_string())
                      || args.contains(&"-v".to_string());
     
-    // Load configuration
-    let config = match Config::from_file("config.json") {
+    // Load configuration - try /etc/nmea_router/config.json first, then ./config.json
+    let config_path = if std::path::Path::new("/etc/nmea_router/config.json").exists() {
+        "/etc/nmea_router/config.json"
+    } else {
+        "config.json"
+    };
+    
+    info!("Loading configuration from: {}", config_path);
+    
+    let config = match Config::from_file(config_path) {
         Ok(cfg) => {
             if validate_only {
                 println!("✓ Configuration validation successful");

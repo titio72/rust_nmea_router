@@ -1,0 +1,27 @@
+[Unit]
+Description=NMEA2000 Router Service
+After=network.target
+
+[Service]
+Type=simple
+User=aboni
+Group=aboni
+WorkingDirectory=/opt/nmea_router
+ExecStart=/usr/local/bin/nmea_router
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits
+LimitNOFILE=65536
+
+# Environment variables (if needed)
+# Environment="RUST_LOG=info"
+
+[Install]
+WantedBy=multi-user.target
