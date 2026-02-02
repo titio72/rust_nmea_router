@@ -1,6 +1,6 @@
 /// Utility functions for NMEA2000 router
 
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{collections::VecDeque, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 
 use chrono::{DateTime, Datelike};
 use time::Date;
@@ -136,6 +136,139 @@ pub fn get_variation_deg(lat_deg: f64, lon_deg: f64, timestamp: DateTime<chrono:
     Ok(declination)
 }
 
+#[derive(Debug, Clone)]
+pub struct Sample<T> {
+    pub value: T,
+    pub timestamp: Instant,
+}
+
+#[derive(Debug, Clone)]
+pub struct TimedQueue<T> {
+    samples: VecDeque<Sample<T>>,
+    max_duration: Duration,
+}
+
+impl<T> TimedQueue<T> {
+    pub fn new(max_duration: Duration) -> Self {
+        TimedQueue {
+            samples: VecDeque::new(),
+            max_duration,
+        }
+    }
+
+    pub fn add_sample(&mut self, value: T, timestamp: Instant) {
+        let sample = Sample { value, timestamp };
+        self.samples.push_back(sample);
+        self.cleanup_old_samples();
+    }
+
+    fn cleanup_old_samples(&mut self) {
+        let now = Instant::now();
+        while let Some(front) = self.samples.front() {
+            if now.duration_since(front.timestamp) > self.max_duration {
+                self.samples.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+impl<> TimedQueue<f64>  {
+    pub fn get_average(&self, time_window: Duration, now: Instant) -> Option<f64> {
+
+        let recent_values: Vec<&f64> = self.samples
+            .iter()
+            .rev()
+            .take_while(|s| s.timestamp >= now - time_window)
+            .map(|s| &s.value)
+            .collect();
+
+        if recent_values.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = recent_values.iter().copied().sum();
+        let count = recent_values.len() as f64;
+        Some(sum / count)
+    }
+
+    pub fn get_latest_sample(&self) -> Option<&Sample<f64>> {
+        self.samples.back()
+    }
+    
+    pub fn get_latest(&self) -> Option<f64> {
+        self.samples.back().map(|s| s.value)
+    }
+
+    pub fn get_latest_timestamp(&self) -> Option<Instant> {
+        self.samples.back().map(|s| s.timestamp)
+    }
+
+    pub fn len(&self) -> usize {
+        self.samples.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.samples.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.samples.clear();
+    }
+
+    pub fn get_max(&self, time_window: Duration, now: Instant) -> Option<f64> {
+        let recent_values: Vec<&f64> = self.samples
+            .iter()
+            .rev()
+            .take_while(|s| s.timestamp >= now - time_window)
+            .map(|s| &s.value)
+            .collect();
+        
+        recent_values.into_iter().max_by(|a, b| a.partial_cmp(b).unwrap()).cloned()
+    }
+
+    pub fn get_rolling_median(&self, time_window: Duration, min_num_samples: usize, now: Instant) -> (usize, Option<f64>) {
+        let recent_values: Vec<&f64> = self.samples
+            .iter()
+            .rev()
+            .take_while(|s| s.timestamp >= now - time_window)
+            .map(|s| &s.value)
+            .collect();
+        
+        if recent_values.len() < min_num_samples {
+            return (recent_values.len(), None);
+        }
+
+        let mut sorted_values: Vec<f64> = recent_values.iter().map(|&&v| v).collect();
+        sorted_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let median = if sorted_values.len() % 2 == 0 {
+            let mid = sorted_values.len() / 2;
+            (sorted_values[mid - 1] + sorted_values[mid]) / 2.0
+        } else {
+            sorted_values[sorted_values.len() / 2]
+        };
+
+        (recent_values.len(), Some(median))
+    }
+
+    pub fn get_average_as_angle_deg(&self, time_window: Duration, now: Instant) -> Option<f64> {
+        let recent_angles: Vec<f64> = self.samples
+            .iter()
+            .rev()
+            .take_while(|s| s.timestamp >= now - time_window)
+            .map(|s| s.value)
+            .collect();
+        
+        if recent_angles.is_empty() {
+            return None;
+        }
+
+        Some(average_angle(&recent_angles))
+    }
+
+}
 
 #[cfg(test)]
 mod tests {

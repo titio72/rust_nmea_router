@@ -346,9 +346,9 @@ impl Config {
             self.database.vessel_status.interval_moored_seconds = defaults.interval_moored_seconds;
         }
         
-        // Validate underway interval (30 seconds - 10 minutes)
-        if self.database.vessel_status.interval_underway_seconds < 30 || self.database.vessel_status.interval_underway_seconds > 600 {
-            warn!("Configuration warning: interval_underway_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+        // Validate underway interval (10 seconds - 10 minutes)
+        if self.database.vessel_status.interval_underway_seconds < 10 || self.database.vessel_status.interval_underway_seconds > 600 {
+            warn!("Configuration warning: interval_underway_seconds ({}) is out of range (10-600). Reverting to default {}.", 
                 self.database.vessel_status.interval_underway_seconds, defaults.interval_underway_seconds);
             self.database.vessel_status.interval_underway_seconds = defaults.interval_underway_seconds;
         }

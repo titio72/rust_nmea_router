@@ -1,10 +1,10 @@
 use std::{error::Error, time::Duration};
 use tracing::{info, warn};
 
+mod position_utils;
 mod vessel_monitor;
 mod time_monitor;
 mod environmental_monitor;
-mod application_state;
 mod db;
 mod config;
 mod trip;
@@ -30,7 +30,6 @@ use udp_broadcaster::UdpBroadcaster;
 // Import from nmea2k crate
 use nmea2k::{CanBus, Identifier, MessageHandler, N2kStreamReader};
 
-use crate::application_state::ApplicationState;
 use crate::time_monitor::TimeSyncStatus;
 
 // ========== Logging Setup ==========
@@ -142,8 +141,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
     
-    let application_state = std::sync::Arc::new(std::sync::Mutex::new(ApplicationState::new(config.clone())));
-
     // Initialize logging
     init_logging(&config.logging)?;
     info!("NMEA2000 Router starting...");
@@ -177,11 +174,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut reader = N2kStreamReader::new();
     
     // Create vessel monitor with config
-    let mut vessel_monitor = VesselMonitor::new(application_state.clone());
+    info!("Creating vessel monitor with underway interval: {} seconds", config.database.vessel_status.interval_underway_seconds);
+    let mut vessel_monitor = VesselMonitor::new(config.database.vessel_status.interval_underway());
     
     // Create time monitor
     let mut time_monitor = TimeMonitor::new(
-        application_state.clone(),
         config.time.skew_threshold_ms,
         config.time.set_system_time
     );

@@ -2,8 +2,6 @@ use std::time::{SystemTime as StdSystemTime, UNIX_EPOCH};
 use nmea2k::pgns::NMEASystemTime;
 use nix::time::{ClockId, clock_settime};
 use nix::sys::time::TimeSpec;
-use std::sync::{Arc, Mutex};
-use crate::application_state::ApplicationState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeSyncStatus {
@@ -38,7 +36,6 @@ impl std::fmt::Display for TimeSyncStatusAndSkew {
 }
 
 pub struct TimeMonitor {
-    application_state: Arc<Mutex<ApplicationState>>,
     last_warning_time: Option<StdSystemTime>,
     warning_cooldown_secs: u64,
     has_time_skew: bool,
@@ -49,9 +46,8 @@ pub struct TimeMonitor {
 }
 
 impl TimeMonitor {
-    pub fn new(application_state: Arc<Mutex<ApplicationState>>, time_skew_threshold_ms: i64, set_system_time_enabled: bool) -> Self {
+    pub fn new(time_skew_threshold_ms: i64, set_system_time_enabled: bool) -> Self {
         Self {
-            application_state,
             last_warning_time: None,
             warning_cooldown_secs: 10, // Only warn once every 10 seconds
             has_time_skew: false,
@@ -99,8 +95,6 @@ impl TimeMonitor {
 
         // Calculate time skew in milliseconds
         let nmea_system_time = nmea_time.date_time.to_system_time();
-
-        self.application_state.lock().unwrap().update_gnss_timestamp(nmea_time.date_time.to_date_time());
 
         let time_skew_ms = match now.duration_since(nmea_system_time) {
             Ok(duration) => duration.as_millis() as i64,
@@ -214,10 +208,7 @@ impl TimeMonitor {
 
 impl Default for TimeMonitor {
     fn default() -> Self {
-        use crate::config::Config;
-        let config = Config::default();
-        let app_state = Arc::new(Mutex::new(ApplicationState::new(config)));
-        Self::new(app_state, 500, false)
+        Self::new(500, false)
     }
 }
 
@@ -259,10 +250,7 @@ mod tests {
     #[test]
     fn test_time_skew_detection_within_threshold() {
         // Use a larger threshold to account for processing delays in tests
-        use crate::config::Config;
-        let config = Config::default();
-        let app_state = Arc::new(Mutex::new(ApplicationState::new(config)));
-        let mut monitor = TimeMonitor::new(app_state, 2000, false);
+        let mut monitor = TimeMonitor::new(2000, false);
         
         // Create a system time close to current time (within threshold)
         let now = StdSystemTime::now();

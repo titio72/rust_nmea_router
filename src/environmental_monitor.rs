@@ -1,10 +1,10 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::{warn};
 
 use nmea2k::pgns::{ActualPressure, Attitude, Humidity, Temperature, VesselHeading, WindData};
 use crate::utilities::calculate_true_wind;
-use crate::vessel_monitor::Position;
+use crate::position_utils::Position;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
