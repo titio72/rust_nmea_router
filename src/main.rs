@@ -2,6 +2,7 @@ use std::{error::Error, time::Duration};
 use tracing::{info, warn};
 
 mod position_utils;
+mod mooring_detection;
 mod vessel_monitor;
 mod time_monitor;
 mod environmental_monitor;

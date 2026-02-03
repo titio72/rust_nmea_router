@@ -144,8 +144,8 @@ pub struct Sample<T> {
 
 #[derive(Debug, Clone)]
 pub struct TimedQueue<T> {
-    samples: VecDeque<Sample<T>>,
-    max_duration: Duration,
+    pub samples: VecDeque<Sample<T>>,
+    pub max_duration: Duration,
 }
 
 impl<T> TimedQueue<T> {
@@ -360,6 +360,210 @@ mod tests {
         let angles = vec![5.1_f64, 355.1_f64, 10.1_f64, 350.1_f64];
         let avg_angle = average_angle(&angles);
         assert!((avg_angle - 0.1).abs() < 1e-6);
+    }
+
+    // TimedQueue tests
+    #[test]
+    fn test_timed_queue_new() {
+        let queue: TimedQueue<f64> = TimedQueue::new(Duration::from_secs(60));
+        assert_eq!(queue.len(), 0);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn test_timed_queue_add_sample() {
+        let mut queue: TimedQueue<f64> = TimedQueue::new(Duration::from_secs(60));
+        let now = Instant::now();
+        
+        queue.add_sample(10.0, now);
+        assert_eq!(queue.len(), 1);
+        assert!(!queue.is_empty());
+        
+        queue.add_sample(20.0, now);
+        assert_eq!(queue.len(), 2);
+    }
+
+    #[test]
+    fn test_timed_queue_get_latest() {
+        let mut queue: TimedQueue<f64> = TimedQueue::new(Duration::from_secs(60));
+        assert!(queue.get_latest().is_none());
+        
+        let now = Instant::now();
+        queue.add_sample(10.0, now);
+        assert_eq!(queue.get_latest().unwrap(), 10.0);
+        
+        queue.add_sample(20.0, now);
+        assert_eq!(queue.get_latest().unwrap(), 20.0);
+    }
+
+    #[test]
+    fn test_timed_queue_get_latest_timestamp() {
+        let mut queue: TimedQueue<f64> = TimedQueue::new(Duration::from_secs(60));
+        let now1 = Instant::now();
+        queue.add_sample(10.0, now1);
+        
+        std::thread::sleep(Duration::from_millis(10));
+        let now2 = Instant::now();
+        queue.add_sample(20.0, now2);
+        
+        let ts = queue.get_latest_timestamp().unwrap();
+        assert!(ts >= now2);
+    }
+
+    #[test]
+    fn test_timed_queue_clear() {
+        let mut queue: TimedQueue<f64> = TimedQueue::new(Duration::from_secs(60));
+        let now = Instant::now();
+        
+        queue.add_sample(10.0, now);
+        queue.add_sample(20.0, now);
+        assert_eq!(queue.len(), 2);
+        
+        queue.clear();
+        assert_eq!(queue.len(), 0);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn test_timed_queue_get_average() {
+        let mut queue: TimedQueue<f64> = TimedQueue::new(Duration::from_secs(60));
+        let now = Instant::now();
+        
+        queue.add_sample(10.0, now);
+        queue.add_sample(20.0, now);
+        queue.add_sample(30.0, now);
+        
+        let avg = queue.get_average(Duration::from_secs(10), now).unwrap();
+        assert!((avg - 20.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_timed_queue_get_average_empty() {
+        let queue: TimedQueue<f64> = TimedQueue::new(Duration::from_secs(60));
+        let now = Instant::now();
+        assert!(queue.get_average(Duration::from_secs(10), now).is_none());
+    }
+
+    #[test]
+    fn test_timed_queue_get_max() {
+        let mut queue: TimedQueue<f64> = TimedQueue::new(Duration::from_secs(60));
+        let now = Instant::now();
+        
+        queue.add_sample(10.0, now);
+        queue.add_sample(25.0, now);
+        queue.add_sample(15.0, now);
+        
+        let max = queue.get_max(Duration::from_secs(10), now).unwrap();
+        assert_eq!(max, 25.0);
+    }
+
+    #[test]
+    fn test_timed_queue_get_min() {
+        let mut queue: TimedQueue<f64> = TimedQueue::new(Duration::from_secs(60));
+        let now = Instant::now();
+        
+        queue.add_sample(10.0, now);
+        queue.add_sample(5.0, now);
+        queue.add_sample(15.0, now);
+        
+        let min = queue.get_min(Duration::from_secs(10), now).unwrap();
+        assert_eq!(min, 5.0);
+    }
+
+    #[test]
+    fn test_timed_queue_get_rolling_median_odd() {
+        let mut queue: TimedQueue<f64> = TimedQueue::new(Duration::from_secs(60));
+        let now = Instant::now();
+        
+        queue.add_sample(10.0, now);
+        queue.add_sample(20.0, now);
+        queue.add_sample(30.0, now);
+        queue.add_sample(40.0, now);
+        queue.add_sample(50.0, now);
+        
+        let (count, median) = queue.get_rolling_median(Duration::from_secs(10), 3, now);
+        assert_eq!(count, 5);
+        assert_eq!(median.unwrap(), 30.0);
+    }
+
+    #[test]
+    fn test_timed_queue_get_rolling_median_even() {
+        let mut queue: TimedQueue<f64> = TimedQueue::new(Duration::from_secs(60));
+        let now = Instant::now();
+        
+        queue.add_sample(10.0, now);
+        queue.add_sample(20.0, now);
+        queue.add_sample(30.0, now);
+        queue.add_sample(40.0, now);
+        
+        let (count, median) = queue.get_rolling_median(Duration::from_secs(10), 3, now);
+        assert_eq!(count, 4);
+        assert_eq!(median.unwrap(), 25.0); // (20 + 30) / 2
+    }
+
+    #[test]
+    fn test_timed_queue_get_rolling_median_insufficient_samples() {
+        let mut queue: TimedQueue<f64> = TimedQueue::new(Duration::from_secs(60));
+        let now = Instant::now();
+        
+        queue.add_sample(10.0, now);
+        queue.add_sample(20.0, now);
+        
+        let (count, median) = queue.get_rolling_median(Duration::from_secs(10), 5, now);
+        assert_eq!(count, 2);
+        assert!(median.is_none());
+    }
+
+    #[test]
+    fn test_timed_queue_get_average_as_angle() {
+        let mut queue: TimedQueue<f64> = TimedQueue::new(Duration::from_secs(60));
+        let now = Instant::now();
+        
+        // Test averaging angles around 0 degrees
+        queue.add_sample(350.0, now);
+        queue.add_sample(10.0, now);
+        
+        let avg = queue.get_average_as_angle_deg(Duration::from_secs(10), now).unwrap();
+        // Should be close to 0 or 360
+        assert!(avg < 5.0 || avg > 355.0, "Expected avg near 0/360, got {}", avg);
+    }
+
+    #[test]
+    fn test_timed_queue_cleanup_old_samples() {
+        let mut queue: TimedQueue<f64> = TimedQueue::new(Duration::from_millis(100));
+        let now = Instant::now();
+        
+        queue.add_sample(10.0, now);
+        assert_eq!(queue.len(), 1);
+        
+        // Wait for sample to become old
+        std::thread::sleep(Duration::from_millis(150));
+        
+        // Add new sample (should trigger cleanup)
+        queue.add_sample(20.0, Instant::now());
+        
+        // Old sample should be removed
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.get_latest().unwrap(), 20.0);
+    }
+
+    #[test]
+    fn test_timed_queue_time_window_filtering() {
+        let mut queue: TimedQueue<f64> = TimedQueue::new(Duration::from_secs(60));
+        let now = Instant::now();
+        
+        // Add samples at different times
+        queue.add_sample(10.0, now - Duration::from_secs(20));
+        queue.add_sample(20.0, now - Duration::from_secs(10));
+        queue.add_sample(30.0, now);
+        
+        // Get average for last 15 seconds (should only include last 2 samples)
+        let avg = queue.get_average(Duration::from_secs(15), now).unwrap();
+        assert!((avg - 25.0).abs() < 0.001); // (20 + 30) / 2
+        
+        // Get average for last 5 seconds (should only include last sample)
+        let avg = queue.get_average(Duration::from_secs(5), now).unwrap();
+        assert_eq!(avg, 30.0);
     }
 
 

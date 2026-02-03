@@ -1,11 +1,13 @@
 use std::time::{Duration, Instant};
 use nmea2k::pgns::{CogSogRapidUpdate, HeadingReference, PositionRapidUpdate};
+use crate::mooring_detection::MooringDetectionQueue;
 use crate::position_utils::{Position, PositionQueue};
 use crate::utilities::{TimedQueue, calculate_true_wind};
 
-//const EVENT_INTERVAL: Duration = Duration::from_secs(10);
 const MOORING_DETECTION_WINDOW: Duration = Duration::from_secs(180); // 3 minutes
+#[allow(dead_code)] // Used in mooring detection logic based on position (but we switched to VMG-based detection, so this is now unused)
 const MOORING_THRESHOLD_METERS: f64 = 30.0; // 30 meters radius
+const MOORING_THRESHOLD_VMG_KNOTS: f64 = 0.1; // 0.1 knots
 const MOORING_ACCURACY: f64 = 0.90; // 90% of positions within threshold
 const MAX_VALID_SOG_KN: f64 = 25.0; // 25 knots (noise filter)
 const MAX_POSITION_DEVIATION_METERS: f64 = 100.0; // Maximum distance from median (noise filter)
@@ -91,6 +93,7 @@ pub struct VesselMonitor {
     status_report_period: Duration,
     positions: PositionQueue,
     speeds: TimedQueue<f64>,
+    vmg_for_mooring: MooringDetectionQueue,
     wind_speeds: TimedQueue<f64>,
     wind_angles: TimedQueue<f64>,
     headings: TimedQueue<f64>,
@@ -108,6 +111,7 @@ impl VesselMonitor {
             status_report_period,
             positions: PositionQueue::new(sample_age_window), // Keep extra buffer for mooring detection
             speeds: TimedQueue::new(sample_age_window),
+            vmg_for_mooring: MooringDetectionQueue::new(MOORING_DETECTION_WINDOW, MOORING_ACCURACY, MOORING_THRESHOLD_VMG_KNOTS),
             wind_speeds: TimedQueue::new(sample_age_window),
             wind_angles: TimedQueue::new(sample_age_window),
             headings: TimedQueue::new(sample_age_window),
@@ -118,6 +122,7 @@ impl VesselMonitor {
     }
 
     /// Process a position rapid update message
+    /// Expected maximum rate is 10 Hz
     pub fn process_position(&mut self, position_msg: &PositionRapidUpdate, timestamp: Instant) {
         let position = Position {
             latitude: position_msg.latitude,
@@ -142,6 +147,7 @@ impl VesselMonitor {
     }
 
     /// Process a COG & SOG rapid update message
+    /// Expected maximum rate is 10 Hz
     pub fn process_cog_sog(&mut self, cog_sog_msg: &CogSogRapidUpdate, timestamp: Instant) {
         let sog_kn = cog_sog_msg.sog_knots();
         
@@ -150,10 +156,19 @@ impl VesselMonitor {
             return; // Reject noisy speed reading
         }
 
+        // calculate VMG for mooring detection
+        // we use the vmg because the vessel moves sideways at anchor or moored (in the latter case, it does not move at all)
+        if let Some(last_heading) = self.headings.get_latest() {
+            let cog_deg = cog_sog_msg.cog.to_degrees();
+            let vmg_kn = sog_kn * (cog_deg - last_heading).to_radians().cos();
+            self.vmg_for_mooring.add_sample(vmg_kn, timestamp);
+        }
+
         self.speeds.add_sample(sog_kn, timestamp);
     }
 
     /// Process a wind data message
+    /// Expected maximum rate is 10 Hz
     fn process_wind(&mut self, wind_msg: &nmea2k::pgns::WindData, timestamp: Instant) {
         let wind_speed_kn = wind_msg.speed_knots(); // knots
         let wind_angle_deg = wind_msg.angle.to_degrees();
@@ -173,10 +188,13 @@ impl VesselMonitor {
     }
 
     /// Process engine rapid update to determine engine status
+    /// Expected maximum rate is 1 Hz
     pub fn process_engine(&mut self, engine_msg: &nmea2k::pgns::EngineRapidUpdate, _timestamp: Instant) {
         self.engine_on = engine_msg.is_engine_running();
     }
 
+    /// Process vessel heading message
+    /// Expected maximum rate is 10 Hz
     pub fn process_heading(&mut self, heading_msg: &nmea2k::pgns::VesselHeading, timestamp: Instant) {
         if heading_msg.reference == HeadingReference::Magnetic {
             // For magnetic heading, we would need to apply variation correction
@@ -201,6 +219,11 @@ impl VesselMonitor {
         now.duration_since(self.last_event_time) >= self.status_report_period && self.positions.len() >= MIN_SAMPLES_FOR_VALIDATION
     }
 
+    fn is_moored(&self, now: Instant) -> bool {
+        //self.positions.is_stationary(MOORING_DETECTION_WINDOW, MOORING_ACCURACY, MOORING_THRESHOLD_METERS, now)
+        self.vmg_for_mooring.is_stationary(now)
+    }
+
     /// Generate a vessel status event
     pub fn generate_status(&mut self, now: Instant) -> Option<VesselStatus> {
         if !self.status_report_ready {
@@ -214,7 +237,7 @@ impl VesselMonitor {
         let current_position = self.positions.get_latest_position().unwrap();
         let (number_of_samples, median_position) = self.positions.get_rolling_median_position(self.status_report_period, MIN_SAMPLES_FOR_VALIDATION, now);
         let max_speed_kn = self.speeds.get_max(self.status_report_period, now).unwrap_or(0.0);
-        let is_moored = self.positions.is_stationary(MOORING_DETECTION_WINDOW, MOORING_ACCURACY, MOORING_THRESHOLD_METERS, now);
+        let is_moored = self.is_moored(now);
         let wind_speed_kn = self.wind_speeds.get_average(self.status_report_period, now);
         let wind_angle_deg = self.wind_angles.get_average_as_angle_deg(self.status_report_period, now);
         let max_wind_speed_kn = self.wind_speeds.get_max(self.status_report_period, now);
