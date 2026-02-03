@@ -91,6 +91,7 @@ impl VesselStatus {
 #[derive(Debug)]
 pub struct VesselMonitor {
     status_report_period: Duration,
+    status_report_moored_period: Duration,
     positions: PositionQueue,
     speeds: TimedQueue<f64>,
     vmg_for_mooring: MooringDetectionQueue,
@@ -100,16 +101,18 @@ pub struct VesselMonitor {
     last_event_time: Instant,
     engine_on: bool,
     status_report_ready: bool,
+    first_report: bool,
 }
 
 impl VesselMonitor {
-    pub fn new(status_report_period: Duration) -> Self {
+    pub fn new(status_report_period: Duration, status_report_moored_period: Duration) -> Self {
         let now = Instant::now();
-        let time_window_secs = std::cmp::max(status_report_period.as_secs(), MOORING_DETECTION_WINDOW.as_secs()) + 30;
+        let time_window_secs = std::cmp::max(status_report_moored_period.as_secs(), status_report_moored_period.as_secs()) + 30;
         let sample_age_window = Duration::from_secs(time_window_secs);
         VesselMonitor {
             status_report_period,
-            positions: PositionQueue::new(sample_age_window), // Keep extra buffer for mooring detection
+            status_report_moored_period,
+            positions: PositionQueue::new(sample_age_window),
             speeds: TimedQueue::new(sample_age_window),
             vmg_for_mooring: MooringDetectionQueue::new(MOORING_DETECTION_WINDOW, MOORING_ACCURACY, MOORING_THRESHOLD_VMG_KNOTS),
             wind_speeds: TimedQueue::new(sample_age_window),
@@ -118,6 +121,7 @@ impl VesselMonitor {
             last_event_time: now,
             engine_on: false,
             status_report_ready: false,
+            first_report: true,
         }
     }
 
@@ -216,7 +220,13 @@ impl VesselMonitor {
 
     /// Check if it's time to generate a status event
     fn should_generate_event(&self, now: Instant) -> bool {
-        now.duration_since(self.last_event_time) >= self.status_report_period && self.positions.len() >= MIN_SAMPLES_FOR_VALIDATION
+        let period = if !self.is_moored(now) || self.first_report {
+            // in case we are moored, but it's the first report, use the regular reporting period so we have a status asap
+            self.status_report_period
+        } else {
+            self.status_report_moored_period
+        };
+        now.duration_since(self.last_event_time) >= period && self.positions.len() >= MIN_SAMPLES_FOR_VALIDATION
     }
 
     fn is_moored(&self, now: Instant) -> bool {
@@ -246,6 +256,8 @@ impl VesselMonitor {
         // Use the timestamp of the last position in the buffer, or current time if no positions
         let timestamp = self.positions.get_latest_position_timestamp().unwrap();
         
+        self.first_report = false;
+
         Some(VesselStatus {
             current_position,
             median_position,
@@ -289,7 +301,7 @@ impl nmea2k::MessageHandler for VesselMonitor {
 
 impl Default for VesselMonitor {
     fn default() -> Self {
-        Self::new(Duration::from_secs(30))
+        Self::new(Duration::from_secs(30), Duration::from_secs(300))
     }
 }
 

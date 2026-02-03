@@ -8,6 +8,7 @@ use chrono::NaiveDateTime;
 use tracing::{info, warn};
 
 /// Encapsulates vessel status data for database insertion
+#[derive(Debug, Clone)]
 pub struct VesselStatusOperation {
     pub time: Instant,
     pub latitude: f64,
@@ -95,8 +96,8 @@ impl VesselDatabase {
     /// This ensures atomicity - either both operations succeed or both fail
     pub fn insert_status_and_trip(
         &self,
-        status_op: VesselStatusOperation,
-        trip_operation: TripOperation,
+        status_op: &VesselStatusOperation,
+        trip_operation: &TripOperation,
     ) -> Result<Option<i64>, Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
         let mut tx = conn.start_transaction(TxOpts::default())?;
@@ -400,6 +401,12 @@ pub struct TrackPoint {
     pub max_speed_kn: f64,
     pub moored: bool,
     pub engine_on: bool,
+    pub total_distance_nm: f64,
+    pub total_time_ms: u64,
+    pub average_wind_speed_kn: Option<f64>,
+    pub average_wind_angle_deg: Option<f64>,
+    pub cog_deg: Option<f64>,
+    pub average_heading_deg: Option<f64>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -512,7 +519,9 @@ impl VesselDatabase {
             format!(
                 "SELECT DATE_FORMAT(vs.timestamp, '%Y-%m-%d %H:%i:%S') as timestamp,
                         vs.latitude, vs.longitude, vs.average_speed_kn, vs.max_speed_kn, 
-                        vs.is_moored, vs.engine_on 
+                        vs.is_moored, vs.engine_on, vs.total_distance_nm, vs.total_time_ms,
+                        vs.average_wind_speed_kn, vs.average_wind_angle_deg,
+                        vs.cog_deg, vs.average_heading_deg
                  FROM vessel_status vs
                  JOIN trips t ON vs.timestamp BETWEEN t.start_timestamp AND COALESCE(t.end_timestamp, NOW())
                  WHERE t.id = {}
@@ -522,7 +531,10 @@ impl VesselDatabase {
         } else if let (Some(start), Some(end)) = (start, end) {
             format!(
                 "SELECT DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:%S') as timestamp,
-                        latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on 
+                        latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on,
+                        total_distance_nm, total_time_ms,
+                        average_wind_speed_kn, average_wind_angle_deg,
+                        cog_deg, average_heading_deg
                  FROM vessel_status WHERE timestamp BETWEEN '{}' AND '{}' ORDER BY timestamp",
                 start, end
             )
@@ -546,6 +558,12 @@ impl VesselDatabase {
                 max_speed_kn: row.get::<f64, _>("max_speed_kn").unwrap_or(0.0),
                 moored: row.get::<i32, _>("is_moored").unwrap_or(0) != 0,
                 engine_on: row.get::<i32, _>("engine_on").unwrap_or(0) != 0,
+                total_distance_nm: row.get::<f64, _>("total_distance_nm").unwrap_or(0.0),
+                total_time_ms: row.get::<u64, _>("total_time_ms").unwrap_or(0),
+                average_wind_speed_kn: row.get::<f64, _>("average_wind_speed_kn"),
+                average_wind_angle_deg: row.get::<f64, _>("average_wind_angle_deg"),
+                cog_deg: row.get::<f64, _>("cog_deg"),
+                average_heading_deg: row.get::<f64, _>("average_heading_deg"),
             })
             .collect();
 

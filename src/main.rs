@@ -92,7 +92,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("    --help, -h                           Show this help message");
         println!();
         println!("Configuration file:");
-        println!("  Checked in order: /etc/nmea_router/config.json, ./config.json");
+        println!("  Checked in order: ./config.json, /etc/nmea_router/config.json");
         std::process::exit(0);
     }
     
@@ -100,14 +100,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                      || args.contains(&"--validate".to_string())
                      || args.contains(&"-v".to_string());
     
-    // Load configuration - try /etc/nmea_router/config.json first, then ./config.json
-    let config_path = if std::path::Path::new("/etc/nmea_router/config.json").exists() {
-        "/etc/nmea_router/config.json"
+    // Load configuration - try ./config.json first, then /etc/nmea_router/config.json
+    let config_path = if std::path::Path::new("./config.json").exists() {
+        "./config.json"        
     } else {
-        "config.json"
+        "/etc/nmea_router/config.json"
     };
     
-    info!("Loading configuration from: {}", config_path);
+    println!("Loading configuration from: {}", config_path);
     
     let config = match Config::from_file(config_path) {
         Ok(cfg) => {
@@ -144,6 +144,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     // Initialize logging
     init_logging(&config.logging)?;
+    info!("Logging initialized");
+    info!("Configuration {:#?}", config);
     info!("NMEA2000 Router starting...");
     info!("Loaded configuration");
     
@@ -176,7 +178,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     // Create vessel monitor with config
     info!("Creating vessel monitor with underway interval: {} seconds", config.database.vessel_status.interval_underway_seconds);
-    let mut vessel_monitor = VesselMonitor::new(config.database.vessel_status.interval_underway());
+    let mut vessel_monitor = VesselMonitor::new(config.database.vessel_status.interval_underway(), config.database.vessel_status.interval_moored());
     
     // Create time monitor
     let mut time_monitor = TimeMonitor::new(
@@ -188,7 +190,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut env_monitor = EnvironmentalMonitor::new();
     
     // Create vessel status handler
-    let mut vessel_status_handler = vessel_status_handler::VesselStatusHandler::new(config.database.vessel_status.clone());
+    let mut vessel_status_handler = vessel_status_handler::VesselStatusHandler::new();
     
     // Create environmental status handler
     let mut environmental_status_handler = environmental_status_handler::EnvironmentalStatusHandler::new(&config.database.environmental);
