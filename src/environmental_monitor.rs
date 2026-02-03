@@ -1,9 +1,8 @@
-use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use tracing::{warn};
 
 use nmea2k::pgns::{ActualPressure, Attitude, Humidity, Temperature, VesselHeading, WindData};
-use crate::utilities::calculate_true_wind;
+use crate::utilities::{calculate_true_wind, TimedQueue};
 use crate::position_utils::Position;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -79,15 +78,8 @@ pub struct MetricData {
     pub count: Option<usize>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Sample<T> {
-    pub value: T,
-    #[allow(dead_code)]
-    pub timestamp: Instant,
-}
-
 pub struct EnvironmentalMonitor {
-    pub data_samples: [VecDeque<Sample<f64>>; 7],
+    pub data_samples: [TimedQueue<f64>; 7],
     last_heading_event: Option<Instant>,
     last_heading_degrees: Option<f64>,
     last_boat_speed_knots: Option<f64>,
@@ -98,15 +90,16 @@ pub struct EnvironmentalMonitor {
 
 impl EnvironmentalMonitor {
     pub fn new() -> Self {
+        let max_duration = Duration::from_secs(600); // 10 minutes
         Self {
             data_samples: [
-                VecDeque::new(), // Pressure    
-                VecDeque::new(), // CabinTemp
-                VecDeque::new(), // WaterTemp
-                VecDeque::new(), // Humidity
-                VecDeque::new(), // WindSpeed
-                VecDeque::new(), // WindDir
-                VecDeque::new(), // Roll
+                TimedQueue::new(max_duration), // Pressure    
+                TimedQueue::new(max_duration), // CabinTemp
+                TimedQueue::new(max_duration), // WaterTemp
+                TimedQueue::new(max_duration), // Humidity
+                TimedQueue::new(max_duration), // WindSpeed
+                TimedQueue::new(max_duration), // WindDir
+                TimedQueue::new(max_duration), // Roll
             ],
             last_heading_event: None,
             last_heading_degrees: None,
@@ -127,16 +120,10 @@ impl EnvironmentalMonitor {
             
             if source==4 && instance==0 {
                 // Source 4 is "Inside Ambient"
-                self.data_samples[MetricId::CabinTemp.as_index()].push_back(Sample {
-                    value: celsius,
-                    timestamp: now,
-                });
+                self.data_samples[MetricId::CabinTemp.as_index()].add_sample(celsius, now);
             } else if source==0 && instance==0 {
                 // Source 0 is water temperature
-                self.data_samples[MetricId::WaterTemp.as_index()].push_back(Sample {
-                    value: celsius,
-                    timestamp: now,
-                });
+                self.data_samples[MetricId::WaterTemp.as_index()].add_sample(celsius, now);
             }
         }
     }
@@ -159,10 +146,7 @@ impl EnvironmentalMonitor {
             self.last_boat_speed_knots.unwrap()
         };
         let (true_wind_speed, true_wind_angle_deg) = calculate_true_wind(wind.speed_knots(), wind.angle.to_degrees(), boat_speed);
-        self.data_samples[MetricId::WindSpeed.as_index()].push_back(Sample {
-            value: true_wind_speed,
-            timestamp: now,
-        });
+        self.data_samples[MetricId::WindSpeed.as_index()].add_sample(true_wind_speed, now);
         
         // now process wind angle
         let boat_heading = if self.last_heading_degrees.is_none() || self.last_heading_event.is_none() || now.duration_since(self.last_heading_event.unwrap()) > Duration::from_secs(1) {
@@ -173,21 +157,14 @@ impl EnvironmentalMonitor {
         };
 
         let absolute_angle = (boat_heading + true_wind_angle_deg) % 360.0;
-        // Store wind direction (convert radians to degrees)
-        self.data_samples[MetricId::WindDir.as_index()].push_back(Sample {
-            value: absolute_angle,
-            timestamp: now,
-        });
+        // Store wind direction
+        self.data_samples[MetricId::WindDir.as_index()].add_sample(absolute_angle, now);
     }
     
     /// Process a humidity message (PGN 130313)
     /// Standalone humidity sensor reading
     fn process_humidity(&mut self, hum: &Humidity, now: Instant) {
-        
-        self.data_samples[MetricId::Humidity.as_index()].push_back(Sample {
-            value: hum.actual_humidity,
-            timestamp: now,
-        });
+        self.data_samples[MetricId::Humidity.as_index()].add_sample(hum.actual_humidity, now);
     }
     
     /// Process an actual pressure message (PGN 130314)
@@ -198,10 +175,7 @@ impl EnvironmentalMonitor {
 
         if instance == 0 && source == 0 {
             // Primary atmospheric pressure sensor
-            self.data_samples[MetricId::Pressure.as_index()].push_back(Sample {
-                value: pressure.pressure,
-                timestamp: now,
-            });
+            self.data_samples[MetricId::Pressure.as_index()].add_sample(pressure.pressure, now);
         }
     }
     
@@ -209,11 +183,7 @@ impl EnvironmentalMonitor {
     /// Extract roll angle in degrees
     fn process_attitude(&mut self, attitude: &Attitude, now: Instant) {
         if let Some(roll_deg) = attitude.roll_degrees() {
-            
-            self.data_samples[MetricId::Roll.as_index()].push_back(Sample {
-                value: roll_deg,
-                timestamp: now,
-            });
+            self.data_samples[MetricId::Roll.as_index()].add_sample(roll_deg, now);
         }
     }
 
@@ -262,35 +232,21 @@ impl EnvironmentalMonitor {
     }
 
     pub fn calculate_metric_data(&self, metric_id: MetricId) -> Option<MetricData> {
-        let samples = &self.data_samples[metric_id.as_index()];
-        self.calculate(samples)
-    }
-
-    fn calculate(&self, samples: &VecDeque<Sample<f64>>) -> Option<MetricData> {
-        if samples.is_empty() {
+        let queue = &self.data_samples[metric_id.as_index()];
+        let now = Instant::now();
+        
+        if queue.is_empty() {
             return None;
         }
-        let mut avg: f64 = 0.0;
-        // Initialize with the first value to handle negative numbers or non-zero baselines correctly
-        let first_val = samples[0].value;
-        let mut max: f64 = first_val;
-        let mut min: f64 = first_val;
         
-        let count = samples.len() as f64;
-        for sample in samples.iter() {
-            avg += sample.value;
-            if sample.value > max {
-                max = sample.value;
-            }
-            if sample.value < min {
-                min = sample.value;
-            }
-        }
+        // Use full time window for calculations (10 minutes)
+        let time_window = Duration::from_secs(600);
+        
         Some(MetricData {
-            avg: Some(avg / count),
-            max: Some(max),
-            min: Some(min),
-            count: Some(samples.len()),
+            avg: queue.get_average(time_window, now),
+            max: queue.get_max(time_window, now),
+            min: queue.get_min(time_window, now),
+            count: Some(queue.len()),
         })
     }
     

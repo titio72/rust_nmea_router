@@ -154,7 +154,7 @@ fn handle_environment_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::environmental_monitor::{EnvironmentalMonitor, MetricId, Sample};
+    use crate::environmental_monitor::{EnvironmentalMonitor, MetricId};
     use crate::config::EnvironmentalConfig;
     use std::time::Instant;
 
@@ -192,7 +192,7 @@ mod tests {
         // Add dummy data for all metrics
         let now = Instant::now();
         for samples in monitor.data_samples.iter_mut() {
-             samples.push_back(Sample { value: 10.0, timestamp: now });
+             samples.add_sample(10.0, now);
         }
         
         // Now all 7 should be ready as they have data and haven't been persisted

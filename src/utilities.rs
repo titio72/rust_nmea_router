@@ -228,6 +228,17 @@ impl<> TimedQueue<f64>  {
         recent_values.into_iter().max_by(|a, b| a.partial_cmp(b).unwrap()).cloned()
     }
 
+    pub fn get_min(&self, time_window: Duration, now: Instant) -> Option<f64> {
+        let recent_values: Vec<&f64> = self.samples
+            .iter()
+            .rev()
+            .take_while(|s| s.timestamp >= now - time_window)
+            .map(|s| &s.value)
+            .collect();
+        
+        recent_values.into_iter().min_by(|a, b| a.partial_cmp(b).unwrap()).cloned()
+    }
+
     pub fn get_rolling_median(&self, time_window: Duration, min_num_samples: usize, now: Instant) -> (usize, Option<f64>) {
         let recent_values: Vec<&f64> = self.samples
             .iter()
