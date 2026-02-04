@@ -416,7 +416,6 @@ pub struct WebMetricData {
     pub avg_value: Option<f64>,
     pub max_value: Option<f64>,
     pub min_value: Option<f64>,
-    pub count: Option<u32>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -646,17 +645,17 @@ impl VesselDatabase {
         let query = if let Some(trip_id) = trip_id {
             format!(
                 "SELECT DATE_FORMAT(e.timestamp, '%Y-%m-%d %H:%i:%S') as timestamp,
-                        e.metric_id, e.avg_value, e.max_value, e.min_value, e.count 
+                        e.metric_id, e.value_avg, e.value_max, e.value_min 
                  FROM environmental_data e 
-                 JOIN vessel_status v ON DATE(e.timestamp) = DATE(v.timestamp) 
-                 WHERE v.trip_id = {} AND e.metric_id = '{}' 
+                 WHERE e.timestamp >= (SELECT COALESCE(start_timestamp, NOW()) FROM trips WHERE id = {}) AND e.timestamp <= (SELECT COALESCE(end_timestamp, NOW()) FROM trips WHERE id = {})
+                 AND e.metric_id = '{}' 
                  ORDER BY e.timestamp",
-                trip_id, metric
+                trip_id, trip_id, metric
             )
         } else if let (Some(start), Some(end)) = (start, end) {
             format!(
                 "SELECT DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:%S') as timestamp,
-                        metric_id, avg_value, max_value, min_value, count 
+                        metric_id, value_avg, value_max, value_min
                  FROM environmental_data 
                  WHERE metric_id = '{}' AND timestamp BETWEEN '{}' AND '{}' 
                  ORDER BY timestamp",
@@ -677,10 +676,9 @@ impl VesselDatabase {
             .map(|row| WebMetricData {
                 timestamp: row.get::<String, _>("timestamp").unwrap_or_default(),
                 metric_id: row.get::<String, _>("metric_id").unwrap_or_default(),
-                avg_value: row.get("avg_value"),
-                max_value: row.get("max_value"),
-                min_value: row.get("min_value"),
-                count: row.get("count"),
+                avg_value: row.get("value_avg"),
+                max_value: row.get("value_max"),
+                min_value: row.get("value_min")
             })
             .collect();
 
