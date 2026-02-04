@@ -15,7 +15,7 @@ This project is a learning and production-grade effort, inspired by https://gith
   - Attitude/Roll (127257)
   - Depth & Water Speed (128267, 128259)
   - System Time (126992)
-- **REST API**: JSON endpoints for trips, track data, and environmental time series
+- **REST API & Web Interface**: JSON endpoints for trips, track data, environmental metrics, and speed distribution analysis, plus responsive web dashboard with interactive charts and Google Maps integration
 - **Adaptive Database Persistence**:
   - Moored vessels: 30-minute intervals
   - Underway vessels: 30-second intervals
@@ -302,20 +302,58 @@ Or from another device on the same network:
 http://<your-server-ip>:8080
 ```
 
+### Google Maps Integration
+
+The trip detail pages include interactive Google Maps showing GPS tracks. To enable this feature:
+
+1. **Get a Google Maps API Key**:
+   - Visit the [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project or select an existing one
+   - Enable the "Maps JavaScript API"
+   - Create credentials (API Key)
+   - Optionally restrict the API key to your domain for security
+
+2. **Configure the API Key**:
+   - Open `static/trip.html` in your web browser's developer tools or a text editor
+   - Replace `YOUR_API_KEY_HERE` in the Google Maps script tag with your actual API key:
+   ```html
+   <script async defer src="https://maps.googleapis.com/maps/api/js?key=YOUR_ACTUAL_API_KEY"></script>
+   ```
+
+3. **API Key Security Note**: 
+   - For production use, consider server-side API key management
+   - Restrict the API key to specific domains and enable only the required APIs
+   - Monitor API usage in the Google Cloud Console
+
 ### Features
 
-#### Trip Dashboard
-- **Trip List**: View all recorded trips with detailed statistics
-- **Filtering**: Filter trips by year or show last 12 months
+#### Trip Dashboard (Landing Page)
+- **Trip List**: View all recorded trips from the last 12 months with detailed statistics
 - **Trip Cards**: Each trip shows:
   - Start/end dates and duration
   - Total distance traveled
-  - Time distribution (sailing/motoring/moored) with visual progress bars
-  - Distance distribution (sailing vs motoring)
-  - Percentages for each activity type
+  - Time distribution (sailing/motoring/moored) with visual progress bars and percentages
+  - Distance distribution (sailing vs motoring) with percentages
+  - Clickable cards that navigate to detailed trip view
+
+#### Trip Detail View
+- **Trip Overview**: Complete trip information including start/end times, total distance, and activity breakdowns
+- **Interactive Map**: Google Maps integration showing the complete GPS track with:
+  - Red track line showing the vessel's path
+  - Green start marker and red end marker
+  - Satellite view by default with map type controls
+  - Clickable markers showing start/end timestamps
+  - Automatic zoom to fit the entire track
+- **Interactive Charts**: Four charts displaying:
+  - **Boat Speed Chart**: Average speed over time (filtered for underway periods)
+  - **Boat Heading Chart**: Compass heading in degrees (0-360°)
+  - **Wind Speed Chart**: Wind speed in knots over time
+  - **Wind Direction Chart**: Wind direction in degrees (0-360°) with compass labels
+- **Data Source**: Charts use track data retrieved via `/api/track?trip_id=X` endpoint
+- **Responsive Design**: Charts adapt to screen size, arranged in a 2x2 grid on larger screens
 
 #### Summary Statistics
-- Total number of trips
+- Total number of trips in the selected period
 - Combined distance, time, and activity breakdowns
 - Real-time updates when new data is recorded
 
@@ -398,17 +436,38 @@ Example response:
       "count": 120
     }
   ]
+##### GET /api/speed_distribution
+Retrieve speed distribution histogram data for a trip, showing time spent at different speed ranges.
+
+Query parameters:
+- `id`: Trip ID (required) - e.g., `?id=1`
+
+Example response:
+```json
+{
+  "status": "ok",
+  "data": {
+    "labels": ["0.0-0.5", "0.5-1.0", "1.0-1.5", ...],
+    "sailing": [0.02, 0.0, 0.0, ...],
+    "motoring": [0.002, 0.02, 0.1, ...]
+  }
 }
 ```
+
+The response contains:
+- `labels`: Speed range buckets in knots (0.5 knot increments)
+- `sailing`: Percentage of time spent sailing in each speed range
+- `motoring`: Percentage of time spent motoring in each speed range
 
 ### Future Enhancements
 
 Planned features for the web interface:
-- Interactive map with track visualization using Leaflet or similar
-- Real-time metric charts with Chart.js or similar
 - Trip comparison tools
 - Export functionality (CSV, GPX)
-- Mobile-responsive design improvements
+- Additional environmental metric charts (temperature, pressure, humidity)
+- Real-time data streaming
+- User authentication and trip management
+- Mobile app companion
 
 ### Database Resilience Features
 

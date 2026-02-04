@@ -22,7 +22,12 @@ pub async fn start_web_server(
     // Create main app router with static file serving
     let app = Router::new()
         .nest("/api", api_router)
-        .nest_service("/", get_service(ServeDir::new("static")))
+        .nest_service("/", get_service(ServeDir::new("static")).handle_error(|error| async move {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Unhandled internal error: {}", error),
+            )
+        }))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)

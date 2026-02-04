@@ -395,13 +395,13 @@ pub struct TripSummary {
 #[derive(Debug, serde::Serialize)]
 pub struct TrackPoint {
     pub timestamp: String,
-    pub latitude: f64,
-    pub longitude: f64,
-    pub avg_speed_kn: f64,
-    pub max_speed_kn: f64,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub avg_speed_kn: Option<f64>,
+    pub max_speed_kn: Option<f64>,
     pub moored: bool,
     pub engine_on: bool,
-    pub total_distance_nm: f64,
+    pub total_distance_nm: Option<f64>,
     pub total_time_ms: u64,
     pub average_wind_speed_kn: Option<f64>,
     pub average_wind_angle_deg: Option<f64>,
@@ -417,6 +417,77 @@ pub struct WebMetricData {
     pub max_value: Option<f64>,
     pub min_value: Option<f64>,
     pub count: Option<u32>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SpeedDistributionData {
+    pub labels: Vec<String>,
+    pub sailing: Vec<f64>,
+    pub motoring: Vec<f64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct WindStatisticsData {
+    pub directions: Vec<f64>,  // Wind direction angles (0, 5, 10, ..., 355)
+    pub wind_distances: Vec<f64>,  // Sum of (wind_speed * time) for each direction bucket
+    pub max_wind_speeds: Vec<f64>,  // Maximum wind speed for each direction bucket
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TripLeg {
+    pub leg_number: u32,
+    pub start_timestamp: String,
+    pub end_timestamp: String,
+    pub total_distance_nm: f64,
+    pub sailing_distance_nm: f64,
+    pub motoring_distance_nm: f64,
+    pub sailing_time_ms: u64,
+    pub motoring_time_ms: u64,
+    pub sailing_time_formatted: String,
+    pub motoring_time_formatted: String,
+}
+
+/// Format milliseconds as human-readable duration (e.g., "1h 30m" or "45m")
+fn format_duration_ms(milliseconds: u64) -> String {
+    let total_seconds = milliseconds / 1000;
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    
+    if hours > 0 {
+        if minutes > 0 {
+            format!("{}h {}m", hours, minutes)
+        } else {
+            format!("{}h", hours)
+        }
+    } else if minutes > 0 {
+        format!("{}m", minutes)
+    } else {
+        format!("{}s", seconds)
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TripLegsData {
+    pub legs: Vec<TripLeg>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct FastestSegment {
+    pub distance_nm: f64,
+    pub average_speed_kn: f64,
+    pub duration_ms: u64,
+    pub start_timestamp: String,
+    pub end_timestamp: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TrackAnalytics {
+    pub max_speed_kn: Option<f64>,
+    pub max_speed_timestamp: Option<String>,
+    pub fastest_1nm: Option<FastestSegment>,
+    pub fastest_5nm: Option<FastestSegment>,
+    pub fastest_10nm: Option<FastestSegment>,
 }
 
 impl VesselDatabase {
@@ -552,13 +623,13 @@ impl VesselDatabase {
             .iter()
             .map(|row| TrackPoint {
                 timestamp: row.get::<String, _>("timestamp").unwrap_or_default(),
-                latitude: row.get::<f64, _>("latitude").unwrap_or(0.0),
-                longitude: row.get::<f64, _>("longitude").unwrap_or(0.0),
-                avg_speed_kn: row.get::<f64, _>("average_speed_kn").unwrap_or(0.0),
-                max_speed_kn: row.get::<f64, _>("max_speed_kn").unwrap_or(0.0),
+                latitude: row.get::<f64, _>("latitude"),
+                longitude: row.get::<f64, _>("longitude"),
+                avg_speed_kn: row.get::<f64, _>("average_speed_kn"),
+                max_speed_kn: row.get::<f64, _>("max_speed_kn"),
                 moored: row.get::<i32, _>("is_moored").unwrap_or(0) != 0,
                 engine_on: row.get::<i32, _>("engine_on").unwrap_or(0) != 0,
-                total_distance_nm: row.get::<f64, _>("total_distance_nm").unwrap_or(0.0),
+                total_distance_nm: row.get::<f64, _>("total_distance_nm"),
                 total_time_ms: row.get::<u64, _>("total_time_ms").unwrap_or(0),
                 average_wind_speed_kn: row.get::<f64, _>("average_wind_speed_kn"),
                 average_wind_angle_deg: row.get::<f64, _>("average_wind_angle_deg"),
@@ -615,4 +686,447 @@ impl VesselDatabase {
 
         Ok(metrics)
     }
+
+    /// Fetch speed distribution data for a trip
+    pub fn fetch_speed_distribution(&self, trip_id: Option<u32>, start: Option<&str>, end: Option<&str>) -> Result<SpeedDistributionData, Box<dyn std::error::Error>> {
+        // Create buckets for speeds from 0 to 10 knots in 0.5 knot increments
+        let max_speed = 10.0;
+        let bucket_size = 0.5;
+        let num_buckets = ((max_speed / bucket_size) as f64).ceil() as usize;
+        
+        let mut sailing_buckets = vec![0.0; num_buckets];
+        let mut motoring_buckets = vec![0.0; num_buckets];
+        let mut labels = Vec::with_capacity(num_buckets);
+        
+        // Initialize labels
+        for i in 0..num_buckets {
+            let min_speed = i as f64 * bucket_size;
+            let max_speed = (i + 1) as f64 * bucket_size;
+            labels.push(format!("{:.1}-{:.1}", min_speed, max_speed));
+        }
+        
+        // Build query based on parameters
+        let query = if let Some(trip_id) = trip_id {
+            format!(
+                "SELECT vs.average_speed_kn, vs.total_distance_nm, vs.engine_on
+                 FROM vessel_status vs
+                 JOIN trips t ON vs.timestamp BETWEEN t.start_timestamp AND COALESCE(t.end_timestamp, NOW())
+                 WHERE t.id = {}
+                 ORDER BY vs.timestamp",
+                trip_id
+            )
+        } else if let (Some(start), Some(end)) = (start, end) {
+            format!(
+                "SELECT vs.average_speed_kn, vs.total_distance_nm, vs.engine_on
+                 FROM vessel_status vs
+                 WHERE vs.timestamp BETWEEN '{}' AND '{}'
+                 ORDER BY vs.timestamp",
+                start, end
+            )
+        } else {
+            return Err("Either trip_id or both start and end timestamps are required".into());
+        };
+
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+        
+        let results: Vec<mysql::Row> = conn.query(&query)
+            .map_err(|e| format!("Database query error: {}", e))?;
+
+        // Process each row and accumulate distances in buckets
+        for row in results {
+            let speed: Option<f64> = row.get("average_speed_kn");
+            let distance: Option<f64> = row.get("total_distance_nm");
+            let engine_on: i32 = row.get("engine_on").unwrap_or(0);
+            
+            if let (Some(speed), Some(distance)) = (speed, distance) {
+                let bucket_index = ((speed / bucket_size).floor() as usize).min(num_buckets - 1);
+                
+                if engine_on != 0 {
+                    motoring_buckets[bucket_index] += distance;
+                } else {
+                    sailing_buckets[bucket_index] += distance;
+                }
+            }
+        }
+
+        Ok(SpeedDistributionData {
+            labels,
+            sailing: sailing_buckets,
+            motoring: motoring_buckets,
+        })
+    }
+
+    /// Fetch wind statistics data for a trip or time range
+    pub fn fetch_wind_statistics(&self, trip_id: Option<u32>, start: Option<&str>, end: Option<&str>) -> Result<WindStatisticsData, Box<dyn std::error::Error>> {
+        // Create 72 buckets for wind directions (360 degrees / 5 degrees = 72 buckets)
+        let bucket_size = 5.0;
+        let num_buckets = 72;
+        
+        let mut wind_distances = vec![0.0; num_buckets];
+        let mut max_wind_speeds = vec![0.0; num_buckets];
+        let mut directions = Vec::with_capacity(num_buckets);
+        
+        // Initialize directions (0, 5, 10, ..., 355)
+        for i in 0..num_buckets {
+            directions.push(i as f64 * bucket_size);
+        }
+        
+        // Build query based on parameters
+        let query = if let Some(trip_id) = trip_id {
+            format!(
+                r"SELECT 
+                    vs.average_wind_angle_deg, 
+                    vs.average_wind_speed_kn,
+                    vs.timestamp
+                 FROM vessel_status vs
+                 JOIN trips t ON vs.timestamp BETWEEN t.start_timestamp AND COALESCE(t.end_timestamp, NOW())
+                 WHERE t.id = {}
+                 AND vs.average_wind_angle_deg IS NOT NULL 
+                 AND vs.average_wind_speed_kn IS NOT NULL
+                 AND vs.engine_on = false
+                 AND vs.is_moored = false
+                 ORDER BY vs.timestamp",
+                trip_id
+            )
+        } else if let (Some(start), Some(end)) = (start, end) {
+            format!(
+                r"SELECT 
+                    vs.average_wind_angle_deg, 
+                    vs.average_wind_speed_kn,
+                    vs.timestamp
+                 FROM vessel_status vs
+                 WHERE vs.timestamp BETWEEN '{}' AND '{}'
+                 AND vs.average_wind_angle_deg IS NOT NULL 
+                 AND vs.average_wind_speed_kn IS NOT NULL
+                 AND vs.engine_on = false
+                 AND vs.is_moored = false
+                 ORDER BY vs.timestamp",
+                start, end
+            )
+        } else {
+            return Err("Either trip_id or both start and end timestamps are required".into());
+        };
+
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+        
+        let results: Vec<mysql::Row> = conn.query(&query)
+            .map_err(|e| format!("Database query error: {}", e))?;
+
+        // Collect all data points first
+        let mut data_points = Vec::new();
+        for row in results {
+            let wind_direction: Option<f64> = row.get("average_wind_angle_deg");
+            let wind_speed: Option<f64> = row.get("average_wind_speed_kn");
+            let timestamp: Option<String> = row.get("timestamp");
+            
+            if let (Some(direction), Some(speed), Some(ts)) = (wind_direction, wind_speed, timestamp) {
+                let dt = chrono::NaiveDateTime::parse_from_str(&ts, "%Y-%m-%d %H:%M:%S%.f")
+                    .or_else(|_| chrono::NaiveDateTime::parse_from_str(&ts, "%Y-%m-%d %H:%M:%S"))
+                    .map_err(|e| format!("Timestamp parse error for '{}': {}", ts, e))?;
+                data_points.push((direction, speed, dt));
+            }
+        }
+
+        // Process consecutive data points to calculate time intervals
+        for i in 0..data_points.len().saturating_sub(1) {
+            let (direction, speed, curr_dt) = data_points[i];
+            let (_, _, next_dt) = data_points[i + 1];
+            
+            let time_hours = (next_dt - curr_dt).num_seconds() as f64 / 3600.0;
+            
+            if time_hours > 0.0 {
+                // Calculate bucket index (normalize direction to 0-359, then divide by 5)
+                let normalized_direction = direction % 360.0;
+                let bucket_index = ((normalized_direction / bucket_size).floor() as usize).min(num_buckets - 1);
+                
+                // Add wind distance (speed * time)
+                let wind_distance = speed * time_hours;
+                wind_distances[bucket_index] += wind_distance;
+                
+                // Update max wind speed for this bucket
+                max_wind_speeds[bucket_index] = f64::max(max_wind_speeds[bucket_index], speed);
+            }
+        }
+
+        Ok(WindStatisticsData {
+            directions,
+            wind_distances,
+            max_wind_speeds,
+        })
+    }
+
+    /// Fetch trip legs data - divides trip into legs between mooring periods
+    pub fn fetch_trip_legs(&self, trip_id: u32) -> Result<TripLegsData, Box<dyn std::error::Error>> {
+        let query = format!(
+            r"SELECT 
+                DATE_FORMAT(CONVERT_TZ(vs.timestamp, @@session.time_zone, '+00:00'), '%Y-%m-%dT%H:%i:%S.%fZ') as timestamp,
+                vs.is_moored,
+                vs.engine_on,
+                vs.total_distance_nm,
+                vs.total_time_ms
+             FROM vessel_status vs
+             JOIN trips t ON vs.timestamp BETWEEN t.start_timestamp AND COALESCE(t.end_timestamp, NOW())
+             WHERE t.id = {}
+             ORDER BY vs.timestamp",
+            trip_id
+        );
+
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+        
+        let results: Vec<mysql::Row> = conn.query(&query)
+            .map_err(|e| format!("Database query error: {}", e))?;
+
+        let mut legs = Vec::new();
+        let mut in_leg = false;
+        let mut leg_start_timestamp = String::new();
+        let mut leg_total_distance = 0.0;
+        let mut leg_sailing_distance = 0.0;
+        let mut leg_motoring_distance = 0.0;
+        let mut leg_sailing_time = 0_u64;
+        let mut leg_motoring_time = 0_u64;
+        let mut leg_number = 0;
+
+        for row in &results {
+            let timestamp: String = row.get("timestamp").unwrap_or_default();
+            let is_moored: bool = row.get("is_moored").unwrap_or(false);
+            let engine_on: bool = row.get("engine_on").unwrap_or(false);
+            let interval_distance: f64 = row.get("total_distance_nm").unwrap_or(0.0);
+            let interval_time: u64 = row.get("total_time_ms").unwrap_or(0);
+
+            if is_moored {
+                // End current leg if we have one
+                if in_leg && leg_total_distance >= 0.5 {
+                    leg_number += 1;
+                    legs.push(TripLeg {
+                        leg_number,
+                        start_timestamp: leg_start_timestamp.clone(),
+                        end_timestamp: timestamp.clone(),
+                        total_distance_nm: leg_total_distance,
+                        sailing_distance_nm: leg_sailing_distance,
+                        motoring_distance_nm: leg_motoring_distance,
+                        sailing_time_ms: leg_sailing_time,
+                        motoring_time_ms: leg_motoring_time,
+                        sailing_time_formatted: format_duration_ms(leg_sailing_time),
+                        motoring_time_formatted: format_duration_ms(leg_motoring_time),
+                    });
+                }
+                
+                // Reset for next leg
+                in_leg = false;
+                leg_total_distance = 0.0;
+                leg_sailing_distance = 0.0;
+                leg_motoring_distance = 0.0;
+                leg_sailing_time = 0;
+                leg_motoring_time = 0;
+            } else {
+                // Not moored - either starting or continuing a leg
+                if !in_leg {
+                    // Start a new leg
+                    in_leg = true;
+                    leg_start_timestamp = timestamp.clone();
+                }
+                
+                // Accumulate distance and time for this interval
+                leg_total_distance += interval_distance;
+                
+                if engine_on {
+                    leg_motoring_distance += interval_distance;
+                    leg_motoring_time += interval_time;
+                } else {
+                    leg_sailing_distance += interval_distance;
+                    leg_sailing_time += interval_time;
+                }
+            }
+        }
+
+        // Handle last leg if trip ended while underway
+        if in_leg && leg_total_distance >= 0.5 {
+            leg_number += 1;
+            let last_timestamp = results.last()
+                .and_then(|r| r.get::<String, _>("timestamp"))
+                .unwrap_or_default();
+                
+            legs.push(TripLeg {
+                leg_number,
+                start_timestamp: leg_start_timestamp,
+                end_timestamp: last_timestamp,
+                total_distance_nm: leg_total_distance,
+                sailing_distance_nm: leg_sailing_distance,
+                motoring_distance_nm: leg_motoring_distance,
+                sailing_time_ms: leg_sailing_time,
+                motoring_time_ms: leg_motoring_time,
+                sailing_time_formatted: format_duration_ms(leg_sailing_time),
+                motoring_time_formatted: format_duration_ms(leg_motoring_time),
+            });
+        }
+
+        Ok(TripLegsData { legs })
+    }
+
+    /// Fetch track analytics for a time range - calculates max speed and fastest segments
+    pub fn fetch_track_analytics(&self, start: &str, end: &str) -> Result<TrackAnalytics, Box<dyn std::error::Error>> {
+        let query = format!(
+            r"SELECT 
+                DATE_FORMAT(CONVERT_TZ(vs.timestamp, @@session.time_zone, '+00:00'), '%Y-%m-%dT%H:%i:%S.%fZ') as timestamp,
+                vs.latitude,
+                vs.longitude,
+                vs.average_speed_kn,
+                vs.engine_on
+             FROM vessel_status vs
+             WHERE vs.timestamp BETWEEN '{}' AND '{}'
+             AND vs.average_speed_kn IS NOT NULL
+             ORDER BY vs.timestamp",
+            start, end
+        );
+
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+        
+        let results: Vec<mysql::Row> = conn.query(&query)
+            .map_err(|e| format!("Database query error: {}", e))?;
+
+        if results.is_empty() {
+            return Ok(TrackAnalytics {
+                max_speed_kn: None,
+                max_speed_timestamp: None,
+                fastest_1nm: None,
+                fastest_5nm: None,
+                fastest_10nm: None,
+            });
+        }
+
+        // Collect track points
+        let mut track_points = Vec::new();
+        for row in &results {
+            let timestamp: String = row.get("timestamp").unwrap_or_default();
+            let latitude: Option<f64> = row.get("latitude");
+            let longitude: Option<f64> = row.get("longitude");
+            let speed: Option<f64> = row.get("average_speed_kn");
+            let engine_on: bool = row.get("engine_on").unwrap_or(false);
+
+            if let (Some(lat), Some(lon), Some(spd)) = (latitude, longitude, speed) {
+                track_points.push((timestamp, lat, lon, spd, engine_on));
+            }
+        }
+
+        // Find max speed when sailing
+        let mut max_speed = None;
+        let mut max_speed_timestamp = None;
+        for (timestamp, _, _, speed, engine_on) in &track_points {
+            if !engine_on && (max_speed.is_none() || *speed > max_speed.unwrap()) {
+                max_speed = Some(*speed);
+                max_speed_timestamp = Some(timestamp.clone());
+            }
+        }
+
+        // Calculate fastest segments for 1NM, 5NM, and 10NM
+        let fastest_1nm = find_fastest_segment(&track_points, 1.0);
+        let fastest_5nm = find_fastest_segment(&track_points, 5.0);
+        let fastest_10nm = find_fastest_segment(&track_points, 10.0);
+
+        Ok(TrackAnalytics {
+            max_speed_kn: max_speed,
+            max_speed_timestamp,
+            fastest_1nm,
+            fastest_5nm,
+            fastest_10nm,
+        })
+    }
+}
+
+/// Helper function to find fastest segment for a given target distance
+fn find_fastest_segment(
+    track_points: &[(String, f64, f64, f64, bool)],
+    target_distance_nm: f64,
+) -> Option<FastestSegment> {
+    if track_points.len() < 2 {
+        return None;
+    }
+
+    let mut fastest: Option<FastestSegment> = None;
+
+    // Use sliding window approach
+    for start_idx in 0..track_points.len() {
+        let (start_ts, start_lat, start_lon, _, start_engine) = &track_points[start_idx];
+        
+        // Skip if motoring
+        if *start_engine {
+            continue;
+        }
+
+        let mut cumulative_distance = 0.0;
+        let mut all_sailing = true;
+
+        for end_idx in (start_idx + 1)..track_points.len() {
+            let (end_ts, end_lat, end_lon, _, end_engine) = &track_points[end_idx];
+            
+            // Check if entire segment is sailing
+            if *end_engine {
+                all_sailing = false;
+                break;
+            }
+
+            // Calculate distance between consecutive points
+            let prev_idx = end_idx - 1;
+            let (_, prev_lat, prev_lon, _, _) = &track_points[prev_idx];
+            let segment_dist = haversine_distance(*prev_lat, *prev_lon, *end_lat, *end_lon);
+            cumulative_distance += segment_dist;
+
+            // Check if we've reached or exceeded target distance
+            if cumulative_distance >= target_distance_nm && all_sailing {
+                // Calculate duration
+                let start_time = match chrono::NaiveDateTime::parse_from_str(
+                    &start_ts.replace('Z', ""),
+                    "%Y-%m-%dT%H:%M:%S%.f"
+                ) {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                let end_time = match chrono::NaiveDateTime::parse_from_str(
+                    &end_ts.replace('Z', ""),
+                    "%Y-%m-%dT%H:%M:%S%.f"
+                ) {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                let duration_ms = (end_time - start_time).num_milliseconds() as u64;
+
+                if duration_ms > 0 {
+                    let avg_speed = cumulative_distance / (duration_ms as f64 / 1000.0 / 3600.0);
+                    
+                    // Check if this is the fastest so far
+                    if fastest.is_none() || avg_speed > fastest.as_ref().unwrap().average_speed_kn {
+                        fastest = Some(FastestSegment {
+                            distance_nm: cumulative_distance,
+                            average_speed_kn: avg_speed,
+                            duration_ms,
+                            start_timestamp: start_ts.clone(),
+                            end_timestamp: end_ts.clone(),
+                        });
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    fastest
+}
+
+/// Calculate haversine distance between two points in nautical miles
+fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let r = 3440.065; // Earth radius in nautical miles
+    let d_lat = (lat2 - lat1).to_radians();
+    let d_lon = (lon2 - lon1).to_radians();
+    let lat1_rad = lat1.to_radians();
+    let lat2_rad = lat2.to_radians();
+
+    let a = (d_lat / 2.0).sin().powi(2)
+        + lat1_rad.cos() * lat2_rad.cos() * (d_lon / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+
+    r * c
 }
