@@ -11,10 +11,12 @@ use tracing::{info, error};
 use std::{backtrace::Backtrace, sync::Arc};
 
 use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData, SpeedDistributionData, WindStatisticsData, TripLegsData, TrackAnalytics};
+use crate::config::Config;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<VesselDatabase>,
+    pub config: Arc<Config>,
 }
 
 #[derive(Debug, Serialize)]
@@ -269,6 +271,17 @@ pub async fn update_trip_description(
     }
 }
 
+pub async fn get_google_maps_key(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Option<String>>>, StatusCode> {
+    info!("GET /api/config/google_maps_key called");
+    
+    match state.config.web.google_maps_api_key.clone() {
+        Some(key) => Ok(Json(ApiResponse::ok(Some(key)))),
+        None => Ok(Json(ApiResponse::ok(None))),
+    }
+}
+
 pub fn create_api_router(state: AppState) -> Router {
     Router::new()
         .route("/trip_description", post(update_trip_description))
@@ -280,6 +293,7 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/wind_statistics", get(get_wind_statistics))
         .route("/trip_legs", get(get_trip_legs))
         .route("/track_analytics", get(get_track_analytics))
+        .route("/config/google_maps_key", get(get_google_maps_key))
         .with_state(state)
 }
 #[cfg(test)]
@@ -304,8 +318,11 @@ mod tests {
     // Helper function to create a test app
     fn create_test_app() -> Router {
         let db = create_test_db();
+        let mut config = crate::config::Config::default();
+        config.web.google_maps_api_key = Some("your_google_maps_api_key_here".to_string());
         let state = AppState {
             db: Arc::new(db),
+            config: Arc::new(config),
         };
         create_api_router(state)
     }
@@ -917,5 +934,31 @@ mod tests {
             let response = handle.await.unwrap();
             assert_eq!(response.status(), StatusCode::OK);
         }
+    }
+
+    #[tokio::test]
+    async fn test_get_google_maps_key() {
+        let app = create_test_app();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/config/google_maps_key")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["data"], "your_google_maps_api_key_here");
+        assert!(json["error"].is_null());
     }
 }

@@ -214,13 +214,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     if config.web.enabled {
         if let Some(ref db) = vessel_db {
             let db_arc = std::sync::Arc::new(db.clone());
+            let config_arc = std::sync::Arc::new(config.clone());
             let web_port = config.web.port;
             
             // Spawn web server in a separate thread
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                 rt.block_on(async {
-                    if let Err(e) = web::start_web_server(db_arc, web_port).await {
+                    if let Err(e) = web::start_web_server(db_arc, config_arc, web_port).await {
                         warn!("Web server error: {}", e);
                     }
                 });

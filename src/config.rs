@@ -27,6 +27,8 @@ pub struct WebConfig {
     /// Port for the web server to listen on
     #[serde(default = "default_web_port")]
     pub port: u16,
+    /// Google Maps API key for the web interface
+    pub google_maps_api_key: Option<String>,
 }
 
 fn default_web_enabled() -> bool {
@@ -42,6 +44,7 @@ impl Default for WebConfig {
         Self {
             enabled: true,
             port: 8080,
+            google_maps_api_key: None,
         }
     }
 }
@@ -890,9 +893,11 @@ mod tests {
         let config = WebConfig {
             enabled: false,
             port: 9000,
+            google_maps_api_key: Some("test_key".to_string()),
         };
         assert_eq!(config.enabled, false);
         assert_eq!(config.port, 9000);
+        assert_eq!(config.google_maps_api_key, Some("test_key".to_string()));
     }
 
     #[test]
@@ -900,6 +905,7 @@ mod tests {
         let config = WebConfig {
             enabled: true,
             port: 3000,
+            google_maps_api_key: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("3000"));
@@ -908,6 +914,7 @@ mod tests {
         let deserialized: WebConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.enabled, true);
         assert_eq!(deserialized.port, 3000);
+        assert_eq!(deserialized.google_maps_api_key, None);
     }
 
     #[test]

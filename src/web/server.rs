@@ -8,13 +8,15 @@ use tower_http::services::ServeDir;
 use tower_http::cors::{CorsLayer, Any};
 
 use crate::db::VesselDatabase;
+use crate::config::Config;
 use super::api::{AppState, create_api_router};
 
 pub async fn start_web_server(
     db: Arc<VesselDatabase>,
+    config: Arc<Config>,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let state = AppState { db };
+    let state = AppState { db, config };
 
     // Create API router
     let api_router = create_api_router(state);

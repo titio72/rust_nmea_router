@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trip Details - NMEA Router</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
-    <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCzvWb2wMnPNMGEMniwGFhN3VXGM9dnWzo"></script>
+    <!-- Google Maps API will be loaded dynamically -->
     <style>
         :root {
             --bg-primary: #f5f5f5;
@@ -282,6 +282,30 @@
     </div>
 
     <script>
+        // Load Google Maps API key dynamically
+        async function loadGoogleMapsAPI() {
+            try {
+                const response = await fetch('/api/config/google_maps_key');
+                const result = await response.json();
+                
+                if (result.status === 'ok' && result.data) {
+                    // Load Google Maps API with the key
+                    const script = document.createElement('script');
+                    script.src = `https://maps.googleapis.com/maps/api/js?key=${result.data}`;
+                    script.async = true;
+                    script.defer = true;
+                    document.head.appendChild(script);
+                } else {
+                    console.warn('Google Maps API key not configured');
+                }
+            } catch (error) {
+                console.error('Failed to load Google Maps API key:', error);
+            }
+        }
+
+        // Load Google Maps API on page load
+        loadGoogleMapsAPI();
+
         // Theme management
         function initTheme() {
             const savedTheme = localStorage.getItem('theme') || 'light';
