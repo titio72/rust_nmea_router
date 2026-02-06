@@ -68,7 +68,10 @@ impl VesselDatabase {
     /// ```
     pub fn new(connection_url: &str) -> Result<Self, Box<dyn Error>> {
         let opts = Opts::from_url(connection_url)?;
-        let pool = Pool::new(opts)?;
+        // Set session timezone to UTC to ensure all timestamps are handled consistently
+        let opts_builder = mysql::OptsBuilder::from_opts(opts)
+            .init(vec!["SET time_zone = '+00:00'"]);
+        let pool = Pool::new(opts_builder)?;
         
         Ok(VesselDatabase { pool })
     }
@@ -248,8 +251,8 @@ impl VesselDatabase {
         
         let row: Option<mysql::Row> = conn.exec_first(
             r"SELECT id, description, 
-                     DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f') as start_ts,
-                     DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S.%f') as end_ts,
+                     DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as start_ts,
+                     DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
                      total_distance_sailed, total_distance_motoring,
                      total_time_sailing, total_time_motoring, total_time_moored
               FROM trips
@@ -269,9 +272,11 @@ impl VesselDatabase {
             let total_time_motoring: u64 = row.take("total_time_motoring").ok_or("Missing total_time_motoring")?;
             let total_time_moored: u64 = row.take("total_time_moored").ok_or("Missing total_time_moored")?;
             
-            // Parse timestamps
-            let start_dt = NaiveDateTime::parse_from_str(&start_ts, "%Y-%m-%d %H:%M:%S%.6f")?;
-            let end_dt = NaiveDateTime::parse_from_str(&end_ts, "%Y-%m-%d %H:%M:%S%.6f")?;
+            // Parse timestamps - remove 'Z' suffix and parse ISO 8601 format
+            let start_ts_clean = start_ts.trim_end_matches('Z');
+            let end_ts_clean = end_ts.trim_end_matches('Z');
+            let start_dt = NaiveDateTime::parse_from_str(start_ts_clean, "%Y-%m-%dT%H:%M:%S%.f")?;
+            let end_dt = NaiveDateTime::parse_from_str(end_ts_clean, "%Y-%m-%dT%H:%M:%S%.f")?;
             
             // Convert to SystemTime then to Instant (approximate)
             let start_datetime = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start_dt, chrono::Utc);
@@ -472,6 +477,20 @@ pub struct TripLegsData {
 }
 
 #[derive(Debug, serde::Serialize)]
+pub struct HeatmapDay {
+    pub date: String,  // ISO 8601 date format: YYYY-MM-DD
+    pub distance_nm: f64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct HeatmapData {
+    pub days: Vec<HeatmapDay>,
+    pub min_distance: f64,
+    pub max_distance: f64,
+    pub total_distance: f64,
+}
+
+#[derive(Debug, serde::Serialize)]
 pub struct FastestSegment {
     pub distance_nm: f64,
     pub average_speed_kn: f64,
@@ -497,8 +516,8 @@ impl VesselDatabase {
         
         let row: Option<mysql::Row> = conn.exec_first(
             r"SELECT id, description, 
-                     DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f') as start_ts,
-                     DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S.%f') as end_ts,
+                     DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as start_ts,
+                     DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
                      total_distance_sailed, total_distance_motoring,
                      (total_distance_sailed + total_distance_motoring) as total_distance,
                      total_time_sailing, total_time_motoring, total_time_moored
@@ -534,8 +553,8 @@ impl VesselDatabase {
         let mut query = String::from(
             "SELECT id, 
                     description,
-                    DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S') as start_ts,
-                    DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S') as end_ts,
+                    DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as start_ts,
+                    DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as end_ts,
                     (total_distance_sailed + total_distance_motoring) as total_distance,
                     (total_time_sailing + total_time_motoring + total_time_moored) as total_time,
                     total_time_sailing as total_time_sailing,
@@ -587,7 +606,7 @@ impl VesselDatabase {
         let query = if let Some(trip_id) = trip_id {
             // Get trip date range and fetch vessel_status data for that period
             format!(
-                "SELECT DATE_FORMAT(vs.timestamp, '%Y-%m-%d %H:%i:%S') as timestamp,
+                "SELECT DATE_FORMAT(vs.timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
                         vs.latitude, vs.longitude, vs.average_speed_kn, vs.max_speed_kn, 
                         vs.is_moored, vs.engine_on, vs.total_distance_nm, vs.total_time_ms,
                         vs.average_wind_speed_kn, vs.average_wind_angle_deg,
@@ -600,7 +619,7 @@ impl VesselDatabase {
             )
         } else if let (Some(start), Some(end)) = (start, end) {
             format!(
-                "SELECT DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:%S') as timestamp,
+                "SELECT DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
                         latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on,
                         total_distance_nm, total_time_ms,
                         average_wind_speed_kn, average_wind_angle_deg,
@@ -651,7 +670,7 @@ impl VesselDatabase {
     pub fn fetch_metrics(&self, metric: &str, trip_id: Option<u32>, start: Option<&str>, end: Option<&str>) -> Result<Vec<WebMetricData>, Box<dyn std::error::Error>> {
         let query = if let Some(trip_id) = trip_id {
             format!(
-                "SELECT DATE_FORMAT(e.timestamp, '%Y-%m-%d %H:%i:%S') as timestamp,
+                "SELECT DATE_FORMAT(e.timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
                         e.metric_id, e.value_avg, e.value_max, e.value_min 
                  FROM environmental_data e 
                  WHERE e.timestamp >= (SELECT COALESCE(start_timestamp, NOW()) FROM trips WHERE id = {}) AND e.timestamp <= (SELECT COALESCE(end_timestamp, NOW()) FROM trips WHERE id = {})
@@ -661,7 +680,7 @@ impl VesselDatabase {
             )
         } else if let (Some(start), Some(end)) = (start, end) {
             format!(
-                "SELECT DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:%S') as timestamp,
+                "SELECT DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
                         metric_id, value_avg, value_max, value_min
                  FROM environmental_data 
                  WHERE metric_id = '{}' AND timestamp BETWEEN '{}' AND '{}' 
@@ -789,7 +808,6 @@ impl VesselDatabase {
                  WHERE t.id = {}
                  AND vs.average_wind_angle_deg IS NOT NULL 
                  AND vs.average_wind_speed_kn IS NOT NULL
-                 AND vs.engine_on = false
                  AND vs.is_moored = false
                  ORDER BY vs.timestamp",
                 trip_id
@@ -804,7 +822,6 @@ impl VesselDatabase {
                  WHERE vs.timestamp BETWEEN '{}' AND '{}'
                  AND vs.average_wind_angle_deg IS NOT NULL 
                  AND vs.average_wind_speed_kn IS NOT NULL
-                 AND vs.engine_on = false
                  AND vs.is_moored = false
                  ORDER BY vs.timestamp",
                 start, end
@@ -866,7 +883,7 @@ impl VesselDatabase {
     pub fn fetch_trip_legs(&self, trip_id: u32) -> Result<TripLegsData, Box<dyn std::error::Error>> {
         let query = format!(
             r"SELECT 
-                DATE_FORMAT(CONVERT_TZ(vs.timestamp, @@session.time_zone, '+00:00'), '%Y-%m-%dT%H:%i:%S.%fZ') as timestamp,
+                DATE_FORMAT(vs.timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as timestamp,
                 vs.is_moored,
                 vs.engine_on,
                 vs.total_distance_nm,
@@ -975,7 +992,7 @@ impl VesselDatabase {
     pub fn fetch_track_analytics(&self, start: &str, end: &str) -> Result<TrackAnalytics, Box<dyn std::error::Error>> {
         let query = format!(
             r"SELECT 
-                DATE_FORMAT(CONVERT_TZ(vs.timestamp, @@session.time_zone, '+00:00'), '%Y-%m-%dT%H:%i:%S.%fZ') as timestamp,
+                DATE_FORMAT(vs.timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as timestamp,
                 vs.latitude,
                 vs.longitude,
                 vs.average_speed_kn,
@@ -1038,6 +1055,61 @@ impl VesselDatabase {
             fastest_1nm,
             fastest_5nm,
             fastest_10nm,
+        })
+    }
+
+    /// Fetch heatmap data - distance traveled grouped by day for 365 days before the given date
+    pub fn fetch_heatmap(&self, end_date: &str) -> Result<HeatmapData, Box<dyn std::error::Error>> {
+        // Parse the end date and calculate start date (365 days before)
+        let end_dt = chrono::NaiveDate::parse_from_str(end_date, "%Y-%m-%d")?;
+        let start_dt = end_dt - chrono::Duration::days(365);
+        
+        let query = format!(
+            r"SELECT DATE(vs.timestamp) as day, COALESCE(SUM(COALESCE(vs.total_distance_nm, 0)), 0) as total_distance
+             FROM vessel_status vs
+             WHERE DATE(vs.timestamp) BETWEEN '{}' AND '{}'
+             GROUP BY DATE(vs.timestamp)
+             ORDER BY vs.timestamp",
+            start_dt, end_dt
+        );
+
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+        
+        let results: Vec<mysql::Row> = conn.query(&query)
+            .map_err(|e| format!("Database query error: {}", e))?;
+
+        let mut days = Vec::new();
+        let mut min_distance: f64 = f64::MAX;
+        let mut max_distance: f64 = 0.0;
+        let mut total_distance: f64 = 0.0;
+
+        for row in results {
+            let date: String = row.get("day").unwrap_or_default();
+            let distance: f64 = row.get("total_distance").unwrap_or(0.0);
+            
+            days.push(HeatmapDay {
+                date,
+                distance_nm: distance,
+            });
+            
+            total_distance += distance;
+            if distance > 0.0 {
+                min_distance = min_distance.min(distance);
+                max_distance = max_distance.max(distance);
+            }
+        }
+
+        // If no days with distance data, set min_distance to 0
+        if min_distance == f64::MAX {
+            min_distance = 0.0;
+        }
+
+        Ok(HeatmapData {
+            days,
+            min_distance,
+            max_distance,
+            total_distance,
         })
     }
 }

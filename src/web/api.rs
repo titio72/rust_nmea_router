@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, error};
 use std::{backtrace::Backtrace, sync::Arc};
 
-use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData, SpeedDistributionData, WindStatisticsData, TripLegsData, TrackAnalytics};
+use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData, SpeedDistributionData, WindStatisticsData, TripLegsData, TrackAnalytics, HeatmapData};
 use crate::config::Config;
 
 #[derive(Clone)]
@@ -89,6 +89,11 @@ pub struct TimeRangeQuery {
 pub struct TimeRangeRequiredQuery {
     pub start: String,
     pub end: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HeatmapQuery {
+    pub date: String,  // Date in YYYY-MM-DD format
 }
 
 pub async fn get_trips(
@@ -282,6 +287,20 @@ pub async fn get_google_maps_key(
     }
 }
 
+pub async fn get_heatmap(
+    State(state): State<AppState>,
+    Query(params): Query<HeatmapQuery>,
+) -> Result<Json<ApiResponse<HeatmapData>>, StatusCode> {
+    info!(?params, "GET /api/heatmap called");
+    match state.db.fetch_heatmap(&params.date) {
+        Ok(heatmap) => Ok(Json(ApiResponse::ok(heatmap))),
+        Err(e) => {
+            error!(error = %e, "Failed to fetch heatmap");
+            Ok(Json(ApiResponse::error(e.to_string())))
+        }
+    }
+}
+
 pub fn create_api_router(state: AppState) -> Router {
     Router::new()
         .route("/trip_description", post(update_trip_description))
@@ -293,6 +312,7 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/wind_statistics", get(get_wind_statistics))
         .route("/trip_legs", get(get_trip_legs))
         .route("/track_analytics", get(get_track_analytics))
+        .route("/heatmap", get(get_heatmap))
         .route("/config/google_maps_key", get(get_google_maps_key))
         .with_state(state)
 }
