@@ -1089,4 +1089,163 @@ mod tests {
         assert_eq!(json["data"], "your_google_maps_api_key_here");
         assert!(json["error"].is_null());
     }
+
+    #[tokio::test]
+    async fn test_get_heatmap() {
+        let app = create_test_app();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/heatmap?date=2026-02-07")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["status"], "ok");
+        assert!(json["data"].is_object());
+        
+        // Verify heatmap data structure
+        let data = &json["data"];
+        assert!(data["total_distance"].is_number());
+        assert!(data["max_distance"].is_number());
+        assert!(data["min_distance"].is_number());
+        assert!(data["days"].is_array());
+        
+        // Verify day structure if days exist
+        if let Some(days) = data["days"].as_array() {
+            if !days.is_empty() {
+                let day = &days[0];
+                assert!(day["date"].is_string());
+                assert!(day["distance_nm"].is_number());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_tracking_status() {
+        let app = create_test_app();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/tracking/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["status"], "ok");
+        assert!(json["data"].is_object());
+        assert!(json["data"]["enabled"].is_boolean());
+        assert!(json["error"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_set_tracking_status() {
+        let app = create_test_app();
+
+        let payload = json!({
+            "enabled": false
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/tracking/status")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["status"], "ok");
+        assert!(json["data"].is_object());
+        assert!(json["data"]["enabled"].is_boolean());
+    }
+
+    #[tokio::test]
+    async fn test_get_metrics_status() {
+        let app = create_test_app();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["status"], "ok");
+        assert!(json["data"].is_object());
+        assert!(json["data"]["enabled"].is_boolean());
+        assert!(json["error"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_set_metrics_status() {
+        let app = create_test_app();
+
+        let payload = json!({
+            "enabled": false
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/metrics/status")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["status"], "ok");
+        assert!(json["data"].is_object());
+        assert!(json["data"]["enabled"].is_boolean());
+    }
 }

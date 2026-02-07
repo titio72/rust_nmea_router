@@ -336,18 +336,20 @@ mod tests {
         #[test]
         fn test_wind_sample_ignored_if_no_recent_speed() {
             let mut monitor = VesselMonitor::default();
-            // Add position samples
-            for _ in 0..10 {
+            let base_time = Instant::now();
+            
+            // Add position samples using simulated time
+            for i in 0..10 {
                 let position_msg = PositionRapidUpdate {
                     pgn: 129025,
                     latitude: 45.0,
                     longitude: -122.0,
                 };
-                monitor.process_position(&position_msg, Instant::now());
-                std::thread::sleep(Duration::from_millis(10));
+                let timestamp = base_time + Duration::from_millis(i * 10);
+                monitor.process_position(&position_msg, timestamp);
             }
             // No speed sample yet
-            make_wind_sample(&mut monitor, 10.0, 90.0, Instant::now());
+            make_wind_sample(&mut monitor, 10.0, 90.0, base_time + Duration::from_millis(100));
             // Wind buffer should remain empty
             assert_eq!(monitor.wind_speeds.len(), 0);
         }
@@ -355,21 +357,27 @@ mod tests {
         #[test]
         fn test_wind_sample_ignored_if_speed_outdated() {
             let mut monitor = VesselMonitor::default();
-            // Add position samples
-            for _ in 0..10 {
+            let base_time = Instant::now();
+            
+            // Add position samples using simulated time
+            for i in 0..10 {
                 let position_msg = PositionRapidUpdate {
                     pgn: 129025,
                     latitude: 45.0,
                     longitude: -122.0,
                 };
-                monitor.process_position(&position_msg, Instant::now());
-                std::thread::sleep(Duration::from_millis(10));
+                let timestamp = base_time + Duration::from_millis(i * 10);
+                monitor.process_position(&position_msg, timestamp);
             }
-            // Add a speed sample, but wait so it becomes outdated
-            make_speed_sample(&mut monitor, 5.0, Instant::now());
-            std::thread::sleep(Duration::from_secs(6)); // >5s, so speed sample is outdated
-            make_wind_sample(&mut monitor, 10.0, 90.0, Instant::now());
-            // Wind buffer should remain empty
+            
+            // Add a speed sample at base_time
+            make_speed_sample(&mut monitor, 5.0, base_time);
+            
+            // Try to add wind sample >5s later (speed is now outdated)
+            let wind_time = base_time + Duration::from_secs(6);
+            make_wind_sample(&mut monitor, 10.0, 90.0, wind_time);
+            
+            // Wind buffer should remain empty because speed sample is outdated
             assert_eq!(monitor.wind_speeds.len(), 0);
         }
 
@@ -650,16 +658,17 @@ mod tests {
     #[test]
     fn test_vessel_status_generation() {
         let mut monitor = VesselMonitor::default();
+        let base_time = Instant::now();
         
-        // Add enough position samples to meet minimum requirement
-        for _ in 0..10 {
+        // Add enough position samples to meet minimum requirement using simulated time
+        for i in 0..10 {
             let position_msg = PositionRapidUpdate {
                 pgn: 129025,
                 latitude: 45.0,
                 longitude: -122.0,
             };
-            monitor.process_position(&position_msg, Instant::now());
-            std::thread::sleep(Duration::from_millis(50));
+            let timestamp = base_time + Duration::from_millis(i * 5);
+            monitor.process_position(&position_msg, timestamp);
         }
         
         let data = vec![
@@ -669,15 +678,15 @@ mod tests {
             0x00, 0x00,
         ];
         let cog_sog_msg = CogSogRapidUpdate::from_bytes(&data).unwrap();
-        monitor.process_cog_sog(&cog_sog_msg, Instant::now());
+        monitor.process_cog_sog(&cog_sog_msg, base_time + Duration::from_millis(100));
         
-        // Wait for event interval (status_report_period from monitor)
-        std::thread::sleep(monitor.status_report_period + Duration::from_millis(100));
+        // Simulate status report period elapsed
+        let status_time = base_time + monitor.status_report_period + Duration::from_millis(100);
         
         // Mark status as ready for generation
         monitor.status_report_ready = true;
         
-        let status = monitor.generate_status(Instant::now());
+        let status = monitor.generate_status(status_time);
         assert!(status.is_some());
     }
 }
