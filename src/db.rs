@@ -2,7 +2,7 @@ use mysql::*;
 use mysql::prelude::*;
 use std::{error::Error, time::{Duration, Instant}, sync::{Arc, Mutex}};
 use std::time::{SystemTime};
-use crate::{environmental_monitor::{MetricData, MetricId}, utilities::dirty_instant_to_systemtime};
+use crate::{environmental_monitor::{MetricData, MetricId}, utilities::{dirty_instant_to_systemtime, haversine_distance_nm}};
 use crate::trip::Trip;
 use chrono::NaiveDateTime;
 use tracing::{info, warn};
@@ -1198,7 +1198,7 @@ fn find_fastest_segment(
             // Calculate distance between consecutive points
             let prev_idx = end_idx - 1;
             let (_, prev_lat, prev_lon, _, _) = &track_points[prev_idx];
-            let segment_dist = haversine_distance(*prev_lat, *prev_lon, *end_lat, *end_lon);
+            let segment_dist = haversine_distance_nm(*prev_lat, *prev_lon, *end_lat, *end_lon);
             cumulative_distance += segment_dist;
 
             // Check if we've reached or exceeded target distance
@@ -1240,21 +1240,6 @@ fn find_fastest_segment(
     }
 
     fastest
-}
-
-/// Calculate haversine distance between two points in nautical miles
-fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
-    let r = 3440.065; // Earth radius in nautical miles
-    let d_lat = (lat2 - lat1).to_radians();
-    let d_lon = (lon2 - lon1).to_radians();
-    let lat1_rad = lat1.to_radians();
-    let lat2_rad = lat2.to_radians();
-
-    let a = (d_lat / 2.0).sin().powi(2)
-        + lat1_rad.cos() * lat2_rad.cos() * (d_lon / 2.0).sin().powi(2);
-    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
-
-    r * c
 }
 
 #[cfg(test)]
