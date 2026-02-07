@@ -8,13 +8,15 @@ use tower_http::services::ServeDir;
 use tower_http::cors::{CorsLayer, Any};
 
 use crate::db::VesselDatabase;
+use crate::config::Config;
 use super::api::{AppState, create_api_router};
 
 pub async fn start_web_server(
     db: Arc<VesselDatabase>,
+    config: Arc<Config>,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let state = AppState { db };
+    let state = AppState { db, config };
 
     // Create API router
     let api_router = create_api_router(state);
@@ -22,7 +24,12 @@ pub async fn start_web_server(
     // Create main app router with static file serving
     let app = Router::new()
         .nest("/api", api_router)
-        .nest_service("/", get_service(ServeDir::new("static")))
+        .nest_service("/", get_service(ServeDir::new("static")).handle_error(|error| async move {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Unhandled internal error: {}", error),
+            )
+        }))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)

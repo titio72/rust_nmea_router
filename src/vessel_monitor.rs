@@ -1,11 +1,13 @@
 use std::time::{Duration, Instant};
 use nmea2k::pgns::{CogSogRapidUpdate, HeadingReference, PositionRapidUpdate};
+use crate::mooring_detection::MooringDetectionQueue;
 use crate::position_utils::{Position, PositionQueue};
 use crate::utilities::{TimedQueue, calculate_true_wind};
 
-//const EVENT_INTERVAL: Duration = Duration::from_secs(10);
 const MOORING_DETECTION_WINDOW: Duration = Duration::from_secs(180); // 3 minutes
+#[allow(dead_code)] // Used in mooring detection logic based on position (but we switched to VMG-based detection, so this is now unused)
 const MOORING_THRESHOLD_METERS: f64 = 30.0; // 30 meters radius
+const MOORING_THRESHOLD_VMG_KNOTS: f64 = 0.1; // 0.1 knots
 const MOORING_ACCURACY: f64 = 0.90; // 90% of positions within threshold
 const MAX_VALID_SOG_KN: f64 = 25.0; // 25 knots (noise filter)
 const MAX_POSITION_DEVIATION_METERS: f64 = 100.0; // Maximum distance from median (noise filter)
@@ -89,35 +91,42 @@ impl VesselStatus {
 #[derive(Debug)]
 pub struct VesselMonitor {
     status_report_period: Duration,
+    status_report_moored_period: Duration,
     positions: PositionQueue,
     speeds: TimedQueue<f64>,
+    vmg_for_mooring: MooringDetectionQueue,
     wind_speeds: TimedQueue<f64>,
     wind_angles: TimedQueue<f64>,
     headings: TimedQueue<f64>,
     last_event_time: Instant,
     engine_on: bool,
     status_report_ready: bool,
+    first_report: bool,
 }
 
 impl VesselMonitor {
-    pub fn new(status_report_period: Duration) -> Self {
+    pub fn new(status_report_period: Duration, status_report_moored_period: Duration) -> Self {
         let now = Instant::now();
-        let time_window_secs = std::cmp::max(status_report_period.as_secs(), MOORING_DETECTION_WINDOW.as_secs()) + 30;
+        let time_window_secs = std::cmp::max(status_report_moored_period.as_secs(), status_report_moored_period.as_secs()) + 30;
         let sample_age_window = Duration::from_secs(time_window_secs);
         VesselMonitor {
             status_report_period,
-            positions: PositionQueue::new(sample_age_window), // Keep extra buffer for mooring detection
+            status_report_moored_period,
+            positions: PositionQueue::new(sample_age_window),
             speeds: TimedQueue::new(sample_age_window),
+            vmg_for_mooring: MooringDetectionQueue::new(MOORING_DETECTION_WINDOW, MOORING_ACCURACY, MOORING_THRESHOLD_VMG_KNOTS),
             wind_speeds: TimedQueue::new(sample_age_window),
             wind_angles: TimedQueue::new(sample_age_window),
             headings: TimedQueue::new(sample_age_window),
             last_event_time: now,
             engine_on: false,
             status_report_ready: false,
+            first_report: true,
         }
     }
 
     /// Process a position rapid update message
+    /// Expected maximum rate is 10 Hz
     pub fn process_position(&mut self, position_msg: &PositionRapidUpdate, timestamp: Instant) {
         let position = Position {
             latitude: position_msg.latitude,
@@ -142,6 +151,7 @@ impl VesselMonitor {
     }
 
     /// Process a COG & SOG rapid update message
+    /// Expected maximum rate is 10 Hz
     pub fn process_cog_sog(&mut self, cog_sog_msg: &CogSogRapidUpdate, timestamp: Instant) {
         let sog_kn = cog_sog_msg.sog_knots();
         
@@ -150,10 +160,19 @@ impl VesselMonitor {
             return; // Reject noisy speed reading
         }
 
+        // calculate VMG for mooring detection
+        // we use the vmg because the vessel moves sideways at anchor or moored (in the latter case, it does not move at all)
+        if let Some(last_heading) = self.headings.get_latest() {
+            let cog_deg = cog_sog_msg.cog.to_degrees();
+            let vmg_kn = sog_kn * (cog_deg - last_heading).to_radians().cos();
+            self.vmg_for_mooring.add_sample(vmg_kn, timestamp);
+        }
+
         self.speeds.add_sample(sog_kn, timestamp);
     }
 
     /// Process a wind data message
+    /// Expected maximum rate is 10 Hz
     fn process_wind(&mut self, wind_msg: &nmea2k::pgns::WindData, timestamp: Instant) {
         let wind_speed_kn = wind_msg.speed_knots(); // knots
         let wind_angle_deg = wind_msg.angle.to_degrees();
@@ -173,10 +192,13 @@ impl VesselMonitor {
     }
 
     /// Process engine rapid update to determine engine status
+    /// Expected maximum rate is 1 Hz
     pub fn process_engine(&mut self, engine_msg: &nmea2k::pgns::EngineRapidUpdate, _timestamp: Instant) {
         self.engine_on = engine_msg.is_engine_running();
     }
 
+    /// Process vessel heading message
+    /// Expected maximum rate is 10 Hz
     pub fn process_heading(&mut self, heading_msg: &nmea2k::pgns::VesselHeading, timestamp: Instant) {
         if heading_msg.reference == HeadingReference::Magnetic {
             // For magnetic heading, we would need to apply variation correction
@@ -198,7 +220,18 @@ impl VesselMonitor {
 
     /// Check if it's time to generate a status event
     fn should_generate_event(&self, now: Instant) -> bool {
-        now.duration_since(self.last_event_time) >= self.status_report_period && self.positions.len() >= MIN_SAMPLES_FOR_VALIDATION
+        let period = if !self.is_moored(now) || self.first_report {
+            // in case we are moored, but it's the first report, use the regular reporting period so we have a status asap
+            self.status_report_period
+        } else {
+            self.status_report_moored_period
+        };
+        now.duration_since(self.last_event_time) >= period && self.positions.len() >= MIN_SAMPLES_FOR_VALIDATION
+    }
+
+    fn is_moored(&self, now: Instant) -> bool {
+        //self.positions.is_stationary(MOORING_DETECTION_WINDOW, MOORING_ACCURACY, MOORING_THRESHOLD_METERS, now)
+        self.vmg_for_mooring.is_stationary(now)
     }
 
     /// Generate a vessel status event
@@ -214,7 +247,7 @@ impl VesselMonitor {
         let current_position = self.positions.get_latest_position().unwrap();
         let (number_of_samples, median_position) = self.positions.get_rolling_median_position(self.status_report_period, MIN_SAMPLES_FOR_VALIDATION, now);
         let max_speed_kn = self.speeds.get_max(self.status_report_period, now).unwrap_or(0.0);
-        let is_moored = self.positions.is_stationary(MOORING_DETECTION_WINDOW, MOORING_ACCURACY, MOORING_THRESHOLD_METERS, now);
+        let is_moored = self.is_moored(now);
         let wind_speed_kn = self.wind_speeds.get_average(self.status_report_period, now);
         let wind_angle_deg = self.wind_angles.get_average_as_angle_deg(self.status_report_period, now);
         let max_wind_speed_kn = self.wind_speeds.get_max(self.status_report_period, now);
@@ -223,6 +256,8 @@ impl VesselMonitor {
         // Use the timestamp of the last position in the buffer, or current time if no positions
         let timestamp = self.positions.get_latest_position_timestamp().unwrap();
         
+        self.first_report = false;
+
         Some(VesselStatus {
             current_position,
             median_position,
@@ -266,7 +301,7 @@ impl nmea2k::MessageHandler for VesselMonitor {
 
 impl Default for VesselMonitor {
     fn default() -> Self {
-        Self::new(Duration::from_secs(30))
+        Self::new(Duration::from_secs(30), Duration::from_secs(300))
     }
 }
 
@@ -301,18 +336,20 @@ mod tests {
         #[test]
         fn test_wind_sample_ignored_if_no_recent_speed() {
             let mut monitor = VesselMonitor::default();
-            // Add position samples
-            for _ in 0..10 {
+            let base_time = Instant::now();
+            
+            // Add position samples using simulated time
+            for i in 0..10 {
                 let position_msg = PositionRapidUpdate {
                     pgn: 129025,
                     latitude: 45.0,
                     longitude: -122.0,
                 };
-                monitor.process_position(&position_msg, Instant::now());
-                std::thread::sleep(Duration::from_millis(10));
+                let timestamp = base_time + Duration::from_millis(i * 10);
+                monitor.process_position(&position_msg, timestamp);
             }
             // No speed sample yet
-            make_wind_sample(&mut monitor, 10.0, 90.0, Instant::now());
+            make_wind_sample(&mut monitor, 10.0, 90.0, base_time + Duration::from_millis(100));
             // Wind buffer should remain empty
             assert_eq!(monitor.wind_speeds.len(), 0);
         }
@@ -320,21 +357,27 @@ mod tests {
         #[test]
         fn test_wind_sample_ignored_if_speed_outdated() {
             let mut monitor = VesselMonitor::default();
-            // Add position samples
-            for _ in 0..10 {
+            let base_time = Instant::now();
+            
+            // Add position samples using simulated time
+            for i in 0..10 {
                 let position_msg = PositionRapidUpdate {
                     pgn: 129025,
                     latitude: 45.0,
                     longitude: -122.0,
                 };
-                monitor.process_position(&position_msg, Instant::now());
-                std::thread::sleep(Duration::from_millis(10));
+                let timestamp = base_time + Duration::from_millis(i * 10);
+                monitor.process_position(&position_msg, timestamp);
             }
-            // Add a speed sample, but wait so it becomes outdated
-            make_speed_sample(&mut monitor, 5.0, Instant::now());
-            std::thread::sleep(Duration::from_secs(6)); // >5s, so speed sample is outdated
-            make_wind_sample(&mut monitor, 10.0, 90.0, Instant::now());
-            // Wind buffer should remain empty
+            
+            // Add a speed sample at base_time
+            make_speed_sample(&mut monitor, 5.0, base_time);
+            
+            // Try to add wind sample >5s later (speed is now outdated)
+            let wind_time = base_time + Duration::from_secs(6);
+            make_wind_sample(&mut monitor, 10.0, 90.0, wind_time);
+            
+            // Wind buffer should remain empty because speed sample is outdated
             assert_eq!(monitor.wind_speeds.len(), 0);
         }
 
@@ -615,16 +658,17 @@ mod tests {
     #[test]
     fn test_vessel_status_generation() {
         let mut monitor = VesselMonitor::default();
+        let base_time = Instant::now();
         
-        // Add enough position samples to meet minimum requirement
-        for _ in 0..10 {
+        // Add enough position samples to meet minimum requirement using simulated time
+        for i in 0..10 {
             let position_msg = PositionRapidUpdate {
                 pgn: 129025,
                 latitude: 45.0,
                 longitude: -122.0,
             };
-            monitor.process_position(&position_msg, Instant::now());
-            std::thread::sleep(Duration::from_millis(50));
+            let timestamp = base_time + Duration::from_millis(i * 5);
+            monitor.process_position(&position_msg, timestamp);
         }
         
         let data = vec![
@@ -634,15 +678,15 @@ mod tests {
             0x00, 0x00,
         ];
         let cog_sog_msg = CogSogRapidUpdate::from_bytes(&data).unwrap();
-        monitor.process_cog_sog(&cog_sog_msg, Instant::now());
+        monitor.process_cog_sog(&cog_sog_msg, base_time + Duration::from_millis(100));
         
-        // Wait for event interval (status_report_period from monitor)
-        std::thread::sleep(monitor.status_report_period + Duration::from_millis(100));
+        // Simulate status report period elapsed
+        let status_time = base_time + monitor.status_report_period + Duration::from_millis(100);
         
         // Mark status as ready for generation
         monitor.status_report_ready = true;
         
-        let status = monitor.generate_status(Instant::now());
+        let status = monitor.generate_status(status_time);
         assert!(status.is_some());
     }
 }

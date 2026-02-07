@@ -5,7 +5,7 @@
         "129025": 22,
         "129026": 22,
         "126992": 22,
-        "129029": 0
+        "129029": 255
     }
   },
   "logging": {
@@ -17,6 +17,14 @@
     "skew_threshold_ms": 1000,
     "set_system_time": false
   },
+  "web": {
+    "enabled": true,
+    "port": 1113
+  },
+  "udp": {
+    "enabled": false,
+    "address": "192.168.1.255:1114"
+  },
   "database": {
     "connection": {
       "host": "localhost",
@@ -26,8 +34,8 @@
       "database_name": "nmea_router"
     },
     "vessel_status": {
-      "interval_moored_seconds": 1800,
-      "interval_underway_seconds": 30
+      "interval_moored_seconds": 120,
+      "interval_underway_seconds": 10
     },
     "environmental": {
       "wind_speed_seconds": 30,
@@ -40,3 +48,4 @@
     }
   }
 }
+

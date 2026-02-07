@@ -27,6 +27,8 @@ pub struct WebConfig {
     /// Port for the web server to listen on
     #[serde(default = "default_web_port")]
     pub port: u16,
+    /// Google Maps API key for the web interface
+    pub google_maps_api_key: Option<String>,
 }
 
 fn default_web_enabled() -> bool {
@@ -42,6 +44,7 @@ impl Default for WebConfig {
         Self {
             enabled: true,
             port: 8080,
+            google_maps_api_key: None,
         }
     }
 }
@@ -310,8 +313,9 @@ impl Config {
             if *pgn < 50000 || *pgn > 200000 {
                 invalid_pgns.push(*pgn);
             }
-            // Check source range (1-254)
-            if *source < 1 || *source > 254 {
+            // Check source range (0-254)
+            // Note: 255 is not legal as a source address, 254 is used for addresses not claimed yet, and 251-253 are reserved. Use 255 to indicate that the pgn must always be rejected
+            if *source >= 251 && *source <= 253 {
                 invalid_sources.push((*pgn, *source));
             }
         }
@@ -323,7 +327,7 @@ impl Config {
         }
         
         for (pgn, source) in invalid_sources {
-            warn!("Configuration warning: Invalid source {} for PGN {} (must be 1-254). Removing entry.", source, pgn);
+            warn!("Configuration warning: Invalid source {} for PGN {} (must be 0-255, excluding 251-253). Removing entry.", source, pgn);
             self.source_filter.pgn_source_map.remove(&pgn);
         }
         
@@ -795,7 +799,10 @@ mod tests {
                 "pgn_source_map": {
                     "129025": 22,
                     "129026": 0,
-                    "129029": 255
+                    "129027": 255,
+                    "129028": 251,
+                    "129029": 252,
+                    "129030": 253
                 }
             },
             "database": {
@@ -808,11 +815,14 @@ mod tests {
         let mut config: Config = serde_json::from_str(json).unwrap();
         config.validate_and_fix().unwrap();
         
-        // Valid source should remain
+        // Valid sources should remain (0, 22, 255 are valid)
         assert_eq!(config.source_filter.pgn_source_map.get(&129025), Some(&22));
-        // Invalid sources (0, 255) should be removed
-        assert_eq!(config.source_filter.pgn_source_map.get(&129026), None);
+        assert_eq!(config.source_filter.pgn_source_map.get(&129026), Some(&0));
+        assert_eq!(config.source_filter.pgn_source_map.get(&129027), Some(&255));
+        // Invalid sources (251-253 are reserved) should be removed
+        assert_eq!(config.source_filter.pgn_source_map.get(&129028), None);
         assert_eq!(config.source_filter.pgn_source_map.get(&129029), None);
+        assert_eq!(config.source_filter.pgn_source_map.get(&129030), None);
     }
 
     #[test]
@@ -869,5 +879,232 @@ mod tests {
         let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
         let config: Config = serde_json::from_str(json).unwrap();
         assert_eq!(config.time.set_system_time, false);
+    }
+
+    #[test]
+    fn test_web_config_default() {
+        let config = WebConfig::default();
+        assert_eq!(config.enabled, true);
+        assert_eq!(config.port, 8080);
+    }
+
+    #[test]
+    fn test_web_config_custom() {
+        let config = WebConfig {
+            enabled: false,
+            port: 9000,
+            google_maps_api_key: Some("test_key".to_string()),
+        };
+        assert_eq!(config.enabled, false);
+        assert_eq!(config.port, 9000);
+        assert_eq!(config.google_maps_api_key, Some("test_key".to_string()));
+    }
+
+    #[test]
+    fn test_web_config_serialization() {
+        let config = WebConfig {
+            enabled: true,
+            port: 3000,
+            google_maps_api_key: None,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("3000"));
+        assert!(json.contains("true"));
+        
+        let deserialized: WebConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.enabled, true);
+        assert_eq!(deserialized.port, 3000);
+        assert_eq!(deserialized.google_maps_api_key, None);
+    }
+
+    #[test]
+    fn test_web_config_deserialization_with_defaults() {
+        // Test with missing fields - should use defaults
+        let json = r#"{}"#;
+        let config: WebConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.enabled, true);
+        assert_eq!(config.port, 8080);
+    }
+
+    #[test]
+    fn test_web_config_in_full_config() {
+        let json = r#"{
+            "can_interface": "vcan0",
+            "time": {"skew_threshold_ms": 500},
+            "web": {
+                "enabled": false,
+                "port": 3000
+            },
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.web.enabled, false);
+        assert_eq!(config.web.port, 3000);
+    }
+
+    #[test]
+    fn test_web_config_missing_in_full_config() {
+        // Test with missing web config - should use defaults
+        let json = r#"{
+            "can_interface": "vcan0",
+            "time": {"skew_threshold_ms": 500},
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.web.enabled, true);
+        assert_eq!(config.web.port, 8080);
+    }
+
+    #[test]
+    fn test_udp_config_default() {
+        let config = UdpConfig::default();
+        assert_eq!(config.enabled, false);
+        assert_eq!(config.address, "192.168.1.255:10110");
+    }
+
+    #[test]
+    fn test_udp_config_custom() {
+        let config = UdpConfig {
+            enabled: true,
+            address: "224.0.0.1:5555".to_string(),
+        };
+        assert_eq!(config.enabled, true);
+        assert_eq!(config.address, "224.0.0.1:5555");
+    }
+
+    #[test]
+    fn test_udp_config_serialization() {
+        let config = UdpConfig {
+            enabled: true,
+            address: "192.168.100.255:12345".to_string(),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("192.168.100.255:12345"));
+        assert!(json.contains("true"));
+        
+        let deserialized: UdpConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.enabled, true);
+        assert_eq!(deserialized.address, "192.168.100.255:12345");
+    }
+
+    #[test]
+    fn test_udp_config_deserialization_with_defaults() {
+        // Test with missing fields - should use defaults
+        let json = r#"{}"#;
+        let config: UdpConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.enabled, false);
+        assert_eq!(config.address, "192.168.1.255:10110");
+    }
+
+    #[test]
+    fn test_udp_config_multicast_address() {
+        let config = UdpConfig {
+            enabled: true,
+            address: "224.0.0.1:10110".to_string(),
+        };
+        assert_eq!(config.address, "224.0.0.1:10110");
+    }
+
+    #[test]
+    fn test_udp_config_broadcast_address() {
+        let config = UdpConfig {
+            enabled: true,
+            address: "255.255.255.255:10110".to_string(),
+        };
+        assert_eq!(config.address, "255.255.255.255:10110");
+    }
+
+    #[test]
+    fn test_udp_config_in_full_config() {
+        let json = r#"{
+            "can_interface": "vcan0",
+            "time": {"skew_threshold_ms": 500},
+            "udp": {
+                "enabled": true,
+                "address": "224.0.0.1:5555"
+            },
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.udp.enabled, true);
+        assert_eq!(config.udp.address, "224.0.0.1:5555");
+    }
+
+    #[test]
+    fn test_udp_config_missing_in_full_config() {
+        // Test with missing UDP config - should use defaults
+        let json = r#"{
+            "can_interface": "vcan0",
+            "time": {"skew_threshold_ms": 500},
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.udp.enabled, false);
+        assert_eq!(config.udp.address, "192.168.1.255:10110");
+    }
+
+    #[test]
+    fn test_full_config_with_web_and_udp() {
+        let json = r#"{
+            "can_interface": "can0",
+            "time": {"skew_threshold_ms": 1000, "set_system_time": false},
+            "web": {
+                "enabled": true,
+                "port": 8888
+            },
+            "udp": {
+                "enabled": true,
+                "address": "192.168.1.100:9999"
+            },
+            "logging": {
+                "directory": "/var/log/nmea",
+                "file_prefix": "router",
+                "level": "debug"
+            },
+            "database": {
+                "connection": {"host": "dbhost", "port": 3307, "username": "user", "password": "pass", "database_name": "db"},
+                "vessel_status": {"interval_moored_seconds": 600, "interval_underway_seconds": 20},
+                "environmental": {"wind_speed_seconds": 45, "wind_direction_seconds": 45, "roll_seconds": 45, "pressure_seconds": 150, "cabin_temp_seconds": 350, "water_temp_seconds": 350, "humidity_seconds": 350}
+            }
+        }"#;
+        
+        let config: Config = serde_json::from_str(json).unwrap();
+        
+        // Web config
+        assert_eq!(config.web.enabled, true);
+        assert_eq!(config.web.port, 8888);
+        
+        // UDP config
+        assert_eq!(config.udp.enabled, true);
+        assert_eq!(config.udp.address, "192.168.1.100:9999");
+        
+        // Logging config
+        assert_eq!(config.logging.directory, "/var/log/nmea");
+        assert_eq!(config.logging.file_prefix, "router");
+        assert_eq!(config.logging.level, "debug");
+        
+        // Other configs
+        assert_eq!(config.can_interface, "can0");
+        assert_eq!(config.time.skew_threshold_ms, 1000);
     }
 }

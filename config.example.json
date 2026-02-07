@@ -19,7 +19,8 @@
   },
   "web": {
     "enabled": true,
-    "port": 8080
+    "port": 8080,
+    "google_maps_api_key": "your_google_maps_api_key_here"
   },
   "database": {
     "connection": {

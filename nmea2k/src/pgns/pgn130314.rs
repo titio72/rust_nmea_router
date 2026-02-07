@@ -45,7 +45,7 @@ impl ActualPressure {
         
         // Resolution is 0.1 Pa, so divide by 10 to get Pascals
         // But actually the resolution is 1 Pa based on standard
-        let pressure = pressure_raw as f64;
+        let pressure = pressure_raw as f64 / 10.0;
         
         Some(Self {
             pgn: 130314,

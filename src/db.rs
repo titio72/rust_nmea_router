@@ -1,13 +1,14 @@
 use mysql::*;
 use mysql::prelude::*;
-use std::{error::Error, time::{Duration, Instant}};
+use std::{error::Error, time::{Duration, Instant}, sync::{Arc, Mutex}};
 use std::time::{SystemTime};
-use crate::{environmental_monitor::{MetricData, MetricId}, utilities::dirty_instant_to_systemtime};
+use crate::{environmental_monitor::{MetricData, MetricId}, utilities::{dirty_instant_to_systemtime, haversine_distance_nm}};
 use crate::trip::Trip;
 use chrono::NaiveDateTime;
 use tracing::{info, warn};
 
 /// Encapsulates vessel status data for database insertion
+#[derive(Debug, Clone)]
 pub struct VesselStatusOperation {
     pub time: Instant,
     pub latitude: f64,
@@ -38,6 +39,7 @@ pub enum TripOperation {
 #[derive(Clone)]
 pub struct VesselDatabase {
     pub pool: Pool,
+    system_status_cache: Arc<Mutex<std::collections::HashMap<String, bool>>>,
 }
 
 impl VesselDatabase {
@@ -67,9 +69,29 @@ impl VesselDatabase {
     /// ```
     pub fn new(connection_url: &str) -> Result<Self, Box<dyn Error>> {
         let opts = Opts::from_url(connection_url)?;
-        let pool = Pool::new(opts)?;
+        // Set session timezone to UTC to ensure all timestamps are handled consistently
+        let opts_builder = mysql::OptsBuilder::from_opts(opts)
+            .init(vec!["SET time_zone = '+00:00'"]);
+        let pool = Pool::new(opts_builder)?;
         
-        Ok(VesselDatabase { pool })
+        let db = VesselDatabase { 
+            pool, 
+            system_status_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        };
+        
+        // Load cache from database (non-fatal if table doesn't exist)
+        if let Ok(mut conn) = db.pool.get_conn() {
+            if let Ok(rows) = conn.query::<(String, String), _>("SELECT status_key, status_value FROM system_status") {
+                let mut cache = db.system_status_cache.lock().unwrap();
+                for (key, value) in rows {
+                    let enabled = value == "1" || value.to_lowercase() == "true";
+                    cache.insert(key, enabled);
+                }
+            }
+            // If table doesn't exist, that's okay - cache will start empty and defaults to true
+        }
+
+        Ok(db)
     }
     
     /// Check database connection health using a simple query
@@ -91,12 +113,44 @@ impl VesselDatabase {
         Ok(())
     }
 
+
+    /// Get system status (tracking and metrics enabled/disabled state)
+    pub fn get_system_status(&self, key: &str) -> Result<bool, Box<dyn Error>> {
+        let cache = self.system_status_cache.lock().unwrap();
+        if let Some(&cached) = cache.get(key) {
+            Ok(cached)
+        } else {
+            Ok(true) // Default to true if not found in cache for backward compatibility
+        }
+    }
+
+    /// Set system status (tracking and metrics enabled/disabled state)
+    pub fn set_system_status(&self, key: &str, value: bool) -> Result<(), Box<dyn Error>> {
+        let mut conn = self.pool.get_conn()?;
+        let value_str = if value { "1" } else { "0" };
+        
+        // Update database first
+        conn.exec_drop(
+            "INSERT INTO system_status (status_key, status_value) VALUES (:key, :value) ON DUPLICATE KEY UPDATE status_value = :value",
+            mysql::params! {
+                "key" => key,
+                "value" => value_str,
+            },
+        )?;
+        
+        // Update cache to stay in sync
+        let mut cache = self.system_status_cache.lock().unwrap();
+        cache.insert(key.to_string(), value);
+        
+        Ok(())
+    }
+
     /// Insert vessel status and create/update trip in a single transaction
     /// This ensures atomicity - either both operations succeed or both fail
     pub fn insert_status_and_trip(
         &self,
-        status_op: VesselStatusOperation,
-        trip_operation: TripOperation,
+        status_op: &VesselStatusOperation,
+        trip_operation: &TripOperation,
     ) -> Result<Option<i64>, Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
         let mut tx = conn.start_transaction(TxOpts::default())?;
@@ -247,8 +301,8 @@ impl VesselDatabase {
         
         let row: Option<mysql::Row> = conn.exec_first(
             r"SELECT id, description, 
-                     DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f') as start_ts,
-                     DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S.%f') as end_ts,
+                     DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as start_ts,
+                     DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
                      total_distance_sailed, total_distance_motoring,
                      total_time_sailing, total_time_motoring, total_time_moored
               FROM trips
@@ -268,9 +322,11 @@ impl VesselDatabase {
             let total_time_motoring: u64 = row.take("total_time_motoring").ok_or("Missing total_time_motoring")?;
             let total_time_moored: u64 = row.take("total_time_moored").ok_or("Missing total_time_moored")?;
             
-            // Parse timestamps
-            let start_dt = NaiveDateTime::parse_from_str(&start_ts, "%Y-%m-%d %H:%M:%S%.6f")?;
-            let end_dt = NaiveDateTime::parse_from_str(&end_ts, "%Y-%m-%d %H:%M:%S%.6f")?;
+            // Parse timestamps - remove 'Z' suffix and parse ISO 8601 format
+            let start_ts_clean = start_ts.trim_end_matches('Z');
+            let end_ts_clean = end_ts.trim_end_matches('Z');
+            let start_dt = NaiveDateTime::parse_from_str(start_ts_clean, "%Y-%m-%dT%H:%M:%S%.f")?;
+            let end_dt = NaiveDateTime::parse_from_str(end_ts_clean, "%Y-%m-%dT%H:%M:%S%.f")?;
             
             // Convert to SystemTime then to Instant (approximate)
             let start_datetime = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start_dt, chrono::Utc);
@@ -394,12 +450,18 @@ pub struct TripSummary {
 #[derive(Debug, serde::Serialize)]
 pub struct TrackPoint {
     pub timestamp: String,
-    pub latitude: f64,
-    pub longitude: f64,
-    pub avg_speed_kn: f64,
-    pub max_speed_kn: f64,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub avg_speed_kn: Option<f64>,
+    pub max_speed_kn: Option<f64>,
     pub moored: bool,
     pub engine_on: bool,
+    pub total_distance_nm: Option<f64>,
+    pub total_time_ms: u64,
+    pub average_wind_speed_kn: Option<f64>,
+    pub average_wind_angle_deg: Option<f64>,
+    pub cog_deg: Option<f64>,
+    pub average_heading_deg: Option<f64>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -409,7 +471,91 @@ pub struct WebMetricData {
     pub avg_value: Option<f64>,
     pub max_value: Option<f64>,
     pub min_value: Option<f64>,
-    pub count: Option<u32>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SpeedDistributionData {
+    pub labels: Vec<String>,
+    pub sailing: Vec<f64>,
+    pub motoring: Vec<f64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct WindStatisticsData {
+    pub directions: Vec<f64>,  // Wind direction angles (0, 5, 10, ..., 355)
+    pub wind_distances: Vec<f64>,  // Sum of (wind_speed * time) for each direction bucket
+    pub max_wind_speeds: Vec<f64>,  // Maximum wind speed for each direction bucket
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TripLeg {
+    pub leg_number: u32,
+    pub start_timestamp: String,
+    pub end_timestamp: String,
+    pub total_distance_nm: f64,
+    pub sailing_distance_nm: f64,
+    pub motoring_distance_nm: f64,
+    pub sailing_time_ms: u64,
+    pub motoring_time_ms: u64,
+    pub sailing_time_formatted: String,
+    pub motoring_time_formatted: String,
+}
+
+/// Format milliseconds as human-readable duration (e.g., "1h 30m" or "45m")
+fn format_duration_ms(milliseconds: u64) -> String {
+    let total_seconds = milliseconds / 1000;
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    
+    if hours > 0 {
+        if minutes > 0 {
+            format!("{}h {}m", hours, minutes)
+        } else {
+            format!("{}h", hours)
+        }
+    } else if minutes > 0 {
+        format!("{}m", minutes)
+    } else {
+        format!("{}s", seconds)
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TripLegsData {
+    pub legs: Vec<TripLeg>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct HeatmapDay {
+    pub date: String,  // ISO 8601 date format: YYYY-MM-DD
+    pub distance_nm: f64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct HeatmapData {
+    pub days: Vec<HeatmapDay>,
+    pub min_distance: f64,
+    pub max_distance: f64,
+    pub total_distance: f64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct FastestSegment {
+    pub distance_nm: f64,
+    pub average_speed_kn: f64,
+    pub duration_ms: u64,
+    pub start_timestamp: String,
+    pub end_timestamp: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TrackAnalytics {
+    pub max_speed_kn: Option<f64>,
+    pub max_speed_timestamp: Option<String>,
+    pub fastest_1nm: Option<FastestSegment>,
+    pub fastest_5nm: Option<FastestSegment>,
+    pub fastest_10nm: Option<FastestSegment>,
 }
 
 impl VesselDatabase {
@@ -420,8 +566,8 @@ impl VesselDatabase {
         
         let row: Option<mysql::Row> = conn.exec_first(
             r"SELECT id, description, 
-                     DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f') as start_ts,
-                     DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S.%f') as end_ts,
+                     DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as start_ts,
+                     DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
                      total_distance_sailed, total_distance_motoring,
                      (total_distance_sailed + total_distance_motoring) as total_distance,
                      total_time_sailing, total_time_motoring, total_time_moored
@@ -457,8 +603,8 @@ impl VesselDatabase {
         let mut query = String::from(
             "SELECT id, 
                     description,
-                    DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S') as start_ts,
-                    DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S') as end_ts,
+                    DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as start_ts,
+                    DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as end_ts,
                     (total_distance_sailed + total_distance_motoring) as total_distance,
                     (total_time_sailing + total_time_motoring + total_time_moored) as total_time,
                     total_time_sailing as total_time_sailing,
@@ -474,7 +620,8 @@ impl VesselDatabase {
         } else if let Some(months) = last_months {
             query.push_str(&format!(" start_timestamp >= DATE_SUB(NOW(), INTERVAL {} MONTH)", months));
         } else {
-            query.push_str(&format!(" start_timestamp >= DATE_SUB(NOW(), INTERVAL {} MONTH)", 12)); // default last 12 months
+            // If no filters specified, get all trips (to populate year filter with all available years)
+            query.push_str(" 1=1");
         }
 
         query.push_str(" ORDER BY start_timestamp DESC");
@@ -510,9 +657,11 @@ impl VesselDatabase {
         let query = if let Some(trip_id) = trip_id {
             // Get trip date range and fetch vessel_status data for that period
             format!(
-                "SELECT DATE_FORMAT(vs.timestamp, '%Y-%m-%d %H:%i:%S') as timestamp,
+                "SELECT DATE_FORMAT(vs.timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
                         vs.latitude, vs.longitude, vs.average_speed_kn, vs.max_speed_kn, 
-                        vs.is_moored, vs.engine_on 
+                        vs.is_moored, vs.engine_on, vs.total_distance_nm, vs.total_time_ms,
+                        vs.average_wind_speed_kn, vs.average_wind_angle_deg,
+                        vs.cog_deg, vs.average_heading_deg
                  FROM vessel_status vs
                  JOIN trips t ON vs.timestamp BETWEEN t.start_timestamp AND COALESCE(t.end_timestamp, NOW())
                  WHERE t.id = {}
@@ -521,8 +670,11 @@ impl VesselDatabase {
             )
         } else if let (Some(start), Some(end)) = (start, end) {
             format!(
-                "SELECT DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:%S') as timestamp,
-                        latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on 
+                "SELECT DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
+                        latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on,
+                        total_distance_nm, total_time_ms,
+                        average_wind_speed_kn, average_wind_angle_deg,
+                        cog_deg, average_heading_deg
                  FROM vessel_status WHERE timestamp BETWEEN '{}' AND '{}' ORDER BY timestamp",
                 start, end
             )
@@ -540,34 +692,47 @@ impl VesselDatabase {
             .iter()
             .map(|row| TrackPoint {
                 timestamp: row.get::<String, _>("timestamp").unwrap_or_default(),
-                latitude: row.get::<f64, _>("latitude").unwrap_or(0.0),
-                longitude: row.get::<f64, _>("longitude").unwrap_or(0.0),
-                avg_speed_kn: row.get::<f64, _>("average_speed_kn").unwrap_or(0.0),
-                max_speed_kn: row.get::<f64, _>("max_speed_kn").unwrap_or(0.0),
+                latitude: self.fetch_value(row, "latitude"),
+                longitude: self.fetch_value(row, "longitude"),
+                avg_speed_kn: self.fetch_value(row, "average_speed_kn"),
+                max_speed_kn: self.fetch_value(row, "max_speed_kn"),
                 moored: row.get::<i32, _>("is_moored").unwrap_or(0) != 0,
                 engine_on: row.get::<i32, _>("engine_on").unwrap_or(0) != 0,
+                total_distance_nm: self.fetch_value(row, "total_distance_nm"),
+                total_time_ms: row.get::<u64, _>("total_time_ms").unwrap_or(0),
+                average_wind_speed_kn: self.fetch_value(row, "average_wind_speed_kn"),
+                average_wind_angle_deg: self.fetch_value(row, "average_wind_angle_deg"),
+                cog_deg: self.fetch_value(row, "cog_deg"),
+                average_heading_deg: self.fetch_value(row, "average_heading_deg"),
             })
             .collect();
 
         Ok(track)
     }
 
+    fn fetch_value(&self, row: &Row, column: &str) -> Option<f64> {
+        match std::panic::catch_unwind(|| row.get::<f64, _>(column)) {
+            Ok(v) => v,
+            Err(_panic) => None,
+        }
+    }
+
     /// Fetch environmental metrics by metric_id with optional trip_id or date range
     pub fn fetch_metrics(&self, metric: &str, trip_id: Option<u32>, start: Option<&str>, end: Option<&str>) -> Result<Vec<WebMetricData>, Box<dyn std::error::Error>> {
         let query = if let Some(trip_id) = trip_id {
             format!(
-                "SELECT DATE_FORMAT(e.timestamp, '%Y-%m-%d %H:%i:%S') as timestamp,
-                        e.metric_id, e.avg_value, e.max_value, e.min_value, e.count 
+                "SELECT DATE_FORMAT(e.timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
+                        e.metric_id, e.value_avg, e.value_max, e.value_min 
                  FROM environmental_data e 
-                 JOIN vessel_status v ON DATE(e.timestamp) = DATE(v.timestamp) 
-                 WHERE v.trip_id = {} AND e.metric_id = '{}' 
+                 WHERE e.timestamp >= (SELECT COALESCE(start_timestamp, NOW()) FROM trips WHERE id = {}) AND e.timestamp <= (SELECT COALESCE(end_timestamp, NOW()) FROM trips WHERE id = {})
+                 AND e.metric_id = '{}' 
                  ORDER BY e.timestamp",
-                trip_id, metric
+                trip_id, trip_id, metric
             )
         } else if let (Some(start), Some(end)) = (start, end) {
             format!(
-                "SELECT DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:%S') as timestamp,
-                        metric_id, avg_value, max_value, min_value, count 
+                "SELECT DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
+                        metric_id, value_avg, value_max, value_min
                  FROM environmental_data 
                  WHERE metric_id = '{}' AND timestamp BETWEEN '{}' AND '{}' 
                  ORDER BY timestamp",
@@ -588,13 +753,531 @@ impl VesselDatabase {
             .map(|row| WebMetricData {
                 timestamp: row.get::<String, _>("timestamp").unwrap_or_default(),
                 metric_id: row.get::<String, _>("metric_id").unwrap_or_default(),
-                avg_value: row.get("avg_value"),
-                max_value: row.get("max_value"),
-                min_value: row.get("min_value"),
-                count: row.get("count"),
+                avg_value: row.get("value_avg"),
+                max_value: row.get("value_max"),
+                min_value: row.get("value_min")
             })
             .collect();
 
         Ok(metrics)
     }
+
+    /// Fetch speed distribution data for a trip
+    pub fn fetch_speed_distribution(&self, trip_id: Option<u32>, start: Option<&str>, end: Option<&str>) -> Result<SpeedDistributionData, Box<dyn std::error::Error>> {
+        // Create buckets for speeds from 0 to 10 knots in 0.5 knot increments
+        let max_speed = 10.0;
+        let bucket_size = 0.5;
+        let num_buckets = ((max_speed / bucket_size) as f64).ceil() as usize;
+        
+        let mut sailing_buckets = vec![0.0; num_buckets];
+        let mut motoring_buckets = vec![0.0; num_buckets];
+        let mut labels = Vec::with_capacity(num_buckets);
+        
+        // Initialize labels
+        for i in 0..num_buckets {
+            let min_speed = i as f64 * bucket_size;
+            let max_speed = (i + 1) as f64 * bucket_size;
+            labels.push(format!("{:.1}-{:.1}", min_speed, max_speed));
+        }
+        
+        // Build query based on parameters
+        let query = if let Some(trip_id) = trip_id {
+            format!(
+                "SELECT vs.average_speed_kn, vs.total_distance_nm, vs.engine_on
+                 FROM vessel_status vs
+                 JOIN trips t ON vs.timestamp BETWEEN t.start_timestamp AND COALESCE(t.end_timestamp, NOW())
+                 WHERE t.id = {}
+                 ORDER BY vs.timestamp",
+                trip_id
+            )
+        } else if let (Some(start), Some(end)) = (start, end) {
+            format!(
+                "SELECT vs.average_speed_kn, vs.total_distance_nm, vs.engine_on
+                 FROM vessel_status vs
+                 WHERE vs.timestamp BETWEEN '{}' AND '{}'
+                 ORDER BY vs.timestamp",
+                start, end
+            )
+        } else {
+            return Err("Either trip_id or both start and end timestamps are required".into());
+        };
+
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+        
+        let results: Vec<mysql::Row> = conn.query(&query)
+            .map_err(|e| format!("Database query error: {}", e))?;
+
+        // Process each row and accumulate distances in buckets
+        for row in results {
+            let speed: Option<f64> = row.get("average_speed_kn");
+            let distance: Option<f64> = row.get("total_distance_nm");
+            let engine_on: i32 = row.get("engine_on").unwrap_or(0);
+            
+            if let (Some(speed), Some(distance)) = (speed, distance) {
+                let bucket_index = ((speed / bucket_size).floor() as usize).min(num_buckets - 1);
+                
+                if engine_on != 0 {
+                    motoring_buckets[bucket_index] += distance;
+                } else {
+                    sailing_buckets[bucket_index] += distance;
+                }
+            }
+        }
+
+        Ok(SpeedDistributionData {
+            labels,
+            sailing: sailing_buckets,
+            motoring: motoring_buckets,
+        })
+    }
+
+    /// Fetch wind statistics data for a trip or time range
+    pub fn fetch_wind_statistics(&self, trip_id: Option<u32>, start: Option<&str>, end: Option<&str>) -> Result<WindStatisticsData, Box<dyn std::error::Error>> {
+        // Create 72 buckets for wind directions (360 degrees / 5 degrees = 72 buckets)
+        let bucket_size = 5.0;
+        let num_buckets = 72;
+        
+        let mut wind_distances = vec![0.0; num_buckets];
+        let mut max_wind_speeds = vec![0.0; num_buckets];
+        let mut directions = Vec::with_capacity(num_buckets);
+        
+        // Initialize directions (0, 5, 10, ..., 355)
+        for i in 0..num_buckets {
+            directions.push(i as f64 * bucket_size);
+        }
+        
+        // Build query based on parameters
+        let query = if let Some(trip_id) = trip_id {
+            format!(
+                r"SELECT 
+                    vs.average_wind_angle_deg, 
+                    vs.average_wind_speed_kn,
+                    vs.timestamp
+                 FROM vessel_status vs
+                 JOIN trips t ON vs.timestamp BETWEEN t.start_timestamp AND COALESCE(t.end_timestamp, NOW())
+                 WHERE t.id = {}
+                 AND vs.average_wind_angle_deg IS NOT NULL 
+                 AND vs.average_wind_speed_kn IS NOT NULL
+                 AND vs.is_moored = false
+                 ORDER BY vs.timestamp",
+                trip_id
+            )
+        } else if let (Some(start), Some(end)) = (start, end) {
+            format!(
+                r"SELECT 
+                    vs.average_wind_angle_deg, 
+                    vs.average_wind_speed_kn,
+                    vs.timestamp
+                 FROM vessel_status vs
+                 WHERE vs.timestamp BETWEEN '{}' AND '{}'
+                 AND vs.average_wind_angle_deg IS NOT NULL 
+                 AND vs.average_wind_speed_kn IS NOT NULL
+                 AND vs.is_moored = false
+                 ORDER BY vs.timestamp",
+                start, end
+            )
+        } else {
+            return Err("Either trip_id or both start and end timestamps are required".into());
+        };
+
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+        
+        let results: Vec<mysql::Row> = conn.query(&query)
+            .map_err(|e| format!("Database query error: {}", e))?;
+
+        // Collect all data points first
+        let mut data_points = Vec::new();
+        for row in results {
+            let wind_direction: Option<f64> = row.get("average_wind_angle_deg");
+            let wind_speed: Option<f64> = row.get("average_wind_speed_kn");
+            let timestamp: Option<String> = row.get("timestamp");
+            
+            if let (Some(direction), Some(speed), Some(ts)) = (wind_direction, wind_speed, timestamp) {
+                let dt = chrono::NaiveDateTime::parse_from_str(&ts, "%Y-%m-%d %H:%M:%S%.f")
+                    .or_else(|_| chrono::NaiveDateTime::parse_from_str(&ts, "%Y-%m-%d %H:%M:%S"))
+                    .map_err(|e| format!("Timestamp parse error for '{}': {}", ts, e))?;
+                data_points.push((direction, speed, dt));
+            }
+        }
+
+        // Process consecutive data points to calculate time intervals
+        for i in 0..data_points.len().saturating_sub(1) {
+            let (direction, speed, curr_dt) = data_points[i];
+            let (_, _, next_dt) = data_points[i + 1];
+            
+            let time_hours = (next_dt - curr_dt).num_seconds() as f64 / 3600.0;
+            
+            if time_hours > 0.0 {
+                // Calculate bucket index (normalize direction to 0-359, then divide by 5)
+                let normalized_direction = direction % 360.0;
+                let bucket_index = ((normalized_direction / bucket_size).floor() as usize).min(num_buckets - 1);
+                
+                // Add wind distance (speed * time)
+                let wind_distance = speed * time_hours;
+                wind_distances[bucket_index] += wind_distance;
+                
+                // Update max wind speed for this bucket
+                max_wind_speeds[bucket_index] = f64::max(max_wind_speeds[bucket_index], speed);
+            }
+        }
+
+        Ok(WindStatisticsData {
+            directions,
+            wind_distances,
+            max_wind_speeds,
+        })
+    }
+
+    /// Fetch trip legs data - divides trip into legs between mooring periods
+    pub fn fetch_trip_legs(&self, trip_id: u32) -> Result<TripLegsData, Box<dyn std::error::Error>> {
+        let query = format!(
+            r"SELECT 
+                DATE_FORMAT(vs.timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as timestamp,
+                vs.is_moored,
+                vs.engine_on,
+                vs.total_distance_nm,
+                vs.total_time_ms
+             FROM vessel_status vs
+             JOIN trips t ON vs.timestamp BETWEEN t.start_timestamp AND COALESCE(t.end_timestamp, NOW())
+             WHERE t.id = {}
+             ORDER BY vs.timestamp",
+            trip_id
+        );
+
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+        
+        let results: Vec<mysql::Row> = conn.query(&query)
+            .map_err(|e| format!("Database query error: {}", e))?;
+
+        let mut legs = Vec::new();
+        let mut in_leg = false;
+        let mut leg_start_timestamp = String::new();
+        let mut leg_total_distance = 0.0;
+        let mut leg_sailing_distance = 0.0;
+        let mut leg_motoring_distance = 0.0;
+        let mut leg_sailing_time = 0_u64;
+        let mut leg_motoring_time = 0_u64;
+        let mut leg_number = 0;
+
+        for row in &results {
+            let timestamp: String = row.get("timestamp").unwrap_or_default();
+            let is_moored: bool = row.get("is_moored").unwrap_or(false);
+            let engine_on: bool = row.get("engine_on").unwrap_or(false);
+            let interval_distance: f64 = row.get("total_distance_nm").unwrap_or(0.0);
+            let interval_time: u64 = row.get("total_time_ms").unwrap_or(0);
+
+            if is_moored {
+                // End current leg if we have one
+                if in_leg && leg_total_distance >= 0.5 {
+                    leg_number += 1;
+                    legs.push(TripLeg {
+                        leg_number,
+                        start_timestamp: leg_start_timestamp.clone(),
+                        end_timestamp: timestamp.clone(),
+                        total_distance_nm: leg_total_distance,
+                        sailing_distance_nm: leg_sailing_distance,
+                        motoring_distance_nm: leg_motoring_distance,
+                        sailing_time_ms: leg_sailing_time,
+                        motoring_time_ms: leg_motoring_time,
+                        sailing_time_formatted: format_duration_ms(leg_sailing_time),
+                        motoring_time_formatted: format_duration_ms(leg_motoring_time),
+                    });
+                }
+                
+                // Reset for next leg
+                in_leg = false;
+                leg_total_distance = 0.0;
+                leg_sailing_distance = 0.0;
+                leg_motoring_distance = 0.0;
+                leg_sailing_time = 0;
+                leg_motoring_time = 0;
+            } else {
+                // Not moored - either starting or continuing a leg
+                if !in_leg {
+                    // Start a new leg
+                    in_leg = true;
+                    leg_start_timestamp = timestamp.clone();
+                }
+                
+                // Accumulate distance and time for this interval
+                leg_total_distance += interval_distance;
+                
+                if engine_on {
+                    leg_motoring_distance += interval_distance;
+                    leg_motoring_time += interval_time;
+                } else {
+                    leg_sailing_distance += interval_distance;
+                    leg_sailing_time += interval_time;
+                }
+            }
+        }
+
+        // Handle last leg if trip ended while underway
+        if in_leg && leg_total_distance >= 0.5 {
+            leg_number += 1;
+            let last_timestamp = results.last()
+                .and_then(|r| r.get::<String, _>("timestamp"))
+                .unwrap_or_default();
+                
+            legs.push(TripLeg {
+                leg_number,
+                start_timestamp: leg_start_timestamp,
+                end_timestamp: last_timestamp,
+                total_distance_nm: leg_total_distance,
+                sailing_distance_nm: leg_sailing_distance,
+                motoring_distance_nm: leg_motoring_distance,
+                sailing_time_ms: leg_sailing_time,
+                motoring_time_ms: leg_motoring_time,
+                sailing_time_formatted: format_duration_ms(leg_sailing_time),
+                motoring_time_formatted: format_duration_ms(leg_motoring_time),
+            });
+        }
+
+        Ok(TripLegsData { legs })
+    }
+
+    /// Fetch track analytics for a time range - calculates max speed and fastest segments
+    pub fn fetch_track_analytics(&self, start: &str, end: &str) -> Result<TrackAnalytics, Box<dyn std::error::Error>> {
+        let query = format!(
+            r"SELECT 
+                DATE_FORMAT(vs.timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as timestamp,
+                vs.latitude,
+                vs.longitude,
+                vs.average_speed_kn,
+                vs.engine_on
+             FROM vessel_status vs
+             WHERE vs.timestamp BETWEEN '{}' AND '{}'
+             AND vs.average_speed_kn IS NOT NULL
+             ORDER BY vs.timestamp",
+            start, end
+        );
+
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+        
+        let results: Vec<mysql::Row> = conn.query(&query)
+            .map_err(|e| format!("Database query error: {}", e))?;
+
+        if results.is_empty() {
+            return Ok(TrackAnalytics {
+                max_speed_kn: None,
+                max_speed_timestamp: None,
+                fastest_1nm: None,
+                fastest_5nm: None,
+                fastest_10nm: None,
+            });
+        }
+
+        // Collect track points
+        let mut track_points = Vec::new();
+        for row in &results {
+            let timestamp: String = row.get("timestamp").unwrap_or_default();
+            let latitude: Option<f64> = row.get("latitude");
+            let longitude: Option<f64> = row.get("longitude");
+            let speed: Option<f64> = row.get("average_speed_kn");
+            let engine_on: bool = row.get("engine_on").unwrap_or(false);
+
+            if let (Some(lat), Some(lon), Some(spd)) = (latitude, longitude, speed) {
+                track_points.push((timestamp, lat, lon, spd, engine_on));
+            }
+        }
+
+        // Find max speed when sailing
+        let mut max_speed = None;
+        let mut max_speed_timestamp = None;
+        for (timestamp, _, _, speed, engine_on) in &track_points {
+            if !engine_on && (max_speed.is_none() || *speed > max_speed.unwrap()) {
+                max_speed = Some(*speed);
+                max_speed_timestamp = Some(timestamp.clone());
+            }
+        }
+
+        // Calculate fastest segments for 1NM, 5NM, and 10NM
+        let fastest_1nm = find_fastest_segment(&track_points, 1.0);
+        let fastest_5nm = find_fastest_segment(&track_points, 5.0);
+        let fastest_10nm = find_fastest_segment(&track_points, 10.0);
+
+        Ok(TrackAnalytics {
+            max_speed_kn: max_speed,
+            max_speed_timestamp,
+            fastest_1nm,
+            fastest_5nm,
+            fastest_10nm,
+        })
+    }
+
+    /// Fetch heatmap data - distance traveled grouped by day for 365 days before the given date
+    pub fn fetch_heatmap(&self, end_date: &str) -> Result<HeatmapData, Box<dyn std::error::Error>> {
+        // Parse the end date and calculate start date (365 days before)
+        let end_dt = chrono::NaiveDate::parse_from_str(end_date, "%Y-%m-%d")?;
+        let start_dt = end_dt - chrono::Duration::days(365);
+        
+        let query = format!(
+            r"SELECT DATE(vs.timestamp) as day, COALESCE(SUM(COALESCE(vs.total_distance_nm, 0)), 0) as total_distance
+             FROM vessel_status vs
+             WHERE DATE(vs.timestamp) BETWEEN '{}' AND '{}'
+             GROUP BY DATE(vs.timestamp)
+             ORDER BY vs.timestamp",
+            start_dt, end_dt
+        );
+
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+        
+        let results: Vec<mysql::Row> = conn.query(&query)
+            .map_err(|e| format!("Database query error: {}", e))?;
+
+        let mut days = Vec::new();
+        let mut min_distance: f64 = f64::MAX;
+        let mut max_distance: f64 = 0.0;
+        let mut total_distance: f64 = 0.0;
+
+        for row in results {
+            let date: String = row.get("day").unwrap_or_default();
+            let distance: f64 = row.get("total_distance").unwrap_or(0.0);
+            
+            days.push(HeatmapDay {
+                date,
+                distance_nm: distance,
+            });
+            
+            total_distance += distance;
+            if distance > 0.0 {
+                min_distance = min_distance.min(distance);
+                max_distance = max_distance.max(distance);
+            }
+        }
+
+        // If no days with distance data, set min_distance to 0
+        if min_distance == f64::MAX {
+            min_distance = 0.0;
+        }
+
+        Ok(HeatmapData {
+            days,
+            min_distance,
+            max_distance,
+            total_distance,
+        })
+    }
+}
+
+/// Helper function to find fastest segment for a given target distance
+fn find_fastest_segment(
+    track_points: &[(String, f64, f64, f64, bool)],
+    target_distance_nm: f64,
+) -> Option<FastestSegment> {
+    if track_points.len() < 2 {
+        return None;
+    }
+
+    let mut fastest: Option<FastestSegment> = None;
+
+    // Use sliding window approach
+    for start_idx in 0..track_points.len() {
+        let (start_ts, _start_lat, _start_lon, _, start_engine) = &track_points[start_idx];
+        
+        // Skip if motoring
+        if *start_engine {
+            continue;
+        }
+
+        let mut cumulative_distance = 0.0;
+
+        for end_idx in (start_idx + 1)..track_points.len() {
+            let (end_ts, end_lat, end_lon, _, end_engine) = &track_points[end_idx];
+            
+            // Check if entire segment is sailing
+            if *end_engine {
+                break;
+            }
+
+            // Calculate distance between consecutive points
+            let prev_idx = end_idx - 1;
+            let (_, prev_lat, prev_lon, _, _) = &track_points[prev_idx];
+            let segment_dist = haversine_distance_nm(*prev_lat, *prev_lon, *end_lat, *end_lon);
+            cumulative_distance += segment_dist;
+
+            // Check if we've reached or exceeded target distance
+            if cumulative_distance >= target_distance_nm {
+                // Calculate duration
+                let start_time = match chrono::NaiveDateTime::parse_from_str(
+                    &start_ts.replace('Z', ""),
+                    "%Y-%m-%dT%H:%M:%S%.f"
+                ) {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                let end_time = match chrono::NaiveDateTime::parse_from_str(
+                    &end_ts.replace('Z', ""),
+                    "%Y-%m-%dT%H:%M:%S%.f"
+                ) {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                let duration_ms = (end_time - start_time).num_milliseconds() as u64;
+
+                if duration_ms > 0 {
+                    let avg_speed = cumulative_distance / (duration_ms as f64 / 1000.0 / 3600.0);
+                    
+                    // Check if this is the fastest so far
+                    if fastest.is_none() || avg_speed > fastest.as_ref().unwrap().average_speed_kn {
+                        fastest = Some(FastestSegment {
+                            distance_nm: cumulative_distance,
+                            average_speed_kn: avg_speed,
+                            duration_ms,
+                            start_timestamp: start_ts.clone(),
+                            end_timestamp: end_ts.clone(),
+                        });
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    fastest
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_track() {
+        let db = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
+        let points = db.fetch_track(Some(132), None, None).unwrap();
+        assert!(!points.is_empty());
+        // Debug output removed - test verifies data retrieval works
+    }
+
+    #[test]
+    fn test_system_status_set() {
+        let db = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
+        db.set_system_status("tracking_enabled", true).unwrap();
+        assert!(db.get_system_status("tracking_enabled").unwrap());
+        db.set_system_status("tracking_enabled", false).unwrap();
+        assert!(!db.get_system_status("tracking_enabled").unwrap());
+    }
+
+    #[test]
+    fn test_system_status_default() {
+        let db = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
+        assert!(db.get_system_status("a_key_that_does_not_exist").unwrap());
+    }
+
+    #[test]
+    fn test_system_status_persistence() {
+        let db = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
+        db.set_system_status("test_key", true).unwrap();
+        assert!(db.get_system_status("test_key").unwrap());
+        
+        // Create a new instance to verify persistence
+        let db2 = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
+        assert!(db2.get_system_status("test_key").unwrap());
+    }
+
 }

@@ -2,6 +2,7 @@ use std::{error::Error, time::Duration};
 use tracing::{info, warn};
 
 mod position_utils;
+mod mooring_detection;
 mod vessel_monitor;
 mod time_monitor;
 mod environmental_monitor;
@@ -91,7 +92,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("    --help, -h                           Show this help message");
         println!();
         println!("Configuration file:");
-        println!("  Checked in order: /etc/nmea_router/config.json, ./config.json");
+        println!("  Checked in order: ./config.json, /etc/nmea_router/config.json");
         std::process::exit(0);
     }
     
@@ -99,14 +100,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                      || args.contains(&"--validate".to_string())
                      || args.contains(&"-v".to_string());
     
-    // Load configuration - try /etc/nmea_router/config.json first, then ./config.json
-    let config_path = if std::path::Path::new("/etc/nmea_router/config.json").exists() {
-        "/etc/nmea_router/config.json"
+    // Load configuration - try ./config.json first, then /etc/nmea_router/config.json
+    let config_path = if std::path::Path::new("./config.json").exists() {
+        "./config.json"        
     } else {
-        "config.json"
+        "/etc/nmea_router/config.json"
     };
     
-    info!("Loading configuration from: {}", config_path);
+    println!("Loading configuration from: {}", config_path);
     
     let config = match Config::from_file(config_path) {
         Ok(cfg) => {
@@ -143,6 +144,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     // Initialize logging
     init_logging(&config.logging)?;
+    info!("Logging initialized");
+    info!("Configuration {:#?}", config);
     info!("NMEA2000 Router starting...");
     info!("Loaded configuration");
     
@@ -175,7 +178,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     // Create vessel monitor with config
     info!("Creating vessel monitor with underway interval: {} seconds", config.database.vessel_status.interval_underway_seconds);
-    let mut vessel_monitor = VesselMonitor::new(config.database.vessel_status.interval_underway());
+    let mut vessel_monitor = VesselMonitor::new(config.database.vessel_status.interval_underway(), config.database.vessel_status.interval_moored());
     
     // Create time monitor
     let mut time_monitor = TimeMonitor::new(
@@ -187,7 +190,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut env_monitor = EnvironmentalMonitor::new();
     
     // Create vessel status handler
-    let mut vessel_status_handler = vessel_status_handler::VesselStatusHandler::new(config.database.vessel_status.clone());
+    let mut vessel_status_handler = vessel_status_handler::VesselStatusHandler::new();
     
     // Create environmental status handler
     let mut environmental_status_handler = environmental_status_handler::EnvironmentalStatusHandler::new(&config.database.environmental);
@@ -211,13 +214,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     if config.web.enabled {
         if let Some(ref db) = vessel_db {
             let db_arc = std::sync::Arc::new(db.clone());
+            let config_arc = std::sync::Arc::new(config.clone());
             let web_port = config.web.port;
             
             // Spawn web server in a separate thread
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                 rt.block_on(async {
-                    if let Err(e) = web::start_web_server(db_arc, web_port).await {
+                    if let Err(e) = web::start_web_server(db_arc, config_arc, web_port).await {
                         warn!("Web server error: {}", e);
                     }
                 });
@@ -272,22 +276,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                     metrics.gnss_time_skew = sync_status_and_skew.skew;
                     metrics.gnss_time_skew_status = sync_status_and_skew.status;
                     if sync_status_and_skew.status == TimeSyncStatus::Synchronized {
-                        vessel_monitor.handle_message(&n2k_frame, now);
-                        if let Some(vessel_status) = vessel_monitor.generate_status(now) && vessel_status.is_valid() {
-                            match vessel_status_handler.handle_vessel_status(&vessel_db, vessel_status.clone()) {
-                                Ok(true) => metrics.vessel_reports += 1,
-                                Ok(false) => {},
-                                Err(e) => {
-                                    warn!("Database error during vessel status write: {}", e);
+                        if is_vessel_tracking_enabled(&vessel_db) {
+                            vessel_monitor.handle_message(&n2k_frame, now);
+                            if let Some(vessel_status) = vessel_monitor.generate_status(now) && vessel_status.is_valid() {
+                                match vessel_status_handler.handle_vessel_status(&vessel_db, vessel_status.clone()) {
+                                    Ok(true) => metrics.vessel_reports += 1,
+                                    Ok(false) => {},
+                                    Err(e) => {
+                                        warn!("Database error during vessel status write: {}", e);
+                                    }
                                 }
                             }
                         }
 
-                        env_monitor.handle_message(&n2k_frame, now);
-                        match environmental_status_handler.handle_environment_status(&vessel_db, &mut env_monitor, now) {
-                            Ok(count) => metrics.env_reports += count as u64,
-                            Err(e) => {
-                                warn!("Database error during environmental write: {}", e);
+                        if is_metrics_enabled(&vessel_db) {
+                            env_monitor.handle_message(&n2k_frame, now);
+                            match environmental_status_handler.handle_environment_status(&vessel_db, &mut env_monitor, now) {
+                                Ok(count) => metrics.env_reports += count as u64,
+                                Err(e) => {
+                                    warn!("Database error during environmental write: {}", e);
+                                }
                             }
                         }
                     } else {
@@ -329,4 +337,23 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     }
+}
+
+fn is_metrics_enabled(vessel_db: &Option<VesselDatabase>) -> bool {
+    // Check if metrics collection is enabled before processing environmental data
+    let metrics_enabled = if let Some(ref db) = *vessel_db {
+        db.get_system_status("metrics_enabled").unwrap_or(false)
+    } else {
+        false // Default to disabled if no database
+    };
+    metrics_enabled
+}
+
+fn is_vessel_tracking_enabled(vessel_db: &Option<VesselDatabase>) -> bool {
+    let tracking_enabled = if let Some(ref db) = *vessel_db {
+        db.get_system_status("tracking_enabled").unwrap_or(false)
+    } else {
+        false // Default to disabled if no database
+    };
+    tracking_enabled
 }
