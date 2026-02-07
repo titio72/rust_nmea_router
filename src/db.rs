@@ -1,6 +1,6 @@
 use mysql::*;
 use mysql::prelude::*;
-use std::{error::Error, time::{Duration, Instant}};
+use std::{error::Error, time::{Duration, Instant}, sync::{Arc, Mutex}};
 use std::time::{SystemTime};
 use crate::{environmental_monitor::{MetricData, MetricId}, utilities::dirty_instant_to_systemtime};
 use crate::trip::Trip;
@@ -39,6 +39,7 @@ pub enum TripOperation {
 #[derive(Clone)]
 pub struct VesselDatabase {
     pub pool: Pool,
+    system_status_cache: Arc<Mutex<std::collections::HashMap<String, bool>>>,
 }
 
 impl VesselDatabase {
@@ -73,7 +74,24 @@ impl VesselDatabase {
             .init(vec!["SET time_zone = '+00:00'"]);
         let pool = Pool::new(opts_builder)?;
         
-        Ok(VesselDatabase { pool })
+        let db = VesselDatabase { 
+            pool, 
+            system_status_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        };
+        
+        // Load cache from database (non-fatal if table doesn't exist)
+        if let Ok(mut conn) = db.pool.get_conn() {
+            if let Ok(rows) = conn.query::<(String, String), _>("SELECT status_key, status_value FROM system_status") {
+                let mut cache = db.system_status_cache.lock().unwrap();
+                for (key, value) in rows {
+                    let enabled = value == "1" || value.to_lowercase() == "true";
+                    cache.insert(key, enabled);
+                }
+            }
+            // If table doesn't exist, that's okay - cache will start empty and defaults to true
+        }
+
+        Ok(db)
     }
     
     /// Check database connection health using a simple query
@@ -92,6 +110,38 @@ impl VesselDatabase {
             "description" => new_description,
             "id" => trip_id,
         })?;
+        Ok(())
+    }
+
+
+    /// Get system status (tracking and metrics enabled/disabled state)
+    pub fn get_system_status(&self, key: &str) -> Result<bool, Box<dyn Error>> {
+        let cache = self.system_status_cache.lock().unwrap();
+        if let Some(&cached) = cache.get(key) {
+            Ok(cached)
+        } else {
+            Ok(true) // Default to true if not found in cache for backward compatibility
+        }
+    }
+
+    /// Set system status (tracking and metrics enabled/disabled state)
+    pub fn set_system_status(&self, key: &str, value: bool) -> Result<(), Box<dyn Error>> {
+        let mut conn = self.pool.get_conn()?;
+        let value_str = if value { "1" } else { "0" };
+        
+        // Update database first
+        conn.exec_drop(
+            "INSERT INTO system_status (status_key, status_value) VALUES (:key, :value) ON DUPLICATE KEY UPDATE status_value = :value",
+            mysql::params! {
+                "key" => key,
+                "value" => value_str,
+            },
+        )?;
+        
+        // Update cache to stay in sync
+        let mut cache = self.system_status_cache.lock().unwrap();
+        cache.insert(key.to_string(), value);
+        
         Ok(())
     }
 
@@ -1218,4 +1268,31 @@ mod tests {
         assert!(!points.is_empty());
         // Debug output removed - test verifies data retrieval works
     }
+
+    #[test]
+    fn test_system_status_set() {
+        let db = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
+        db.set_system_status("tracking_enabled", true).unwrap();
+        assert!(db.get_system_status("tracking_enabled").unwrap());
+        db.set_system_status("tracking_enabled", false).unwrap();
+        assert!(!db.get_system_status("tracking_enabled").unwrap());
+    }
+
+    #[test]
+    fn test_system_status_default() {
+        let db = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
+        assert!(db.get_system_status("a_key_that_does_not_exist").unwrap());
+    }
+
+    #[test]
+    fn test_system_status_persistence() {
+        let db = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
+        db.set_system_status("test_key", true).unwrap();
+        assert!(db.get_system_status("test_key").unwrap());
+        
+        // Create a new instance to verify persistence
+        let db2 = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
+        assert!(db2.get_system_status("test_key").unwrap());
+    }
+
 }

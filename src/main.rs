@@ -276,8 +276,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     metrics.gnss_time_skew = sync_status_and_skew.skew;
                     metrics.gnss_time_skew_status = sync_status_and_skew.status;
                     if sync_status_and_skew.status == TimeSyncStatus::Synchronized {
-                        // Check if tracking is enabled before processing position updates
-                        if config.tracking.enabled {
+                        // Check if tracking is enabled before processing vessel data
+                        let tracking_enabled = if let Some(ref db) = vessel_db {
+                            db.get_system_status("tracking_enabled").unwrap_or(true)
+                        } else {
+                            true // Default to enabled if no database
+                        };
+                        
+                        if tracking_enabled {
                             vessel_monitor.handle_message(&n2k_frame, now);
                             if let Some(vessel_status) = vessel_monitor.generate_status(now) && vessel_status.is_valid() {
                                 match vessel_status_handler.handle_vessel_status(&vessel_db, vessel_status.clone()) {
@@ -290,7 +296,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                         }
 
-                        if config.metrics.enabled {
+                        // Check if metrics collection is enabled before processing environmental data
+                        let metrics_enabled = if let Some(ref db) = vessel_db {
+                            db.get_system_status("metrics_enabled").unwrap_or(true)
+                        } else {
+                            true // Default to enabled if no database
+                        };
+                        
+                        if metrics_enabled {
                             env_monitor.handle_message(&n2k_frame, now);
                             match environmental_status_handler.handle_environment_status(&vessel_db, &mut env_monitor, now) {
                                 Ok(count) => metrics.env_reports += count as u64,

@@ -9,6 +9,25 @@
 USE nmea_router;
 
 -- ============================================================================
+-- SYSTEM STATUS TABLE
+-- ============================================================================
+-- Stores runtime application state that persists across restarts
+-- Uses key-value pairs to track system toggles and settings
+CREATE TABLE IF NOT EXISTS system_status (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    key VARCHAR(255) UNIQUE NOT NULL COMMENT 'Status key (e.g., "tracking_enabled", "metrics_enabled")',
+    value VARCHAR(255) NOT NULL COMMENT 'Status value (e.g., "1", "0", or other values)',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'Last update time',
+    INDEX idx_key (key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='Stores persistent system status and runtime configuration';
+
+-- Initialize default status values:
+INSERT IGNORE INTO system_status (key, value) VALUES 
+('tracking_enabled', '1'),
+('metrics_enabled', '1');
+
+-- ============================================================================
 -- VESSEL STATUS TABLE
 -- ============================================================================
 -- Stores vessel navigation status reports

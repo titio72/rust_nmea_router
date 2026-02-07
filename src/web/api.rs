@@ -325,9 +325,12 @@ pub async fn get_tracking_status(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<TrackingStatusResponse>>, StatusCode> {
     info!("GET /api/tracking/status called");
-    let response = TrackingStatusResponse {
-        enabled: state.config.tracking.enabled,
-    };
+    
+    // Get tracking status from database
+    let enabled = state.db.get_system_status("tracking_enabled")
+        .unwrap_or(true);
+    
+    let response = TrackingStatusResponse { enabled };
     Ok(Json(ApiResponse::ok(response)))
 }
 
@@ -337,39 +340,28 @@ pub async fn set_tracking_status(
 ) -> Result<Json<ApiResponse<TrackingStatusResponse>>, StatusCode> {
     info!(?request, "POST /api/tracking/status called");
     
-    // Update the tracking status in config
-    let config_path = if std::path::Path::new("./config.json").exists() {
-        "./config.json"        
-    } else {
-        "/etc/nmea_router/config.json"
-    };
-    
-    let mut config = (*state.config).clone();
-    config.tracking.enabled = request.enabled;
-    
-    // Try to save the config
-    match config.to_file(config_path) {
-        Ok(_) => {
-            info!("Tracking status saved to config file");
-            let response = TrackingStatusResponse {
-                enabled: config.tracking.enabled,
-            };
-            Ok(Json(ApiResponse::ok(response)))
-        }
-        Err(e) => {
-            error!(error = %e, "Failed to save tracking status to config");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+    // Save tracking status to database
+    if let Err(e) = state.db.set_system_status("tracking_enabled", request.enabled) {
+        error!(error = %e, "Failed to set tracking status in database");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
+    
+    let response = TrackingStatusResponse {
+        enabled: request.enabled,
+    };
+    Ok(Json(ApiResponse::ok(response)))
 }
 
 pub async fn get_metrics_status(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<MetricsStatusResponse>>, StatusCode> {
     info!("GET /api/metrics/status called");
-    let response = MetricsStatusResponse {
-        enabled: state.config.metrics.enabled,
-    };
+    
+    // Get metrics status from database
+    let enabled = state.db.get_system_status("metrics_enabled")
+        .unwrap_or(true);
+    
+    let response = MetricsStatusResponse { enabled };
     Ok(Json(ApiResponse::ok(response)))
 }
 
@@ -379,30 +371,18 @@ pub async fn set_metrics_status(
 ) -> Result<Json<ApiResponse<MetricsStatusResponse>>, StatusCode> {
     info!(?request, "POST /api/metrics/status called");
     
-    // Update the metrics status in config
-    let config_path = if std::path::Path::new("./config.json").exists() {
-        "./config.json"        
-    } else {
-        "/etc/nmea_router/config.json"
+    // Save metrics status to database (persistent across restarts)
+    if let Err(e) = state.db.set_system_status("metrics_enabled", request.enabled) {
+        error!("Failed to save metrics status to database: {}", e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    
+    let response = MetricsStatusResponse {
+        enabled: request.enabled,
     };
     
-    let mut config = (*state.config).clone();
-    config.metrics.enabled = request.enabled;
-    
-    // Try to save the config
-    match config.to_file(config_path) {
-        Ok(_) => {
-            info!("Metrics status saved to config file");
-            let response = MetricsStatusResponse {
-                enabled: config.metrics.enabled,
-            };
-            Ok(Json(ApiResponse::ok(response)))
-        }
-        Err(e) => {
-            error!(error = %e, "Failed to save metrics status to config");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
+    info!("Metrics status updated to: {}", request.enabled);
+    Ok(Json(ApiResponse::ok(response)))
 }
 
 pub fn create_api_router(state: AppState) -> Router {

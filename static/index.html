@@ -523,7 +523,10 @@
 </head>
 <body>
     <div class="header-bar">
-        <h2 style="margin: 0; color: var(--text-primary);">NMEA Router</h2>
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <img id="brandLogo" src="/Itaca_v3.svg" alt="Itaca Logo" style="height: 40px; width: auto;">
+            <h2 style="margin: 0; color: var(--text-primary);">NMEA Router</h2>
+        </div>
         <div style="display: flex; gap: 15px;">
             <div class="tracking-toggle-container" onclick="toggleTracking()">
                 <span>Position Tracking:</span>
@@ -1089,13 +1092,16 @@
         if (savedTheme === 'dark') {
             document.body.classList.add('dark-theme');
             document.getElementById('themeBtn').textContent = '☀️ Light';
+            document.getElementById('brandLogo').src = '/Itaca_v3_dark.svg';
         }
 
         function toggleTheme() {
             const isDark = document.body.classList.toggle('dark-theme');
             const themeBtn = document.getElementById('themeBtn');
+            const brandLogo = document.getElementById('brandLogo');
             localStorage.setItem('theme', isDark ? 'dark' : 'light');
             themeBtn.textContent = isDark ? '☀️ Light' : '🌙 Dark';
+            brandLogo.src = isDark ? '/Itaca_v3_dark.svg' : '/Itaca_v3.svg';
             
             // Reload heatmap with new colors if it has been loaded
             if (heatmapLoaded) {
