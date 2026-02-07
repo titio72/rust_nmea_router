@@ -570,7 +570,8 @@ impl VesselDatabase {
         } else if let Some(months) = last_months {
             query.push_str(&format!(" start_timestamp >= DATE_SUB(NOW(), INTERVAL {} MONTH)", months));
         } else {
-            query.push_str(&format!(" start_timestamp >= DATE_SUB(NOW(), INTERVAL {} MONTH)", 12)); // default last 12 months
+            // If no filters specified, get all trips (to populate year filter with all available years)
+            query.push_str(" 1=1");
         }
 
         query.push_str(" ORDER BY start_timestamp DESC");

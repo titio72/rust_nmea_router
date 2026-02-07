@@ -96,6 +96,26 @@ pub struct HeatmapQuery {
     pub date: String,  // Date in YYYY-MM-DD format
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TrackingStatusRequest {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TrackingStatusResponse {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct MetricsStatusRequest {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MetricsStatusResponse {
+    pub enabled: bool,
+}
+
 pub async fn get_trips(
     State(state): State<AppState>,
     Query(params): Query<TripsQuery>,
@@ -301,6 +321,90 @@ pub async fn get_heatmap(
     }
 }
 
+pub async fn get_tracking_status(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<TrackingStatusResponse>>, StatusCode> {
+    info!("GET /api/tracking/status called");
+    let response = TrackingStatusResponse {
+        enabled: state.config.tracking.enabled,
+    };
+    Ok(Json(ApiResponse::ok(response)))
+}
+
+pub async fn set_tracking_status(
+    State(state): State<AppState>,
+    Json(request): Json<TrackingStatusRequest>,
+) -> Result<Json<ApiResponse<TrackingStatusResponse>>, StatusCode> {
+    info!(?request, "POST /api/tracking/status called");
+    
+    // Update the tracking status in config
+    let config_path = if std::path::Path::new("./config.json").exists() {
+        "./config.json"        
+    } else {
+        "/etc/nmea_router/config.json"
+    };
+    
+    let mut config = (*state.config).clone();
+    config.tracking.enabled = request.enabled;
+    
+    // Try to save the config
+    match config.to_file(config_path) {
+        Ok(_) => {
+            info!("Tracking status saved to config file");
+            let response = TrackingStatusResponse {
+                enabled: config.tracking.enabled,
+            };
+            Ok(Json(ApiResponse::ok(response)))
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to save tracking status to config");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_metrics_status(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<MetricsStatusResponse>>, StatusCode> {
+    info!("GET /api/metrics/status called");
+    let response = MetricsStatusResponse {
+        enabled: state.config.metrics.enabled,
+    };
+    Ok(Json(ApiResponse::ok(response)))
+}
+
+pub async fn set_metrics_status(
+    State(state): State<AppState>,
+    Json(request): Json<MetricsStatusRequest>,
+) -> Result<Json<ApiResponse<MetricsStatusResponse>>, StatusCode> {
+    info!(?request, "POST /api/metrics/status called");
+    
+    // Update the metrics status in config
+    let config_path = if std::path::Path::new("./config.json").exists() {
+        "./config.json"        
+    } else {
+        "/etc/nmea_router/config.json"
+    };
+    
+    let mut config = (*state.config).clone();
+    config.metrics.enabled = request.enabled;
+    
+    // Try to save the config
+    match config.to_file(config_path) {
+        Ok(_) => {
+            info!("Metrics status saved to config file");
+            let response = MetricsStatusResponse {
+                enabled: config.metrics.enabled,
+            };
+            Ok(Json(ApiResponse::ok(response)))
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to save metrics status to config");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 pub fn create_api_router(state: AppState) -> Router {
     Router::new()
         .route("/trip_description", post(update_trip_description))
@@ -314,6 +418,10 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/track_analytics", get(get_track_analytics))
         .route("/heatmap", get(get_heatmap))
         .route("/config/google_maps_key", get(get_google_maps_key))
+        .route("/tracking/status", get(get_tracking_status))
+        .route("/tracking/status", post(set_tracking_status))
+        .route("/metrics/status", get(get_metrics_status))
+        .route("/metrics/status", post(set_metrics_status))
         .with_state(state)
 }
 #[cfg(test)]

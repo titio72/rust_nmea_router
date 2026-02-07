@@ -72,6 +72,48 @@
         .theme-toggle:hover {
             opacity: 0.8;
         }
+        .tracking-toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+        }
+        .tracking-toggle-container:hover {
+            opacity: 0.8;
+        }
+        .toggle-switch {
+            display: inline-block;
+            width: 30px;
+            height: 18px;
+            background-color: #999;
+            border-radius: 9px;
+            position: relative;
+            transition: background-color 0.3s ease;
+        }
+        .toggle-switch.active {
+            background-color: var(--sailing-color);
+        }
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            background-color: white;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: left 0.3s ease;
+        }
+        .toggle-switch.active::after {
+            left: 14px;
+        }
         .container {
             max-width: 1200px;
             margin: 0 auto;
@@ -149,11 +191,36 @@
             transform: translateY(-2px);
             box-shadow: 0 4px 15px var(--card-shadow);
         }
+        .trip-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 15px;
+        }
         .trip-title {
             font-size: 18px;
             font-weight: bold;
             color: var(--text-bold);
             margin-bottom: 15px;
+        }
+        .trip-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: var(--text-bold);
+            flex: 1;
+        }
+        .trip-edit-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 18px;
+            cursor: pointer;
+            padding: 0 8px;
+            transition: color 0.2s;
+            margin-left: 10px;
+        }
+        .trip-edit-btn:hover {
+            color: var(--sailing-color);
         }
         .trip-dates {
             color: var(--text-secondary);
@@ -337,6 +404,82 @@
         .heatmap-cell.empty {
             background-color: var(--heatmap-empty);
         }
+        .edit-modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        .edit-modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .edit-modal-content {
+            background: var(--bg-secondary);
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px var(--card-shadow);
+            max-width: 500px;
+            width: 90%;
+        }
+        .edit-modal-header {
+            font-size: 20px;
+            font-weight: bold;
+            color: var(--text-bold);
+            margin-bottom: 20px;
+        }
+        .edit-modal-input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 14px;
+            font-family: Arial, sans-serif;
+            box-sizing: border-box;
+            margin-bottom: 20px;
+            resize: vertical;
+            min-height: 100px;
+        }
+        .edit-modal-input:focus {
+            outline: none;
+            border-color: var(--sailing-color);
+            box-shadow: 0 0 5px rgba(39, 174, 96, 0.3);
+        }
+        .edit-modal-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+        .edit-modal-buttons button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+        .edit-modal-save {
+            background-color: var(--sailing-color);
+            color: white;
+        }
+        .edit-modal-save:hover {
+            background-color: #229954;
+        }
+        .edit-modal-cancel {
+            background-color: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        .edit-modal-cancel:hover {
+            opacity: 0.8;
+        }
         .week-labels {
             display: grid;
             grid-template-columns: repeat(54, 17px);
@@ -365,38 +508,56 @@
             .trips-grid {
                 grid-template-columns: 1fr;
             }
+            .header-bar {
+                flex-direction: column;
+                gap: 10px;
+                align-items: flex-start;
+            }
+            .tracking-toggle-container {
+                width: 100%;
+                justify-content: space-between;
+            }
         }
+
     </style>
 </head>
 <body>
     <div class="header-bar">
         <h2 style="margin: 0; color: var(--text-primary);">NMEA Router</h2>
-        <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Dark</button>
+        <div style="display: flex; gap: 15px;">
+            <div class="tracking-toggle-container" onclick="toggleTracking()">
+                <span>Position Tracking:</span>
+                <div class="toggle-switch" id="trackingToggle"></div>
+            </div>
+            <div class="tracking-toggle-container" onclick="toggleMetrics()">
+                <span>Metrics Tracking:</span>
+                <div class="toggle-switch" id="metricsToggle"></div>
+            </div>
+            <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Dark</button>
+        </div>
     </div>
     <div class="container">
-        <div class="nav-tabs">
-            <button class="nav-tab active" onclick="switchTab('trips')">📋 Trips</button>
-            <button class="nav-tab" onclick="switchTab('heatmap')">📊 Heatmap</button>
-        </div>
-        
-        <div id="trips-tab" class="tab-content active">
-            <div class="trips-filter">
-                <label for="yearFilter">Filter:</label>
-                <select id="yearFilter" onchange="filterTrips()">
-                    <option value="12months">Last 12 Months</option>
-                </select>
-            </div>
-            <div id="content">
-                <div class="loading">Loading trips...</div>
+        <div id="editModal" class="edit-modal">
+            <div class="edit-modal-content">
+                <div class="edit-modal-header">Edit Trip Description</div>
+                <textarea id="editModalInput" class="edit-modal-input" placeholder="Enter trip description..."></textarea>
+                <div class="edit-modal-buttons">
+                    <button class="edit-modal-cancel" onclick="closeEditModal()">Cancel</button>
+                    <button class="edit-modal-save" onclick="saveEditModal()">Save</button>
+                </div>
             </div>
         </div>
         
-        <div id="heatmap-tab" class="tab-content">
-            <div class="controls">
-                <label for="dateInput">End Date:</label>
-                <input type="date" id="dateInput">
-                <button onclick="loadHeatmap()">Load Heatmap</button>
-            </div>
+        <div class="trips-filter">
+            <label for="yearFilter">Filter:</label>
+            <select id="yearFilter" onchange="onFilterChange()">
+                <option value="12months">Last 12 Months</option>
+            </select>
+        </div>
+        
+        <!-- Heatmap Section -->
+        <div id="heatmapSection" style="margin-bottom: 40px;">
+            <h2 style="color: var(--text-primary); margin-top: 0;">Activity Heatmap</h2>
             <div id="errorContainer"></div>
             <div class="stats" id="stats"></div>
             <div id="loadingContainer" style="display: none;" class="loading">
@@ -430,36 +591,24 @@
                 </div>
             </div>
         </div>
+        
+        <!-- Trips Section -->
+        <div id="tripsSection">
+            <h2 style="color: var(--text-primary); margin-top: 0;">Trips</h2>
+            <div id="content">
+                <div class="loading">Loading trips...</div>
+            </div>
+        </div>
     </div>
 
     <script>
         // Track if heatmap has been loaded
         let heatmapLoaded = false;
 
-        // Tab switching
-        function switchTab(tabName) {
-            const tabs = document.querySelectorAll('.tab-content');
-            const navTabs = document.querySelectorAll('.nav-tab');
-            
-            tabs.forEach(tab => tab.classList.remove('active'));
-            navTabs.forEach(tab => tab.classList.remove('active'));
-            
-            document.getElementById(tabName + '-tab').classList.add('active');
-            event.target.classList.add('active');
-            
-            if (tabName === 'heatmap') {
-                const dateInput = document.getElementById('dateInput');
-                if (!dateInput.value) {
-                    const today = new Date();
-                    dateInput.value = today.toISOString().split('T')[0];
-                    loadHeatmap();
-                }
-            }
-        }
-
         // Trips functions
         async function loadTrips() {
             try {
+                // Fetch all trips (to populate year filter with all available years)
                 const response = await fetch('/api/trips');
                 if (!response.ok) {
                     throw new Error('HTTP ' + response.status + ': ' + response.statusText);
@@ -472,7 +621,7 @@
                 // Store all trips for filtering
                 window.allTrips = result.data;
                 
-                // Populate year filter dropdown
+                // Populate year filter dropdown with all available years
                 populateYearFilter(result.data);
                 
                 // Display with default filter
@@ -550,8 +699,11 @@
                 const motoringTime = trip.motoring_time_ms;
                 const sailingTimePercent = totalTime > 0 ? (sailingTime / totalTime * 100) : 0;
 
-                html += '<a href="trip.html?id=' + trip.id + '" class="trip-card">' +
-                    '<div class="trip-title">' + (trip.description || 'Trip ' + trip.id) + '</div>' +
+                html += '<div class="trip-card" onclick="window.location.href=\'trip.html?id=' + trip.id + '\'">' +
+                    '<div class="trip-header">' +
+                        '<div class="trip-title">' + (trip.description || 'Trip ' + trip.id) + '</div>' +
+                        '<button class="trip-edit-btn" onclick="openEditModal(event, ' + trip.id + ', \'' + (trip.description || '').replace(/'/g, "\\'") + '\')" title="Edit description">✏️</button>' +
+                    '</div>' +
                     '<div class="trip-dates">' + formatDate(trip.start_date) + ' - ' + formatDate(trip.end_date) + '</div>' +
                     '<div class="trip-stats">' +
                         '<div class="stat-item">' +
@@ -577,7 +729,7 @@
                             '</div>' +
                         '</div>' +
                     '</div>' +
-                '</a>';
+                '</div>';
             });
 
             html += '</div>';
@@ -615,8 +767,34 @@
             return '--heatmap-5';
         }
 
+        // Navigate to trip detail page for a given date
+        function navigateToTripForDate(dateStr) {
+            if (!window.allTrips || window.allTrips.length === 0) {
+                alert('No trips available');
+                return;
+            }
+
+            // Find trip whose date range contains the clicked date
+            // Compare date strings directly to avoid timezone issues
+            const matchingTrip = window.allTrips.find(trip => {
+                // Extract just the date part from timestamps (format: YYYY-MM-DDTHH:MM:SS)
+                const startDateStr = trip.start_date.split('T')[0];
+                const endDateStr = trip.end_date.split('T')[0];
+                
+                // Compare date strings directly (YYYY-MM-DD format)
+                return dateStr >= startDateStr && dateStr <= endDateStr;
+            });
+
+            if (matchingTrip) {
+                window.location.href = `trip.html?id=${matchingTrip.id}`;
+            } else {
+                alert(`No trip found for date ${dateStr}`);
+            }
+        }
+
         async function loadHeatmap() {
-            const dateInput = document.getElementById('dateInput').value;
+            const endDate = getHeatmapEndDate();
+            const dateString = endDate.toISOString().split('T')[0];
             const errorContainer = document.getElementById('errorContainer');
             const loadingContainer = document.getElementById('loadingContainer');
             const heatmapContainer = document.getElementById('heatmapContainer');
@@ -629,14 +807,14 @@
             heatmapContainer.style.display = 'none';
             statsContainer.innerHTML = '';
 
-            if (!dateInput) {
+            if (!dateString) {
                 errorContainer.innerHTML = '<div class="error">Please select a date</div>';
                 loadingContainer.style.display = 'none';
                 return;
             }
 
             try {
-                const response = await fetch(`/api/heatmap?date=${dateInput}`);
+                const response = await fetch(`/api/heatmap?date=${dateString}`);
                 if (!response.ok) {
                     throw new Error('Failed to load heatmap data');
                 }
@@ -678,7 +856,7 @@
                 heatmap.innerHTML = '';
                 weekLabels.innerHTML = '';
                 
-                const endDate = new Date(dateInput);
+                const endDate = new Date(dateString);
                 const startDate = new Date(endDate);
                 startDate.setDate(startDate.getDate() - 364);
 
@@ -744,6 +922,14 @@
                         const dayName = dayDate.toLocaleDateString('en-US', { weekday: 'short' });
                         cell.title = `${dateStr} (${dayName})\n${distance.toFixed(2)} nm`;
                         
+                        // Add click handler to navigate to trip details if cell has activity
+                        if (distance > 0) {
+                            cell.style.cursor = 'pointer';
+                            cell.addEventListener('click', () => {
+                                navigateToTripForDate(dateStr);
+                            });
+                        }
+                        
                         cell.addEventListener('mouseenter', (e) => {
                             const tooltip = document.createElement('div');
                             tooltip.className = 'tooltip';
@@ -776,8 +962,127 @@
             }
         }
 
-        // Load trips when page loads
+        function getHeatmapEndDate() {
+            const filterValue = document.getElementById('yearFilter').value;
+            const today = new Date();
+            
+            if (filterValue === '12months') {
+                return today;
+            } else {
+                const selectedYear = parseInt(filterValue);
+                return new Date(selectedYear, 11, 31); // Dec 31 of selected year
+            }
+        }
+
+        // Handle filter changes - update both heatmap and trips
+        function onFilterChange() {
+            filterTrips();
+            loadHeatmap();
+        }
+
+        // Load trips and heatmap when page loads
         loadTrips();
+        loadHeatmap();
+
+        // Load tracking status when page loads
+        async function initializeTracking() {
+            try {
+                const response = await fetch('/api/tracking/status');
+                if (!response.ok) {
+                    throw new Error('Failed to load tracking status');
+                }
+                const result = await response.json();
+                const toggle = document.getElementById('trackingToggle');
+                if (result.data && result.data.enabled) {
+                    toggle.classList.add('active');
+                }
+            } catch (error) {
+                console.error('Error loading tracking status:', error);
+            }
+        }
+        initializeTracking();
+
+        // Toggle tracking
+        async function toggleTracking() {
+            const toggle = document.getElementById('trackingToggle');
+            const newStatus = !toggle.classList.contains('active');
+            
+            try {
+                const response = await fetch('/api/tracking/status', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ enabled: newStatus })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to update tracking status');
+                }
+                
+                const result = await response.json();
+                if (result.status === 'ok' && result.data) {
+                    if (result.data.enabled) {
+                        toggle.classList.add('active');
+                    } else {
+                        toggle.classList.remove('active');
+                    }
+                }
+            } catch (error) {
+                console.error('Error toggling tracking:', error);
+                alert('Failed to update tracking status. Check console for details.');
+            }
+        }
+
+        // Initialize metrics tracking
+        async function initializeMetrics() {
+            try {
+                const response = await fetch('/api/metrics/status');
+                if (!response.ok) {
+                    throw new Error('Failed to load metrics status');
+                }
+                const result = await response.json();
+                const toggle = document.getElementById('metricsToggle');
+                if (result.data && result.data.enabled) {
+                    toggle.classList.add('active');
+                }
+            } catch (error) {
+                console.error('Error loading metrics status:', error);
+            }
+        }
+        initializeMetrics();
+
+        // Toggle metrics tracking
+        async function toggleMetrics() {
+            const toggle = document.getElementById('metricsToggle');
+            const newStatus = !toggle.classList.contains('active');
+            
+            try {
+                const response = await fetch('/api/metrics/status', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ enabled: newStatus })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to update metrics status');
+                }
+                
+                const result = await response.json();
+                if (result.status === 'ok' && result.data) {
+                    if (result.data.enabled) {
+                        toggle.classList.add('active');
+                    } else {
+                        toggle.classList.remove('active');
+                    }
+                }
+            } catch (error) {
+                console.error('Error toggling metrics:', error);
+                alert('Failed to update metrics status. Check console for details.');
+            }
+        }
 
         // Theme handling
         const savedTheme = localStorage.getItem('theme') || 'light';
@@ -797,6 +1102,87 @@
                 loadHeatmap();
             }
         }
+
+        // Trip edit modal functions
+        let currentEditingTripId = null;
+
+        function openEditModal(event, tripId, currentDescription) {
+            event.stopPropagation();
+            currentEditingTripId = tripId;
+            const modal = document.getElementById('editModal');
+            const input = document.getElementById('editModalInput');
+            input.value = currentDescription;
+            modal.classList.add('active');
+            input.focus();
+        }
+
+        function closeEditModal() {
+            const modal = document.getElementById('editModal');
+            modal.classList.remove('active');
+            currentEditingTripId = null;
+        }
+
+        async function saveEditModal() {
+            if (currentEditingTripId === null) return;
+
+            const newDescription = document.getElementById('editModalInput').value.trim();
+            
+            try {
+                const response = await fetch('/api/trip_description', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        id: currentEditingTripId,
+                        description: newDescription
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to update trip description');
+                }
+
+                const result = await response.json();
+                if (result.status === 'ok') {
+                    // Update the trip in the in-memory list
+                    if (window.allTrips) {
+                        const trip = window.allTrips.find(t => t.id === currentEditingTripId);
+                        if (trip) {
+                            trip.description = newDescription;
+                        }
+                    }
+                    
+                    closeEditModal();
+                    // Re-render the trips with updated description
+                    filterTrips();
+                } else {
+                    alert('Error: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error updating trip description:', error);
+                alert('Failed to update trip description. Check console for details.');
+            }
+        }
+
+        // Close modal when clicking outside the content
+        document.addEventListener('click', function(event) {
+            const modal = document.getElementById('editModal');
+            if (event.target === modal) {
+                closeEditModal();
+            }
+        });
+
+        // Allow Enter key to save
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter' && event.ctrlKey) {
+                const modal = document.getElementById('editModal');
+                if (modal.classList.contains('active')) {
+                    saveEditModal();
+                }
+            }
+        });
+
     </script>
 </body>
 </html>

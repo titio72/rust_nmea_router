@@ -276,22 +276,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                     metrics.gnss_time_skew = sync_status_and_skew.skew;
                     metrics.gnss_time_skew_status = sync_status_and_skew.status;
                     if sync_status_and_skew.status == TimeSyncStatus::Synchronized {
-                        vessel_monitor.handle_message(&n2k_frame, now);
-                        if let Some(vessel_status) = vessel_monitor.generate_status(now) && vessel_status.is_valid() {
-                            match vessel_status_handler.handle_vessel_status(&vessel_db, vessel_status.clone()) {
-                                Ok(true) => metrics.vessel_reports += 1,
-                                Ok(false) => {},
-                                Err(e) => {
-                                    warn!("Database error during vessel status write: {}", e);
+                        // Check if tracking is enabled before processing position updates
+                        if config.tracking.enabled {
+                            vessel_monitor.handle_message(&n2k_frame, now);
+                            if let Some(vessel_status) = vessel_monitor.generate_status(now) && vessel_status.is_valid() {
+                                match vessel_status_handler.handle_vessel_status(&vessel_db, vessel_status.clone()) {
+                                    Ok(true) => metrics.vessel_reports += 1,
+                                    Ok(false) => {},
+                                    Err(e) => {
+                                        warn!("Database error during vessel status write: {}", e);
+                                    }
                                 }
                             }
                         }
 
-                        env_monitor.handle_message(&n2k_frame, now);
-                        match environmental_status_handler.handle_environment_status(&vessel_db, &mut env_monitor, now) {
-                            Ok(count) => metrics.env_reports += count as u64,
-                            Err(e) => {
-                                warn!("Database error during environmental write: {}", e);
+                        if config.metrics.enabled {
+                            env_monitor.handle_message(&n2k_frame, now);
+                            match environmental_status_handler.handle_environment_status(&vessel_db, &mut env_monitor, now) {
+                                Ok(count) => metrics.env_reports += count as u64,
+                                Err(e) => {
+                                    warn!("Database error during environmental write: {}", e);
+                                }
                             }
                         }
                     } else {

@@ -17,6 +17,10 @@ pub struct Config {
     pub web: WebConfig,
     #[serde(default)]
     pub udp: UdpConfig,
+    #[serde(default)]
+    pub tracking: TrackingConfig,
+    #[serde(default)]
+    pub metrics: MetricsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +76,44 @@ impl Default for UdpConfig {
         Self {
             enabled: false,
             address: "192.168.1.255:10110".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackingConfig {
+    /// Enable or disable vessel position tracking
+    #[serde(default = "default_tracking_enabled")]
+    pub enabled: bool,
+}
+
+fn default_tracking_enabled() -> bool {
+    true
+}
+
+impl Default for TrackingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsConfig {
+    /// Enable or disable metrics tracking (environmental monitoring)
+    #[serde(default = "default_metrics_enabled")]
+    pub enabled: bool,
+}
+
+fn default_metrics_enabled() -> bool {
+    true
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
         }
     }
 }
@@ -285,6 +327,13 @@ impl Config {
         Ok(config)
     }
     
+    /// Save configuration to a JSON file
+    pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let json = serde_json::to_string_pretty(&self)?;
+        fs::write(path, json)?;
+        Ok(())
+    }
+    
     /// Validate configuration and fix invalid values by reverting to defaults
     /// Returns an error if CAN interface is invalid (unrecoverable)
     fn validate_and_fix(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -419,6 +468,8 @@ impl Config {
             logging: LogConfig::default(),
             web: WebConfig::default(),
             udp: UdpConfig::default(),
+            tracking: TrackingConfig::default(),
+            metrics: MetricsConfig::default(),
         }
     }
 }
