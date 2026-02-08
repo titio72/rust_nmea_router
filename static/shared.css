@@ -1,0 +1,164 @@
+/* NMEA Router - Shared CSS for index.html and trip.html */
+
+:root {
+    --bg-primary: #f5f5f5;
+    --bg-secondary: white;
+    --bg-tertiary: #f8f9fa;
+    --bg-accent: #e8f4f8;
+    --text-primary: #333;
+    --text-secondary: #666;
+    --text-tertiary: #555;
+    --text-bold: #2c3e50;
+    --border-color: #ddd;
+    --link-color: #3498db;
+    --card-shadow: rgba(0,0,0,0.1);
+    --sailing-color: #2980b9;
+    --motoring-color: #95a5a6;
+    --moored-color: #7f8c8d;
+    --empty-color: #ecf0f1;
+    --heatmap-empty: #ecf0f1;
+    --heatmap-1: #a9dfbf;
+    --heatmap-2: #52be80;
+    --heatmap-3: #27ae60;
+    --heatmap-4: #1e8449;
+    --heatmap-5: #0b5345;
+}
+
+body.dark-theme {
+    --bg-primary: #0a1628;
+    --bg-secondary: #0f1f3c;
+    --bg-tertiary: #1a2d47;
+    --bg-accent: #1e3a52;
+    --text-primary: #e0e8f0;
+    --text-secondary: #a8b8cc;
+    --text-tertiary: #c8d8e8;
+    --text-bold: #ffffff;
+    --border-color: #2a4a6f;
+    --link-color: #3498db;
+    --card-shadow: rgba(0,0,0,0.4);
+    --sailing-color: #3498db;
+    --motoring-color: #bdc3c7;
+    --moored-color: #95a5a6;
+    --empty-color: #1e3a52;
+    --heatmap-empty: #0f1f3c;
+    --heatmap-1: #1e3a52;
+    --heatmap-2: #2d5a7f;
+    --heatmap-3: #3d7aac;
+    --heatmap-4: #4d9ad9;
+    --heatmap-5: #5dbaff;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background-color: var(--bg-primary);
+    transition: background-color 0.3s ease;
+    color: var(--text-primary);
+}
+
+canvas {
+    width: 100% !important;
+    height: auto !important;
+}
+
+h1 {
+    color: var(--text-primary);
+    text-align: center;
+    margin-bottom: 30px;
+    max-width: 1200px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.header-bar {
+    max-width: 1200px;
+    margin: 0 auto 20px auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 15px;
+}
+
+.back-link {
+    display: inline-block;
+    color: var(--link-color);
+    text-decoration: none;
+    font-weight: normal;
+    font-size: 14px;
+}
+
+.back-link:hover {
+    text-decoration: underline;
+}
+
+.theme-toggle {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 8px 16px;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--text-primary);
+    transition: all 0.3s ease;
+}
+
+.theme-toggle:hover {
+    background: var(--bg-accent);
+    opacity: 0.8;
+}
+
+/* Analytics and Summary Card Styles */
+.analyticsTitle {
+    font-size: 14px;
+    font-weight: bold;
+    color: var(--text-primary);
+    margin-bottom: 15px;
+    grid-column: 1 / -1;
+}
+
+.analyticsGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    grid-column: 1 / -1;
+}
+
+.analyticsCard {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 12px;
+    border-left: 3px solid var(--link-color);
+    transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+.analyticsCard:hover {
+    background-color: var(--bg-secondary);
+    box-shadow: 0 0 8px rgba(93, 186, 255, 0.3);
+}
+
+.analyticsCardTitle {
+    font-size: 12px;
+    font-weight: bold;
+    color: var(--text-tertiary);
+    margin-bottom: 6px;
+    text-align: left;
+}
+
+.analyticsValue {
+    font-size: 18px;
+    font-weight: bold;
+    color: var(--text-bold);
+    margin-bottom: 4px;
+    text-align: left;
+}
+
+.analyticsDetail {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+    line-height: 1.3;
+}
+

@@ -5,78 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NMEA Router Dashboard</title>
     <link rel="icon" type="image/png" href="/nmeasail.png">
+    <link rel="stylesheet" href="/shared.css">
     <style>
-        :root {
-            --bg-primary: #f5f5f5;
-            --bg-secondary: white;
-            --bg-tertiary: #f8f9fa;
-            --text-primary: #333;
-            --text-secondary: #666;
-            --text-bold: #2c3e50;
-            --border-color: #ddd;
-            --card-shadow: rgba(0,0,0,0.1);
-            --sailing-color: #2980b9;
-            --motoring-color: #95a5a6;
-            --moored-color: #7f8c8d;
-            --empty-color: #ecf0f1;
-            --heatmap-empty: #ecf0f1;
-            --heatmap-1: #a9dfbf;
-            --heatmap-2: #52be80;
-            --heatmap-3: #27ae60;
-            --heatmap-4: #1e8449;
-            --heatmap-5: #0b5345;
-        }
-        body.dark-theme {
-            --bg-primary: #0a1628;
-            --bg-secondary: #0f1f3c;
-            --bg-tertiary: #1a2d47;
-            --text-primary: #e0e8f0;
-            --text-secondary: #a8b8cc;
-            --text-bold: #ffffff;
-            --border-color: #2a4a6f;
-            --card-shadow: rgba(0,0,0,0.4);
-            --sailing-color: #3498db;
-            --motoring-color: #bdc3c7;
-            --moored-color: #95a5a6;
-            --empty-color: #1e3a52;
-            --heatmap-empty: #0f1f3c;
-            --heatmap-1: #1e3a52;
-            --heatmap-2: #2d5a7f;
-            --heatmap-3: #3d7aac;
-            --heatmap-4: #4d9ad9;
-            --heatmap-5: #5dbaff;
-        }
-
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background-color: var(--bg-primary);
-            transition: background-color 0.3s ease;
-            color: var(--text-primary);
-        }
-        .header-bar {
-            max-width: 1200px;
-            margin: 0 auto 20px auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 15px;
-        }
-        .theme-toggle {
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            padding: 8px 16px;
-            cursor: pointer;
-            font-size: 14px;
-            color: var(--text-primary);
-            transition: all 0.3s ease;
-        }
-        .theme-toggle:hover {
-            opacity: 0.8;
-        }
         .import-trip-btn {
             background: var(--bg-tertiary);
             border: 1px solid var(--border-color);
@@ -605,6 +535,7 @@
         <div style="display: flex; align-items: center; gap: 15px;">
             <img id="brandLogo" src="/Itaca_v3.svg" alt="Itaca Logo" style="height: 40px; width: auto;">
             <h2 style="margin: 0; color: var(--text-primary);">NMEA Router</h2>
+            <a href="/yearly-stats.html" style="color: var(--link-color); text-decoration: none; font-size: 14px; margin-left: 15px;" title="View yearly statistics">📊 Yearly Stats</a>
         </div>
         <div style="display: flex; gap: 15px; align-items: center;">
             <div class="tracking-toggle-container" onclick="toggleTracking()">

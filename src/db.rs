@@ -981,6 +981,20 @@ pub struct TrackAnalytics {
     pub fastest_10nm: Option<FastestSegment>,
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct MonthlyStatistic {
+    pub year: i32,
+    pub month: u32,
+    pub date: String,  // Format: YYYY-MM
+    pub sailing_distance_nm: f64,
+    pub motoring_distance_nm: f64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct MonthlyStatistics {
+    pub months: Vec<MonthlyStatistic>,
+}
+
 impl VesselDatabase {
 
     pub fn fetch_trip(&self, trip_id: u32) -> Result<Option<TripSummary>, Box<dyn std::error::Error>> {
@@ -1073,6 +1087,80 @@ impl VesselDatabase {
             .collect();
 
         Ok(trips)
+    }
+
+    /// Fetch monthly statistics since January 2020
+    /// Returns monthly sailed and motored nautical miles, including months with no activity
+    pub fn fetch_monthly_statistics(&self) -> Result<MonthlyStatistics, Box<dyn std::error::Error>> {
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+        
+        // Get all trip data grouped by year and month
+        let results: Vec<mysql::Row> = conn.query(
+            r"SELECT YEAR(start_timestamp) as year,
+                     MONTH(start_timestamp) as month,
+                     SUM(total_distance_sailed) as sailing_distance,
+                     SUM(total_distance_motoring) as motoring_distance
+              FROM trips
+              WHERE start_timestamp >= '2020-01-01'
+              GROUP BY YEAR(start_timestamp), MONTH(start_timestamp)
+              ORDER BY year ASC, month ASC"
+        )
+            .map_err(|e| format!("Database query error: {}", e))?;
+
+        // Build a map of (year, month) -> (sailing_distance, motoring_distance)
+        let mut month_data: std::collections::HashMap<(i32, u32), (f64, f64)> = std::collections::HashMap::new();
+        
+        for row in results {
+            let year: i32 = row.get_opt("year")
+                .and_then(|v| v.ok())
+                .ok_or("Missing year")?;
+            let month: u32 = row.get_opt::<u32, _>("month")
+                .and_then(|v| v.ok())
+                .ok_or("Missing month")?;
+            let sailing_distance: f64 = row.get_opt::<f64, _>("sailing_distance")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let motoring_distance: f64 = row.get_opt::<f64, _>("motoring_distance")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            
+            month_data.insert((year, month), (sailing_distance, motoring_distance));
+        }
+
+        // Generate all months from January 2020 to now
+        use chrono::Datelike;
+        let now = chrono::Local::now();
+        let current_year = now.year();
+        let current_month = now.month();
+        
+        let mut all_months = Vec::new();
+        
+        for year in 2020..=current_year {
+            let start_month = if year == 2020 { 1 } else { 1 };
+            let end_month = if year == current_year { current_month } else { 12 };
+            
+            for month in start_month..=end_month {
+                let (sailing_dist, motoring_dist) = month_data
+                    .get(&(year, month))
+                    .copied()
+                    .unwrap_or((0.0, 0.0));
+                
+                let date = format!("{:04}-{:02}", year, month);
+                
+                all_months.push(MonthlyStatistic {
+                    year,
+                    month: month as u32,
+                    date,
+                    sailing_distance_nm: sailing_dist,
+                    motoring_distance_nm: motoring_dist,
+                });
+            }
+        }
+
+        Ok(MonthlyStatistics {
+            months: all_months,
+        })
     }
 
     /// Fetch vessel track data by trip_id or date range

@@ -289,6 +289,23 @@ pub async fn get_track_analytics(
     }
 }
 
+pub async fn get_monthly_statistics(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<crate::db::MonthlyStatistics>>, StatusCode> {
+    info!("GET /api/monthly_statistics called");
+    match state.db.fetch_monthly_statistics() {
+        Ok(stats) => Ok(Json(ApiResponse::ok(stats))),
+        Err(e) => {
+            error!(error = %e, "Failed to fetch monthly statistics");
+            {
+                let bt = Backtrace::force_capture();
+                error!(?bt, "Backtrace for error");
+                Ok(Json(ApiResponse::error(e.to_string())))
+            }
+        }
+    }
+}
+
 pub async fn update_trip_description(
     State(state): State<AppState>,
     Json(params): Json<TripDescriptionQuery>,
@@ -548,6 +565,7 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/wind_statistics", get(get_wind_statistics))
         .route("/trip_legs", get(get_trip_legs))
         .route("/track_analytics", get(get_track_analytics))
+        .route("/monthly_statistics", get(get_monthly_statistics))
         .route("/heatmap", get(get_heatmap))
         .route("/config/google_maps_key", get(get_google_maps_key))
         .route("/tracking/status", get(get_tracking_status))

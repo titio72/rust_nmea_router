@@ -5,101 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trip Details - NMEA Router</title>
     <link rel="icon" type="image/png" href="/nmeasail.png">
+    <link rel="stylesheet" href="/shared.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
     <!-- Google Maps API will be loaded dynamically -->
     <style>
-        :root {
-            --bg-primary: #f5f5f5;
-            --bg-secondary: white;
-            --bg-tertiary: #f8f9fa;
-            --bg-accent: #e8f4f8;
-            --text-primary: #333;
-            --text-secondary: #666;
-            --text-tertiary: #555;
-            --text-bold: #2c3e50;
-            --border-color: #ddd;
-            --link-color: #3498db;
-            --card-shadow: rgba(0,0,0,0.1);
-            --sailing-color: #2980b9;
-            --motoring-color: #95a5a6;
-            --moored-color: #7f8c8d;
-        }
-        body.dark-theme {
-            --bg-primary: #0a1628;
-            --bg-secondary: #0f1f3c;
-            --bg-tertiary: #1a2d47;
-            --bg-accent: #1e3a52;
-            --text-primary: #e0e8f0;
-            --text-secondary: #a8b8cc;
-            --text-tertiary: #c8d8e8;
-            --text-bold: #ffffff;
-            --border-color: #2a4a6f;
-            --link-color: #3498db;
-            --card-shadow: rgba(0,0,0,0.4);
-            --sailing-color: #3498db;
-            --motoring-color: #bdc3c7;
-            --moored-color: #95a5a6;
-        }
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background-color: var(--bg-primary);
-            transition: background-color 0.3s ease;
-        }
-        .container {
-            max-width: 100%;
-            margin: 0;
-            background: transparent;
-            padding: 0;
-            border-radius: 0;
-            box-shadow: none;
-            transition: background-color 0.3s ease;
-        }
-        canvas {
-            width: 100% !important;
-            height: auto !important;
-        }
-        h1 {
-            color: var(--text-primary);
-            text-align: center;
-            margin-bottom: 30px;
-            max-width: 1200px;
-            margin-left: auto;
-            margin-right: auto;
-        }
-        .header-bar {
-            max-width: 1200px;
-            margin: 0 auto 20px auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 15px;
-        }
-        .back-link {
-            display: inline-block;
-            color: var(--link-color);
-            text-decoration: none;
-            font-weight: normal;
-            font-size: 14px;
-        }
-        .back-link:hover {
-            text-decoration: underline;
-        }
-        .theme-toggle {
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            padding: 8px 16px;
-            cursor: pointer;
-            font-size: 14px;
-            color: var(--text-primary);
-            transition: all 0.3s ease;
-        }
-        .theme-toggle:hover {
-            background: var(--bg-accent);
-        }
         #tripDetails {
             width: 100%;
             padding: 0;
@@ -231,18 +140,6 @@
             border-radius: 8px;
             padding: 20px;
         }
-        }
-        .fullWidthChart {
-            height: 350px;
-        }
-        .chartTitle {
-            font-size: 18px;
-            font-weight: bold;
-            color: var(--text-primary);
-            margin-top: 0;
-            margin-bottom: 15px;
-            text-align: left;
-        }
         .loading {
             text-align: center;
             padding: 50px;
@@ -252,99 +149,6 @@
             color: #e74c3c;
             text-align: center;
             padding: 20px;
-        }
-        .leg-selector {
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 25px;
-            margin-bottom: 30px;
-            transition: background-color 0.3s ease;
-            max-width: 1200px;
-            margin-left: auto;
-            margin-right: auto;
-            box-shadow: 0 2px 5px var(--card-shadow);
-        }
-        .leg-selector-title {
-            font-size: 18px;
-            font-weight: bold;
-            color: var(--text-primary);
-            margin-top: 0;
-            margin-bottom: 15px;
-            text-align: left;
-        }
-        .leg-buttons {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            justify-content: flex-start;
-        }
-        .leg-button {
-            padding: 10px 20px;
-            border: 2px solid var(--link-color);
-            background: var(--bg-secondary);
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            color: var(--link-color);
-            transition: all 0.2s;
-            min-width: 120px;
-            text-align: center;
-        }
-        .leg-button:hover {
-            background: var(--bg-tertiary);
-        }
-        .leg-button.active {
-            background: var(--link-color);
-            color: white;
-        }
-        .leg-button.entire-trip {
-            border-color: var(--sailing-color);
-            color: var(--sailing-color);
-            font-weight: bold;
-        }
-        .leg-button.entire-trip.active {
-            background: var(--sailing-color);
-            color: white;
-        }
-        .leg-info {
-            font-size: 11px;
-            color: var(--text-secondary);
-            margin-top: 4px;
-        }
-        .analytics-container {
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 25px;
-            margin-bottom: 20px;
-            transition: background-color 0.3s ease, border-color 0.3s ease;
-            max-width: 1200px;
-            margin-left: auto;
-            margin-right: auto;
-            box-shadow: 0 2px 5px var(--card-shadow);
-        }
-        .analytics-title {
-            font-size: 18px;
-            font-weight: bold;
-            color: var(--text-primary);
-            margin-top: 0;
-            margin-bottom: 12px;
-            text-align: left;
-        }
-        .analytics-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 12px;
-        }
-        .analytics-card {
-            background: var(--bg-tertiary);
-            padding: 10px 12px;
-            border-radius: 6px;
-            border-left: 3px solid var(--link-color);
-            transition: background-color 0.3s ease, border-color 0.3s ease;
-            text-align: left;
         }
         .fastestSegmentCard {
             cursor: pointer;
@@ -424,11 +228,6 @@
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
             border-radius: 6px;
-        }
-        @media (min-width: 768px) {
-            .charts-container {
-                grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-            }
         }
     </style>
 </head>
