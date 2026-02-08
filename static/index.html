@@ -15,8 +15,9 @@
             --text-bold: #2c3e50;
             --border-color: #ddd;
             --card-shadow: rgba(0,0,0,0.1);
-            --sailing-color: #27ae60;
-            --motoring-color: #e74c3c;
+            --sailing-color: #2980b9;
+            --motoring-color: #95a5a6;
+            --moored-color: #7f8c8d;
             --empty-color: #ecf0f1;
             --heatmap-empty: #ecf0f1;
             --heatmap-1: #a9dfbf;
@@ -26,16 +27,17 @@
             --heatmap-5: #0b5345;
         }
         body.dark-theme {
-            --bg-primary: #0f1f3c;
-            --bg-secondary: #1a2f4d;
-            --bg-tertiary: #253d5a;
+            --bg-primary: #0a1628;
+            --bg-secondary: #0f1f3c;
+            --bg-tertiary: #1a2d47;
             --text-primary: #e0e8f0;
             --text-secondary: #a8b8cc;
             --text-bold: #ffffff;
-            --border-color: #3a5a7f;
+            --border-color: #2a4a6f;
             --card-shadow: rgba(0,0,0,0.4);
-            --sailing-color: #4a9a74;
-            --motoring-color: #c0392b;
+            --sailing-color: #3498db;
+            --motoring-color: #bdc3c7;
+            --moored-color: #95a5a6;
             --empty-color: #1e3a52;
             --heatmap-empty: #0f1f3c;
             --heatmap-1: #1e3a52;
@@ -59,6 +61,8 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
         }
         .theme-toggle {
             background: var(--bg-tertiary);
@@ -132,12 +136,12 @@
             left: 14px;
         }
         .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background: var(--bg-secondary);
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px var(--card-shadow);
+            max-width: 100%;
+            margin: 0;
+            background: transparent;
+            padding: 0;
+            border-radius: 0;
+            box-shadow: none;
             transition: background-color 0.3s ease;
         }
         h1 {
@@ -189,12 +193,12 @@
         }
         .trips-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            grid-template-columns: 1fr;
             gap: 20px;
             margin-top: 30px;
         }
         .trip-card {
-            background: var(--bg-tertiary);
+            background: var(--bg-secondary);
             border: 1px solid var(--border-color);
             border-radius: 8px;
             padding: 20px;
@@ -203,25 +207,45 @@
             cursor: pointer;
             text-decoration: none;
             color: inherit;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
         }
         .trip-card:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 15px var(--card-shadow);
         }
+        .trip-line-1 {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .trip-line-2, .trip-line-3 {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            font-size: 13px;
+        }
+        .trip-line-4 {
+            width: 100%;
+        }
+        .line-item {
+            flex: 1;
+            min-width: 200px;
+        }
+        .line-item .label {
+            font-weight: 600;
+            color: var(--text-bold);
+        }
         .trip-header {
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 15px;
+            align-items: center;
+            gap: 10px;
+            flex: 1;
         }
         .trip-title {
-            font-size: 18px;
-            font-weight: bold;
-            color: var(--text-bold);
-            margin-bottom: 15px;
-        }
-        .trip-title {
-            font-size: 18px;
+            font-size: 16px;
             font-weight: bold;
             color: var(--text-bold);
             flex: 1;
@@ -230,11 +254,10 @@
             background: none;
             border: none;
             color: var(--text-secondary);
-            font-size: 18px;
+            font-size: 16px;
             cursor: pointer;
-            padding: 0 8px;
+            padding: 0 4px;
             transition: color 0.2s;
-            margin-left: 10px;
         }
         .trip-edit-btn:hover {
             color: var(--sailing-color);
@@ -243,11 +266,11 @@
             background: none;
             border: none;
             color: var(--text-secondary);
-            font-size: 18px;
+            font-size: 16px;
             cursor: pointer;
-            padding: 0 8px;
+            padding: 0 4px;
             transition: color 0.2s;
-            margin-left: 10px;
+            margin-left: 5px;
         }
         .trip-export-btn:hover {
             color: var(--sailing-color);
@@ -259,8 +282,11 @@
         }
         .trip-stats {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr 1fr;
             gap: 15px;
+        }
+        .stat-item.full-width {
+            grid-column: 1 / -1;
         }
         .stat-item {
             text-align: center;
@@ -275,6 +301,11 @@
             font-size: 16px;
             font-weight: bold;
             color: var(--text-bold);
+        }
+        .stat-details {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 5px;
         }
         .sailing-percentage {
             color: var(--sailing-color);
@@ -291,6 +322,17 @@
             border-radius: 4px;
             overflow: hidden;
             margin-top: 10px;
+            display: flex;
+        }
+        .progress-sailing {
+            height: 100%;
+            background-color: var(--sailing-color);
+            transition: width 0.3s ease;
+        }
+        .progress-motoring {
+            height: 100%;
+            background-color: var(--motoring-color);
+            transition: width 0.3s ease;
         }
         .progress-fill {
             height: 100%;
@@ -306,9 +348,7 @@
         .trips-filter {
             display: flex;
             gap: 10px;
-            margin-bottom: 20px;
             align-items: center;
-            justify-content: center;
             flex-wrap: wrap;
         }
         .trips-filter label {
@@ -360,6 +400,15 @@
         }
         button:hover {
             background-color: #229954;
+        }
+        #heatmapSection, #tripsSection {
+            max-width: 1200px;
+            margin: 0 auto 25px auto;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 25px;
+            box-shadow: 0 2px 5px var(--card-shadow);
         }
         .stats {
             display: flex;
@@ -557,7 +606,7 @@
             <img id="brandLogo" src="/Itaca_v3.svg" alt="Itaca Logo" style="height: 40px; width: auto;">
             <h2 style="margin: 0; color: var(--text-primary);">NMEA Router</h2>
         </div>
-        <div style="display: flex; gap: 15px;">
+        <div style="display: flex; gap: 15px; align-items: center;">
             <div class="tracking-toggle-container" onclick="toggleTracking()">
                 <span>Position Tracking:</span>
                 <div class="toggle-switch" id="trackingToggle"></div>
@@ -565,6 +614,12 @@
             <div class="tracking-toggle-container" onclick="toggleMetrics()">
                 <span>Metrics Tracking:</span>
                 <div class="toggle-switch" id="metricsToggle"></div>
+            </div>
+            <div class="trips-filter">
+                <label for="yearFilter">Filter:</label>
+                <select id="yearFilter" onchange="onFilterChange()">
+                    <option value="12months">Last 12 Months</option>
+                </select>
             </div>
             <button class="import-trip-btn" onclick="triggerImportDialog()" title="Import trip">⬆</button>
             <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">◐ Dark</button>
@@ -584,16 +639,10 @@
         
         <!-- Hidden file input for trip import -->
         <input type="file" id="importFileInput" accept=".json" style="display: none;" onchange="handleFileImport(event)">
-        
-        <div class="trips-filter">
-            <label for="yearFilter">Filter:</label>
-            <select id="yearFilter" onchange="onFilterChange()">
-                <option value="12months">Last 12 Months</option>
-            </select>
-        </div>
+    </div>
         
         <!-- Heatmap Section -->
-        <div id="heatmapSection" style="margin-bottom: 40px;">
+        <div id="heatmapSection">
             <h2 style="color: var(--text-primary); margin-top: 0;">Activity Heatmap</h2>
             <div id="errorContainer"></div>
             <div class="stats" id="stats"></div>
@@ -636,7 +685,6 @@
                 <div class="loading">Loading trips...</div>
             </div>
         </div>
-    </div>
 
     <script>
         // Track if heatmap has been loaded
@@ -734,37 +782,34 @@
                 const totalTime = trip.total_time_ms;
                 const sailingTime = trip.sailing_time_ms;
                 const motoringTime = trip.motoring_time_ms;
+                const mooredTime = trip.moored_time_ms || 0;
                 const sailingTimePercent = totalTime > 0 ? (sailingTime / totalTime * 100) : 0;
+                const motoringTimePercent = totalTime > 0 ? (motoringTime / totalTime * 100) : 0;
 
                 html += '<div class="trip-card" onclick="window.location.href=\'trip.html?id=' + trip.id + '\'">' +
-                    '<div class="trip-header">' +
-                        '<div class="trip-title">' + (trip.description || 'Trip ' + trip.id) + '</div>' +
-                        '<button class="trip-edit-btn" onclick="openEditModal(event, ' + trip.id + ', \'' + (trip.description || '').replace(/'/g, "\\'") + '\')" title="Edit description">✎</button>' +
-                        '<button class="trip-export-btn" onclick="exportTrip(event, ' + trip.id + ')" title="Export trip">⬇</button>' +
-                    '</div>' +
-                    '<div class="trip-dates">' + formatDate(trip.start_date) + ' - ' + formatDate(trip.end_date) + '</div>' +
-                    '<div class="trip-stats">' +
-                        '<div class="stat-item">' +
-                            '<div class="stat-label">Distance</div>' +
-                            '<div class="stat-value">' + totalDistance.toFixed(1) + ' NM</div>' +
-                            '<div class="progress-bar">' +
-                                '<div class="progress-fill" style="--sailing-percent: ' + sailingPercent + '%"></div>' +
-                            '</div>' +
-                            '<div style="font-size: 11px; margin-top: 5px;">' +
-                                '<span class="sailing-percentage">' + sailingPercent.toFixed(1) + '% sailing</span> | ' +
-                                '<span class="motoring-percentage">' + (100 - sailingPercent).toFixed(1) + '% motoring</span>' +
-                            '</div>' +
+                    '<div class="trip-line-1">' +
+                        '<div class="trip-header">' +
+                            '<div class="trip-title">' + (trip.description || 'Trip ' + trip.id) + ' (ID: ' + trip.id + ')</div>' +
+                            '<button class="trip-edit-btn" onclick="openEditModal(event, ' + trip.id + ', \'' + (trip.description || '').replace(/'/g, "\\'") + '\')" title="Edit description">✎</button>' +
+                            '<button class="trip-export-btn" onclick="exportTrip(event, ' + trip.id + ')" title="Export trip">⬇</button>' +
                         '</div>' +
-                        '<div class="stat-item">' +
-                            '<div class="stat-label">Time</div>' +
-                            '<div class="stat-value">' + formatDuration(totalTime) + '</div>' +
-                            '<div class="progress-bar">' +
-                                '<div class="progress-fill" style="--sailing-percent: ' + sailingTimePercent + '%"></div>' +
-                            '</div>' +
-                            '<div style="font-size: 11px; margin-top: 5px;">' +
-                                '<span class="sailing-percentage">' + sailingTimePercent.toFixed(1) + '% sailing</span> | ' +
-                                '<span class="motoring-percentage">' + (100 - sailingTimePercent).toFixed(1) + '% motoring</span>' +
-                            '</div>' +
+                    '</div>' +
+                    '<div class="trip-line-2">' +
+                        '<div class="line-item"><span class="label">Start:</span> ' + formatDateTime(trip.start_date) + '</div>' +
+                        '<div class="line-item"><span class="label">End:</span> ' + formatDateTime(trip.end_date) + '</div>' +
+                        '<div class="line-item"><span class="label">Duration:</span> ' + formatDuration(totalTime) + '</div>' +
+                        '<div class="line-item"><span class="label">Moored:</span> ' + formatDuration(mooredTime) + '</div>' +
+                    '</div>' +
+                    '<div class="trip-line-3">' +
+                        '<div class="line-item"><span class="label">Total Distance:</span> ' + totalDistance.toFixed(1) + ' NM</div>' +
+                        '<div class="line-item"><span class="label">Sailing:</span> ' + sailingDistance.toFixed(1) + ' NM</div>' +
+                        '<div class="line-item"><span class="label">Motoring:</span> ' + motoringDistance.toFixed(1) + ' NM</div>' +
+                        '<div class="line-item"><span class="label">Sailing %:</span> ' + sailingPercent.toFixed(1) + '%</div>' +
+                    '</div>' +
+                    '<div class="trip-line-4">' +
+                        '<div class="progress-bar">' +
+                            '<div class="progress-sailing" style="width: ' + sailingPercent.toFixed(1) + '%;" title="Sailing: ' + sailingDistance.toFixed(1) + ' NM"></div>' +
+                            '<div class="progress-motoring" style="width: ' + (100 - sailingPercent).toFixed(1) + '%;" title="Motoring: ' + motoringDistance.toFixed(1) + ' NM"></div>' +
                         '</div>' +
                     '</div>' +
                 '</div>';
@@ -779,6 +824,16 @@
             try {
                 const date = new Date(dateStr);
                 return date.toLocaleDateString();
+            } catch (e) {
+                return dateStr;
+            }
+        }
+
+        function formatDateTime(dateStr) {
+            if (!dateStr) return 'Unknown';
+            try {
+                const date = new Date(dateStr);
+                return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             } catch (e) {
                 return dateStr;
             }

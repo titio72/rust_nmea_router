@@ -20,19 +20,25 @@
             --border-color: #ddd;
             --link-color: #3498db;
             --card-shadow: rgba(0,0,0,0.1);
+            --sailing-color: #2980b9;
+            --motoring-color: #95a5a6;
+            --moored-color: #7f8c8d;
         }
         body.dark-theme {
-            --bg-primary: #0f1f3c;
-            --bg-secondary: #1a2f4d;
-            --bg-tertiary: #253d5a;
+            --bg-primary: #0a1628;
+            --bg-secondary: #0f1f3c;
+            --bg-tertiary: #1a2d47;
             --bg-accent: #1e3a52;
             --text-primary: #e0e8f0;
             --text-secondary: #a8b8cc;
             --text-tertiary: #c8d8e8;
             --text-bold: #ffffff;
-            --border-color: #3a5a7f;
-            --link-color: #5dbaff;
+            --border-color: #2a4a6f;
+            --link-color: #3498db;
             --card-shadow: rgba(0,0,0,0.4);
+            --sailing-color: #3498db;
+            --motoring-color: #bdc3c7;
+            --moored-color: #95a5a6;
         }
         body {
             font-family: Arial, sans-serif;
@@ -42,13 +48,13 @@
             transition: background-color 0.3s ease;
         }
         .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background: var(--bg-secondary);
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px var(--card-shadow);
-            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+            max-width: 100%;
+            margin: 0;
+            background: transparent;
+            padding: 0;
+            border-radius: 0;
+            box-shadow: none;
+            transition: background-color 0.3s ease;
         }
         canvas {
             width: 100% !important;
@@ -58,18 +64,25 @@
             color: var(--text-primary);
             text-align: center;
             margin-bottom: 30px;
+            max-width: 1200px;
+            margin-left: auto;
+            margin-right: auto;
         }
         .header-bar {
+            max-width: 1200px;
+            margin: 0 auto 20px auto;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 15px;
         }
         .back-link {
             display: inline-block;
             color: var(--link-color);
             text-decoration: none;
-            font-weight: bold;
+            font-weight: normal;
+            font-size: 14px;
         }
         .back-link:hover {
             text-decoration: underline;
@@ -87,31 +100,52 @@
         .theme-toggle:hover {
             background: var(--bg-accent);
         }
-        .trip-info {
+        #tripDetails {
+            width: 100%;
+            padding: 0;
+        }
+        #tripContainer {
+            max-width: 1200px;
+            margin: 0 auto 25px auto;
             background: var(--bg-tertiary);
-            padding: 20px;
+            border: 1px solid var(--border-color);
             border-radius: 8px;
-            margin-bottom: 30px;
+            padding: 25px;
+            box-shadow: 0 2px 5px var(--card-shadow);
+        }
+        .tripInfo {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
-            transition: background-color 0.3s ease;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
         }
-        .info-item {
+        .infoItem.fullWidth {
+            grid-column: 1 / -1;
+        }
+        .infoRow {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            grid-column: 1 / -1;
+        }
+        .infoItem {
             text-align: center;
         }
-        .info-label {
+        .infoLabel {
             font-size: 12px;
             color: var(--text-secondary);
             text-transform: uppercase;
             margin-bottom: 5px;
         }
-        .info-value {
+        .infoValue {
             font-size: 24px;
             font-weight: bold;
             color: var(--text-bold);
         }
-        .progress-bar-container {
+        .progressBarContainer {
             width: 100%;
             height: 24px;
             background: var(--bg-tertiary);
@@ -121,9 +155,9 @@
             display: flex;
             margin-top: 10px;
         }
-        .progress-bar-sailing {
+        .progressBarSailing {
             height: 100%;
-            background-color: #27ae60;
+            background-color: var(--sailing-color);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -132,9 +166,9 @@
             font-weight: bold;
             transition: width 0.3s ease;
         }
-        .progress-bar-motoring {
+        .progressBarMotoring {
             height: 100%;
-            background-color: #e74c3c;
+            background-color: var(--motoring-color);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -143,43 +177,71 @@
             font-weight: bold;
             transition: width 0.3s ease;
         }
-        .map-container {
+        .infoItem.fullWidth {
+            grid-column: 1 / -1;
+        }
+        .analyticsTitle {
+            font-size: 14px;
+            font-weight: bold;
+            color: var(--text-primary);
+            margin-bottom: 15px;
+            grid-column: 1 / -1;
+        }
+        .analyticsGrid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            grid-column: 1 / -1;
+        }
+        .analyticsCard {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 12px;
+            border-left: 3px solid var(--link-color);
+            transition: background-color 0.3s ease, border-color 0.3s ease;
+        }
+        .infoAndMapContainer {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+        .mapContainer {
+            display: flex;
+            flex-direction: column;
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
             border-radius: 8px;
             padding: 20px;
-            margin-bottom: 30px;
-            transition: background-color 0.3s ease, border-color 0.3s ease;
         }
-        .map-title {
-            font-size: 18px;
-            font-weight: bold;
-            color: var(--text-bold);
-            margin-bottom: 15px;
-            text-align: center;
+        #map {
+            flex: 1;
+            min-height: 300px;
         }
-        .charts-container {
+        .chartsContainer {
             display: grid;
-            grid-template-columns: 1fr;
+            grid-template-columns: repeat(2, 1fr);
             gap: 30px;
         }
-        .chart-wrapper {
+        .chartWrapper {
+            min-height: 400px;
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
             border-radius: 8px;
             padding: 20px;
-            min-height: 400px;
-            transition: background-color 0.3s ease, border-color 0.3s ease;
         }
-        .full-width-chart {
+        }
+        .fullWidthChart {
             height: 350px;
         }
-        .chart-title {
+        .chartTitle {
             font-size: 18px;
             font-weight: bold;
-            color: var(--text-bold);
+            color: var(--text-primary);
+            margin-top: 0;
             margin-bottom: 15px;
-            text-align: center;
+            text-align: left;
         }
         .loading {
             text-align: center;
@@ -192,24 +254,30 @@
             padding: 20px;
         }
         .leg-selector {
-            background: var(--bg-accent);
-            padding: 20px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
             border-radius: 8px;
+            padding: 25px;
             margin-bottom: 30px;
             transition: background-color 0.3s ease;
+            max-width: 1200px;
+            margin-left: auto;
+            margin-right: auto;
+            box-shadow: 0 2px 5px var(--card-shadow);
         }
         .leg-selector-title {
-            font-size: 16px;
+            font-size: 18px;
             font-weight: bold;
-            color: var(--text-bold);
+            color: var(--text-primary);
+            margin-top: 0;
             margin-bottom: 15px;
-            text-align: center;
+            text-align: left;
         }
         .leg-buttons {
             display: flex;
             flex-wrap: wrap;
             gap: 10px;
-            justify-content: center;
+            justify-content: flex-start;
         }
         .leg-button {
             padding: 10px 20px;
@@ -232,12 +300,12 @@
             color: white;
         }
         .leg-button.entire-trip {
-            border-color: #27ae60;
-            color: #27ae60;
+            border-color: var(--sailing-color);
+            color: var(--sailing-color);
             font-weight: bold;
         }
         .leg-button.entire-trip.active {
-            background: #27ae60;
+            background: var(--sailing-color);
             color: white;
         }
         .leg-info {
@@ -246,19 +314,24 @@
             margin-top: 4px;
         }
         .analytics-container {
-            background: var(--bg-secondary);
+            background: var(--bg-tertiary);
             border: 1px solid var(--border-color);
             border-radius: 8px;
-            padding: 15px;
+            padding: 25px;
             margin-bottom: 20px;
             transition: background-color 0.3s ease, border-color 0.3s ease;
+            max-width: 1200px;
+            margin-left: auto;
+            margin-right: auto;
+            box-shadow: 0 2px 5px var(--card-shadow);
         }
         .analytics-title {
-            font-size: 16px;
+            font-size: 18px;
             font-weight: bold;
-            color: var(--text-bold);
+            color: var(--text-primary);
+            margin-top: 0;
             margin-bottom: 12px;
-            text-align: center;
+            text-align: left;
         }
         .analytics-grid {
             display: grid;
@@ -271,31 +344,86 @@
             border-radius: 6px;
             border-left: 3px solid var(--link-color);
             transition: background-color 0.3s ease, border-color 0.3s ease;
+            text-align: left;
         }
-        .fastest-segment-card {
+        .fastestSegmentCard {
             cursor: pointer;
         }
-        .fastest-segment-card:hover {
+        .fastestSegmentCard:hover {
             background-color: var(--bg-secondary);
             box-shadow: 0 0 8px rgba(93, 186, 255, 0.3);
         }
-        .analytics-card-title {
+        .analyticsCardTitle {
             font-size: 12px;
             font-weight: bold;
             color: var(--text-tertiary);
             margin-bottom: 6px;
+            text-align: left;
         }
-        .analytics-value {
+        .analyticsValue {
             font-size: 18px;
             font-weight: bold;
             color: var(--text-bold);
             margin-bottom: 4px;
+            text-align: left;
         }
-        .analytics-detail {
+        .analyticsDetail {
             font-size: 11px;
             color: var(--text-secondary);
             margin-top: 2px;
             line-height: 1.3;
+        }
+        .legNavigator {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 25px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .tripDescription {
+            font-size: 18px;
+            font-weight: bold;
+            color: var(--text-primary);
+            flex: 1;
+        }
+        .navButtons {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .navButton {
+            padding: 10px 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .navButton:hover {
+            background: var(--link-color);
+            color: white;
+            border-color: var(--link-color);
+        }
+        .navButton:active {
+            transform: scale(0.95);
+        }
+        .legDisplay {
+            font-weight: bold;
+            font-size: 16px;
+            color: var(--text-primary);
+            min-width: 180px;
+            text-align: center;
+            padding: 10px 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
         }
         @media (min-width: 768px) {
             .charts-container {
@@ -305,20 +433,21 @@
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header-bar">
-            <a href="index.html" class="back-link">&larr; Back to Trip Dashboard</a>
-            <button class="theme-toggle" onclick="toggleTheme()">
-                <span id="theme-icon">◐</span> <span id="theme-text">Dark</span>
-            </button>
+    <div class="header-bar">
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <img id="brandLogo" src="/Itaca_v3.svg" alt="Itaca Logo" style="height: 40px; width: auto;">
+            <div>
+                <h2 style="margin: 0; color: var(--text-primary);">NMEA Router</h2>
+                <a href="index.html" class="back-link">&larr; Back to Trip Dashboard</a>
+            </div>
         </div>
-        <h1>Trip Details</h1>
-
-        <div id="leg-selector-container"></div>
-
-        <div id="content">
-            <div class="loading">Loading trip details...</div>
-        </div>
+        <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">
+            <span id="theme-icon">◐</span> <span id="theme-text">Dark</span>
+        </button>
+    </div>
+    <div id="tripContainer">
+        <div id="legSelectorContainer"></div>
+        <div id="tripDetails"></div>
     </div>
 
     <script>
@@ -353,12 +482,14 @@
                 document.body.classList.add('dark-theme');
                 updateThemeButton(true);
             }
+            updateBrandLogo(savedTheme === 'dark');
         }
 
         function toggleTheme() {
             const isDark = document.body.classList.toggle('dark-theme');
             localStorage.setItem('theme', isDark ? 'dark' : 'light');
             updateThemeButton(isDark);
+            updateBrandLogo(isDark);
             
             // Recreate all charts with new theme
             if (currentTrip && selectedLeg !== undefined) {
@@ -366,6 +497,11 @@
                     console.error('Failed to reload charts:', error);
                 });
             }
+        }
+
+        function updateBrandLogo(isDark) {
+            const brandLogo = document.getElementById('brandLogo');
+            brandLogo.src = isDark ? '/Itaca_v3_dark.svg' : '/Itaca_v3.svg';
         }
 
         function updateThemeButton(isDark) {
@@ -400,7 +536,7 @@
         let segmentMarkers = []; // Array to store segment start/end markers
 
         if (!tripId) {
-            document.getElementById('content').innerHTML =
+            document.getElementById('tripDetails').innerHTML =
                 '<div class="error">No trip ID specified</div>';
         } else {
             loadTripAndLegs(tripId);
@@ -435,7 +571,7 @@
                 // Load entire trip by default
                 await loadTripDetails(tripId, null);
             } catch (error) {
-                document.getElementById('content').innerHTML =
+                document.getElementById('tripDetails').innerHTML =
                     '<div class="error">Failed to load trip: ' + error.message + '</div>';
             }
         }
@@ -446,50 +582,97 @@
                 return;
             }
 
-            const container = document.getElementById('leg-selector-container');
-            let html = '<div class="leg-selector">' +
-                '<div class="leg-selector-title">Select Trip Leg</div>' +
-                '<div class="leg-buttons">';
-
-            // Add entire trip button
-            html += '<button class="leg-button entire-trip active" onclick="selectLeg(null)">' +
-                '<div>Entire Trip</div>' +
-                '<div class="leg-info">' + currentTrip.total_distance_nm.toFixed(1) + ' NM</div>' +
-                '</button>';
-
-            // Add leg buttons
-            for (const leg of currentLegs) {
-                html += '<button class="leg-button" onclick="selectLeg(' + leg.leg_number + ')">' +
-                    '<div>Leg ' + leg.leg_number + '</div>' +
-                    '<div class="leg-info">' + leg.total_distance_nm.toFixed(1) + ' NM</div>' +
-                    '</button>';
+            window.legNavigation = [null, ...currentLegs];
+            window.currentLegIndex = 0;
+            
+            const container = document.getElementById('legSelectorContainer');
+            if (container) {
+                const description = currentTrip.description || 'Trip ' + currentTrip.id;
+                
+                let html = '<div class="legNavigator">' +
+                    '<div class="tripDescription">' + description + '</div>' +
+                    '<div class="navButtons">' +
+                    '<button class="navButton" onclick="previousLeg()" title="Previous">← Prev</button>' +
+                    '<div class="legDisplay" id="legDisplay">Entire Trip</div>' +
+                    '<button class="navButton" onclick="nextLeg()" title="Next">Next →</button>' +
+                    '</div>' +
+                    '</div>';
+                
+                container.innerHTML = html;
             }
+        }
 
-            html += '</div></div>';
-            container.innerHTML = html;
+        function previousLeg() {
+            window.currentLegIndex = (window.currentLegIndex - 1 + window.legNavigation.length) % window.legNavigation.length;
+            updateLegDisplay();
+        }
+
+        function nextLeg() {
+            window.currentLegIndex = (window.currentLegIndex + 1) % window.legNavigation.length;
+            updateLegDisplay();
+        }
+
+        function updateLegDisplay() {
+            const leg = window.legNavigation[window.currentLegIndex];
+            const displayEl = document.getElementById('legDisplay');
+            
+            if (leg === null) {
+                displayEl.textContent = 'Entire Trip';
+                selectLeg(null);
+            } else {
+                displayEl.textContent = 'Leg ' + leg.leg_number;
+                selectLeg(leg.leg_number);
+            }
         }
 
         async function selectLeg(legNumber) {
             selectedLeg = legNumber;
             
-            // Update button states
-            const buttons = document.querySelectorAll('.leg-button');
-            buttons.forEach(btn => btn.classList.remove('active'));
-            
             if (legNumber === null) {
-                document.querySelector('.leg-button.entire-trip').classList.add('active');
                 await loadTripDetails(tripId, null);
             } else {
                 const leg = currentLegs.find(l => l.leg_number === legNumber);
                 if (leg) {
-                    buttons[legNumber].classList.add('active');
                     await loadTripDetails(tripId, leg);
                 }
             }
         }
 
+        function formatDateForAPI(dateStr) {
+            if (!dateStr) return '';
+            // Handle both ISO format (with or without timezone/milliseconds)
+            // Expected format: 2026-02-02T05:55:12.895000Z or 2026-02-02 05:55:12
+            if (typeof dateStr !== 'string') return '';
+            return dateStr.split('.')[0].replace('T', ' ');
+        }
+
+        function calculateDuration(startDateStr, endDateStr) {
+            if (!startDateStr || !endDateStr) return 'N/A';
+            try {
+                const startDate = new Date(startDateStr);
+                const endDate = new Date(endDateStr);
+                const durationMs = endDate - startDate;
+                
+                if (durationMs < 0) return 'N/A';
+                
+                const totalSeconds = Math.floor(durationMs / 1000);
+                const days = Math.floor(totalSeconds / 86400);
+                const hours = Math.floor((totalSeconds % 86400) / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                
+                const parts = [];
+                if (days > 0) parts.push(days + 'd');
+                if (hours > 0) parts.push(hours + 'h');
+                if (minutes > 0) parts.push(minutes + 'm');
+                
+                return parts.length > 0 ? parts.join(' ') : '0m';
+            } catch (e) {
+                return 'N/A';
+            }
+        }
+
         async function loadTripDetails(tripId, selectedLeg) {
-            document.getElementById('content').innerHTML = '<div class="loading">Loading data...</div>';
+            document.getElementById('tripDetails').innerHTML = '<div class="loading">Loading data...</div>';
             try {
                 // Determine query parameters based on selected leg
                 let trackQuery, speedQuery, windQuery;
@@ -500,7 +683,10 @@
                     trackQuery = 'trip_id=' + tripId;
                     speedQuery = 'id=' + tripId;
                     windQuery = 'id=' + tripId;
-                    tripData = currentTrip;
+                    tripData = {
+                        ...currentTrip,
+                        total_time_ms: (currentTrip.sailing_time_ms || 0) + (currentTrip.motoring_time_ms || 0)
+                    };
                 } else {
                     // Use time range for selected leg
                     // Convert from ISO format (2026-02-02T05:55:12.895000Z) to MySQL format (2026-02-02 05:55:12)
@@ -558,11 +744,22 @@
                 // Load atmospheric pressure data
                 let pressureResult = null;
                 try {
-                    const pressureResponse = await fetch('/api/metrics?metric=1&' + (selectedLeg === null ? 'trip_id=' + tripId : 'start=' + encodeURIComponent(selectedLeg.start_timestamp.split('.')[0].replace('T', ' ')) + '&end=' + encodeURIComponent(selectedLeg.end_timestamp.split('.')[0].replace('T', ' '))));
-                    if (pressureResponse.ok) {
-                        const result = await pressureResponse.json();
-                        if (result.status === 'ok') {
-                            pressureResult = result.data;
+                    let pressureQuery;
+                    if (selectedLeg === null) {
+                        pressureQuery = 'metric=1&trip_id=' + tripId;
+                    } else if (selectedLeg && selectedLeg.start_timestamp && selectedLeg.end_timestamp) {
+                        const startTime = encodeURIComponent(formatDateForAPI(selectedLeg.start_timestamp));
+                        const endTime = encodeURIComponent(formatDateForAPI(selectedLeg.end_timestamp));
+                        pressureQuery = 'metric=1&start=' + startTime + '&end=' + endTime;
+                    }
+                    
+                    if (pressureQuery) {
+                        const pressureResponse = await fetch('/api/metrics?' + pressureQuery);
+                        if (pressureResponse.ok) {
+                            const result = await pressureResponse.json();
+                            if (result.status === 'ok') {
+                                pressureResult = result.data;
+                            }
                         }
                     }
                 } catch (e) {
@@ -574,31 +771,35 @@
                 let analyticsResult = null;
                 if (selectedLeg === null) {
                     // For entire trip, use trip start/end dates
-                    const startTime = encodeURIComponent(currentTrip.start_date.split('.')[0].replace('T', ' '));
-                    const endTime = encodeURIComponent(currentTrip.end_date.split('.')[0].replace('T', ' '));
-                    const analyticsResponse = await fetch('/api/track_analytics?start=' + startTime + '&end=' + endTime);
-                    if (analyticsResponse.ok) {
-                        const result = await analyticsResponse.json();
-                        if (result.status === 'ok') {
-                            analyticsResult = result.data;
+                    if (currentTrip && currentTrip.start_date && currentTrip.end_date) {
+                        const startTime = encodeURIComponent(formatDateForAPI(currentTrip.start_date));
+                        const endTime = encodeURIComponent(formatDateForAPI(currentTrip.end_date));
+                        const analyticsResponse = await fetch('/api/track_analytics?start=' + startTime + '&end=' + endTime);
+                        if (analyticsResponse.ok) {
+                            const result = await analyticsResponse.json();
+                            if (result.status === 'ok') {
+                                analyticsResult = result.data;
+                            }
                         }
                     }
                 } else {
                     // For leg, use leg timestamps
-                    const startTime = encodeURIComponent(selectedLeg.start_timestamp.split('.')[0].replace('T', ' '));
-                    const endTime = encodeURIComponent(selectedLeg.end_timestamp.split('.')[0].replace('T', ' '));
-                    const analyticsResponse = await fetch('/api/track_analytics?start=' + startTime + '&end=' + endTime);
-                    if (analyticsResponse.ok) {
-                        const result = await analyticsResponse.json();
-                        if (result.status === 'ok') {
-                            analyticsResult = result.data;
+                    if (selectedLeg && selectedLeg.start_timestamp && selectedLeg.end_timestamp) {
+                        const startTime = encodeURIComponent(formatDateForAPI(selectedLeg.start_timestamp));
+                        const endTime = encodeURIComponent(formatDateForAPI(selectedLeg.end_timestamp));
+                        const analyticsResponse = await fetch('/api/track_analytics?start=' + startTime + '&end=' + endTime);
+                        if (analyticsResponse.ok) {
+                            const result = await analyticsResponse.json();
+                            if (result.status === 'ok') {
+                                analyticsResult = result.data;
+                            }
                         }
                     }
                 }
 
                 displayTripDetails(tripData, trackResult.data, speedDistResult.data, windStatsResult.data, analyticsResult, pressureResult);
             } catch (error) {
-                document.getElementById('content').innerHTML =
+                document.getElementById('tripDetails').innerHTML =
                     '<div class="error">Failed to load trip details: ' + error.message + '</div>';
             }
         }
@@ -612,7 +813,7 @@
             });
             allCharts = {};
 
-            const content = document.getElementById('content');
+            const content = document.getElementById('tripDetails');
 
             // Calculate percentages
             const totalDistance = trip.total_distance_nm;
@@ -625,136 +826,121 @@
             const motoringTime = trip.motoring_time_ms;
             const sailingTimePercent = totalTime > 0 ? (sailingTime / totalTime * 100) : 0;
 
-            // Build analytics HTML if available
-            let analyticsHtml = '';
-            if (analyticsData) {
-                analyticsHtml = '<div class="analytics-container">' +
-                    '<div class="analytics-title">Performance Analytics</div>' +
-                    '<div class="analytics-grid">';
-
-                // Max speed
-                if (analyticsData.max_speed_kn !== null && analyticsData.max_speed_timestamp !== null) {
-                    analyticsHtml += '<div class="analytics-card">' +
-                        '<div class="analytics-card-title">Max Speed (Sailing)</div>' +
-                        '<div class="analytics-value">' + analyticsData.max_speed_kn.toFixed(2) + ' knots</div>' +
-                        '<div class="analytics-detail">' + formatDateTime(analyticsData.max_speed_timestamp) + '</div>' +
-                    '</div>';
-                }
-
-                // Fastest 1NM
-                if (analyticsData.fastest_1nm) {
-                    const segment = analyticsData.fastest_1nm;
-                    analyticsHtml += '<div class="analytics-card fastest-segment-card" data-segment-type="1nm" onclick="handleSegmentClick(event, \'1nm\')">' +
-                        '<div class="analytics-card-title">Fastest 1 NM</div>' +
-                        '<div class="analytics-value">' + segment.average_speed_kn.toFixed(2) + ' knots</div>' +
-                        '<div class="analytics-detail">Distance: ' + segment.distance_nm.toFixed(2) + ' NM</div>' +
-                        '<div class="analytics-detail">Duration: ' + formatDuration(segment.duration_ms) + '</div>' +
-                        '<div class="analytics-detail">From: ' + formatTime(segment.start_timestamp) + '</div>' +
-                        '<div class="analytics-detail">To: ' + formatTime(segment.end_timestamp) + '</div>' +
-                    '</div>';
-                }
-
-                // Fastest 5NM
-                if (analyticsData.fastest_5nm) {
-                    const segment = analyticsData.fastest_5nm;
-                    analyticsHtml += '<div class="analytics-card fastest-segment-card" data-segment-type="5nm" onclick="handleSegmentClick(event, \'5nm\')">' +
-                        '<div class="analytics-card-title">Fastest 5 NM</div>' +
-                        '<div class="analytics-value">' + segment.average_speed_kn.toFixed(2) + ' knots</div>' +
-                        '<div class="analytics-detail">Distance: ' + segment.distance_nm.toFixed(2) + ' NM</div>' +
-                        '<div class="analytics-detail">Duration: ' + formatDuration(segment.duration_ms) + '</div>' +
-                        '<div class="analytics-detail">From: ' + formatTime(segment.start_timestamp) + '</div>' +
-                        '<div class="analytics-detail">To: ' + formatTime(segment.end_timestamp) + '</div>' +
-                    '</div>';
-                }
-
-                // Fastest 10NM
-                if (analyticsData.fastest_10nm) {
-                    const segment = analyticsData.fastest_10nm;
-                    analyticsHtml += '<div class="analytics-card fastest-segment-card" data-segment-type="10nm" onclick="handleSegmentClick(event, \'10nm\')">' +
-                        '<div class="analytics-card-title">Fastest 10 NM</div>' +
-                        '<div class="analytics-value">' + segment.average_speed_kn.toFixed(2) + ' knots</div>' +
-                        '<div class="analytics-detail">Distance: ' + segment.distance_nm.toFixed(2) + ' NM</div>' +
-                        '<div class="analytics-detail">Duration: ' + formatDuration(segment.duration_ms) + '</div>' +
-                        '<div class="analytics-detail">From: ' + formatTime(segment.start_timestamp) + '</div>' +
-                        '<div class="analytics-detail">To: ' + formatTime(segment.end_timestamp) + '</div>' +
-                    '</div>';
-                }
-
-                analyticsHtml += '</div></div>';
-            }
-
-            content.innerHTML = '<div class="trip-info">' +
-                '<div class="info-item">' +
-                    '<div class="info-label">Trip</div>' +
-                    '<div class="info-value">' + (trip.description || 'Trip ' + trip.id) + '</div>' +
-                '</div>' +
-                '<div class="info-item">' +
-                    '<div class="info-label">Start Date</div>' +
-                    '<div class="info-value">' + formatDate(trip.start_date) + '</div>' +
-                '</div>' +
-                '<div class="info-item">' +
-                    '<div class="info-label">End Date</div>' +
-                    '<div class="info-value">' + formatDate(trip.end_date) + '</div>' +
-                '</div>' +
-                '<div class="info-item">' +
-                    '<div class="info-label">Total Distance</div>' +
-                    '<div class="info-value">' + totalDistance.toFixed(1) + ' NM</div>' +
-                '</div>' +
-                '<div class="info-item">' +
-                    '<div class="info-label">Sailing vs Motoring</div>' +
-                    '<div style="display: flex; gap: 15px; align-items: center; margin-top: 10px;">' +
-                        '<div style="flex: 1;">' +
-                            '<div class="progress-bar-container">' +
-                                '<div class="progress-bar-sailing" style="width: ' + sailingPercent.toFixed(1) + '%;">' + (sailingPercent.toFixed(1) > 5 ? sailingPercent.toFixed(0) + '%' : '') + '</div>' +
-                                '<div class="progress-bar-motoring" style="width: ' + (100 - sailingPercent).toFixed(1) + '%;">' + ((100 - sailingPercent).toFixed(1) > 5 ? (100 - sailingPercent).toFixed(0) + '%' : '') + '</div>' +
-                            '</div>' +
-                        '</div>' +
+            content.innerHTML = '<div class="infoAndMapContainer"><div class="tripInfo">' +
+                '<div class="infoRow" style="font-size: 0.9em;">' +
+                    '<div class="infoItem">' +
+                        '<div class="infoLabel">Start Date</div>' +
+                        '<div class="infoValue">' + formatDate(trip.start_date) + '</div>' +
                     '</div>' +
-                    '<div style="font-size: 12px; color: var(--text-secondary); margin-top: 8px;">' +
-                        '<div>Sailing: ' + sailingDistance.toFixed(1) + ' NM</div>' +
-                        '<div>Motoring: ' + motoringDistance.toFixed(1) + ' NM</div>' +
+                    '<div class="infoItem">' +
+                        '<div class="infoLabel">End Date</div>' +
+                        '<div class="infoValue">' + formatDate(trip.end_date) + '</div>' +
+                    '</div>' +
+                    '<div class="infoItem">' +
+                        '<div class="infoLabel">Duration</div>' +
+                        '<div class="infoValue">' + calculateDuration(trip.start_date, trip.end_date) + '</div>' +
                     '</div>' +
                 '</div>' +
-                '<div class="info-item">' +
-                    '<div class="info-label">Total Time</div>' +
-                    '<div class="info-value">' + formatDuration(totalTime) + '</div>' +
+                '<div class="infoRow">' +
+                    '<div class="infoItem">' +
+                        '<div class="infoLabel">Total Distance</div>' +
+                        '<div class="infoValue">' + totalDistance.toFixed(1) + ' NM</div>' +
+                    '</div>' +
+                    '<div class="infoItem">' +
+                        '<div class="infoLabel">Distance Sailed</div>' +
+                        '<div class="infoValue">' + sailingDistance.toFixed(1) + ' NM</div>' +
+                    '</div>' +
+                    '<div class="infoItem">' +
+                        '<div class="infoLabel">Distance Motoring</div>' +
+                        '<div class="infoValue">' + motoringDistance.toFixed(1) + ' NM</div>' +
+                    '</div>' +
                 '</div>' +
-                '<div class="info-item">' +
-                    '<div class="info-label">Sailing Time</div>' +
-                    '<div class="info-value">' + formatDuration(sailingTime) + ' (' + sailingTimePercent.toFixed(1) + '%)</div>' +
+                '<div class="infoRow">' +
+                    '<div class="infoItem">' +
+                        '<div class="infoLabel">Navigation Time</div>' +
+                        '<div class="infoValue">' + formatDuration(totalTime) + '</div>' +
+                    '</div>' +
+                    '<div class="infoItem">' +
+                        '<div class="infoLabel">Sailing Time</div>' +
+                        '<div class="infoValue">' + formatDuration(sailingTime) + ' (' + sailingTimePercent.toFixed(1) + '%)</div>' +
+                    '</div>' +
+                    '<div class="infoItem">' +
+                        '<div class="infoLabel">Motoring Time</div>' +
+                        '<div class="infoValue">' + formatDuration(motoringTime) + ' (' + (100 - sailingTimePercent).toFixed(1) + '%)</div>' +
+                    '</div>' +
                 '</div>' +
+                '<div class="infoItem fullWidth">' +
+                    '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 12px; color: var(--text-secondary);">' +
+                        '<div>Sailing</div>' +
+                        '<div>Motoring</div>' +
+                    '</div>' +
+                    '<div class="progressBarContainer">' +
+                        '<div class="progressBarSailing" style="width: ' + sailingPercent.toFixed(1) + '%;">' + (sailingPercent.toFixed(1) > 5 ? sailingPercent.toFixed(0) + '%' : '') + '</div>' +
+                        '<div class="progressBarMotoring" style="width: ' + (100 - sailingPercent).toFixed(1) + '%;">' + ((100 - sailingPercent).toFixed(1) > 5 ? (100 - sailingPercent).toFixed(0) + '%' : '') + '</div>' +
+                    '</div>' +
+                '</div>' +
+                (analyticsData ? '<div class="infoItem fullWidth" style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 20px;">' +
+                    '<div class="analyticsTitle">Performance Analytics</div>' +
+                    '<div class="analyticsGrid">' : '') +
+                (analyticsData && analyticsData.max_speed_kn !== null && analyticsData.max_speed_timestamp !== null ? 
+                    '<div class="analyticsCard">' +
+                    '<div class="analyticsCardTitle">Max Speed (Sailing)</div>' +
+                    '<div class="analyticsValue">' + analyticsData.max_speed_kn.toFixed(2) + ' knots</div>' +
+                    '<div class="analyticsDetail">' + formatDateTime(analyticsData.max_speed_timestamp) + '</div>' +
+                    '</div>' : '') +
+                (analyticsData && analyticsData.fastest_1nm ? 
+                    '<div class="analyticsCard fastestSegmentCard" data-segment-type="1nm" onclick="handleSegmentClick(event, \'1nm\')">' +
+                    '<div class="analyticsCardTitle">Fastest 1 NM</div>' +
+                    '<div class="analyticsValue">' + analyticsData.fastest_1nm.average_speed_kn.toFixed(2) + ' knots</div>' +
+                    '<div class="analyticsDetail">Distance: ' + analyticsData.fastest_1nm.distance_nm.toFixed(2) + ' NM</div>' +
+                    '<div class="analyticsDetail">Duration: ' + formatDuration(analyticsData.fastest_1nm.duration_ms) + '</div>' +
+                    '<div class="analyticsDetail">' + formatTime(analyticsData.fastest_1nm.start_timestamp) + ' → ' + formatTime(analyticsData.fastest_1nm.end_timestamp) + '</div>' +
+                    '</div>' : '') +
+                (analyticsData && analyticsData.fastest_5nm ? 
+                    '<div class="analyticsCard fastestSegmentCard" data-segment-type="5nm" onclick="handleSegmentClick(event, \'5nm\')">' +
+                    '<div class="analyticsCardTitle">Fastest 5 NM</div>' +
+                    '<div class="analyticsValue">' + analyticsData.fastest_5nm.average_speed_kn.toFixed(2) + ' knots</div>' +
+                    '<div class="analyticsDetail">Distance: ' + analyticsData.fastest_5nm.distance_nm.toFixed(2) + ' NM</div>' +
+                    '<div class="analyticsDetail">Duration: ' + formatDuration(analyticsData.fastest_5nm.duration_ms) + '</div>' +
+                    '<div class="analyticsDetail">' + formatTime(analyticsData.fastest_5nm.start_timestamp) + ' → ' + formatTime(analyticsData.fastest_5nm.end_timestamp) + '</div>' +
+                    '</div>' : '') +
+                (analyticsData && analyticsData.fastest_10nm ? 
+                    '<div class="analyticsCard fastestSegmentCard" data-segment-type="10nm" onclick="handleSegmentClick(event, \'10nm\')">' +
+                    '<div class="analyticsCardTitle">Fastest 10 NM</div>' +
+                    '<div class="analyticsValue">' + analyticsData.fastest_10nm.average_speed_kn.toFixed(2) + ' knots</div>' +
+                    '<div class="analyticsDetail">Distance: ' + analyticsData.fastest_10nm.distance_nm.toFixed(2) + ' NM</div>' +
+                    '<div class="analyticsDetail">Duration: ' + formatDuration(analyticsData.fastest_10nm.duration_ms) + '</div>' +
+                    '<div class="analyticsDetail">' + formatTime(analyticsData.fastest_10nm.start_timestamp) + ' → ' + formatTime(analyticsData.fastest_10nm.end_timestamp) + '</div>' +
+                    '</div>' : '') +
+                (analyticsData ? '</div></div>' : '') +
             '</div>' +
+            '<div class="mapContainer">' +
+                '<div id="map"></div>' +
+            '</div></div>' +
 
-            analyticsHtml +
-
-            '<div class="map-container">' +
-                '<div class="map-title">Trip Track</div>' +
-                '<div id="map" style="height: 400px; width: 100%; border-radius: 8px;"></div>' +
-            '</div>' +
-
-            '<div class="charts-container">' +
-                '<div class="chart-wrapper">' +
+            '<div class="chartsContainer">' +
+                '<div class="chartWrapper">' +
                     '<canvas id="speedChart"></canvas>' +
                 '</div>' +
-                '<div class="chart-wrapper">' +
+                '<div class="chartWrapper">' +
                     '<canvas id="headingChart"></canvas>' +
                 '</div>' +
-                '<div class="chart-wrapper">' +
+                '<div class="chartWrapper">' +
                     '<canvas id="windSpeedChart"></canvas>' +
                 '</div>' +
-                '<div class="chart-wrapper">' +
+                '<div class="chartWrapper">' +
                     '<canvas id="windDirectionChart"></canvas>' +
                 '</div>' +
-                '<div class="chart-wrapper">' +
+                '<div class="chartWrapper">' +
                     '<canvas id="absoluteWindDirectionChart"></canvas>' +
                 '</div>' +
-                '<div class="chart-wrapper">' +
+                '<div class="chartWrapper">' +
                     '<canvas id="atmosphericPressureChart"></canvas>' +
                 '</div>' +
-                '<div class="chart-wrapper">' +
+                '<div class="chartWrapper">' +
                     '<canvas id="speedDistributionChart"></canvas>' +
                 '</div>' +
-                '<div class="chart-wrapper">' +
+                '<div class="chartWrapper">' +
                     '<canvas id="windStatisticsChart"></canvas>' +
                 '</div>' +
             '</div>';
@@ -904,7 +1090,7 @@
             segmentMarkers = [];
 
             // Remove highlight from segment cards
-            const cards = document.querySelectorAll('.fastest-segment-card');
+            const cards = document.querySelectorAll('.fastestSegmentCard');
             cards.forEach(card => {
                 card.style.backgroundColor = '';
                 card.style.borderColor = '';
@@ -931,7 +1117,9 @@
                         borderColor: '#3498db',
                         backgroundColor: 'rgba(52, 152, 219, 0.1)',
                         fill: true,
-                        tension: 0.1
+                        tension: 0.1,
+                        pointRadius: 0,
+                        pointHoverRadius: 5
                     }]
                 },
                 options: {
@@ -992,7 +1180,9 @@
                         borderColor: '#e74c3c',
                         backgroundColor: 'rgba(231, 76, 60, 0.1)',
                         fill: true,
-                        tension: 0.1
+                        tension: 0.1,
+                        pointRadius: 0,
+                        pointHoverRadius: 5
                     }]
                 },
                 options: {
@@ -1063,7 +1253,9 @@
                         borderColor: '#27ae60',
                         backgroundColor: 'rgba(39, 174, 96, 0.1)',
                         fill: true,
-                        tension: 0.1
+                        tension: 0.1,
+                        pointRadius: 0,
+                        pointHoverRadius: 5
                     }]
                 },
                 options: {
@@ -1123,7 +1315,9 @@
                         borderColor: '#f39c12',
                         backgroundColor: 'rgba(243, 156, 18, 0.1)',
                         fill: true,
-                        tension: 0.1
+                        tension: 0.1,
+                        pointRadius: 0,
+                        pointHoverRadius: 5
                     }]
                 },
                 options: {
@@ -1187,7 +1381,9 @@
                         borderColor: '#9b59b6',
                         backgroundColor: 'rgba(155, 89, 182, 0.1)',
                         fill: true,
-                        tension: 0.1
+                        tension: 0.1,
+                        pointRadius: 0,
+                        pointHoverRadius: 5
                     }]
                 },
                 options: {
@@ -1275,7 +1471,9 @@
                         borderColor: '#2ecc71',
                         backgroundColor: 'rgba(46, 204, 113, 0.1)',
                         fill: true,
-                        tension: 0.1
+                        tension: 0.1,
+                        pointRadius: 0,
+                        pointHoverRadius: 5
                     }]
                 },
                 options: {
