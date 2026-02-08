@@ -31,20 +31,9 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Check if cargo is available
-if ! command -v cargo &> /dev/null; then
-    echo -e "${RED}Error: cargo not found. Please install Rust first.${NC}"
-    exit 1
-fi
-
 # Get the current user (the one who invoked sudo)
 ACTUAL_USER=${SUDO_USER:-$USER}
 ACTUAL_GROUP=$(id -gn $ACTUAL_USER)
-
-echo -e "${YELLOW}Building release binary...${NC}"
-sudo -u $ACTUAL_USER cargo build --release
-echo -e "${GREEN}✓ Build complete${NC}"
-echo ""
 
 # Create working directory
 echo -e "${YELLOW}Creating working directory...${NC}"
