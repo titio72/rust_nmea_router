@@ -9,6 +9,7 @@ use tower_http::cors::{CorsLayer, Any};
 
 use crate::db::VesselDatabase;
 use crate::config::Config;
+use crate::utilities::cleanup_old_exports;
 use super::api::{AppState, create_api_router};
 
 pub async fn start_web_server(
@@ -17,6 +18,11 @@ pub async fn start_web_server(
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState { db, config };
+
+    // Spawn cleanup task to remove old exports every 24 hours
+    tokio::spawn(async {
+        cleanup_old_exports().await;
+    });
 
     // Create API router
     let api_router = create_api_router(state);

@@ -568,3 +568,87 @@ mod tests {
 
 
 }
+
+/// Cleanup task to remove exported trip files older than 7 days
+/// This function runs as a background task and checks every 24 hours
+pub async fn cleanup_old_exports() {
+    use std::path::Path;
+    use std::fs;
+    use tracing::{info, warn, error};
+
+    let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60)); // 24 hours
+    let seven_days = Duration::from_secs(7 * 24 * 60 * 60); // 7 days
+    
+    loop {
+        interval.tick().await;
+        
+        let export_dir = Path::new("static/exports");
+        
+        // Skip cleanup if directory doesn't exist
+        if !export_dir.exists() {
+            continue;
+        }
+        
+        let now = SystemTime::now();
+        let mut deleted_count = 0;
+        let mut deleted_size = 0u64;
+        
+        match fs::read_dir(export_dir) {
+            Ok(entries) => {
+                for entry in entries {
+                    if let Ok(entry) = entry {
+                        let path = entry.path();
+                        
+                        // Only process JSON files
+                        if path.is_file() && path.extension().map(|ext| ext == "json").unwrap_or(false) {
+                            if let Ok(metadata) = path.metadata() {
+                                if let Ok(modified) = metadata.modified() {
+                                    if let Ok(age) = now.duration_since(modified) {
+                                        if age > seven_days {
+                                            let file_size = metadata.len();
+                                            
+                                            match fs::remove_file(&path) {
+                                                Ok(_) => {
+                                                    info!(
+                                                        path = %path.display(),
+                                                        age_days = age.as_secs() / (24 * 60 * 60),
+                                                        size_bytes = file_size,
+                                                        "Deleted expired export file"
+                                                    );
+                                                    deleted_count += 1;
+                                                    deleted_size += file_size;
+                                                }
+                                                Err(e) => {
+                                                    warn!(
+                                                        path = %path.display(),
+                                                        error = %e,
+                                                        "Failed to delete export file"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if deleted_count > 0 {
+                    info!(
+                        deleted_files = deleted_count,
+                        freed_bytes = deleted_size,
+                        "Cleanup completed: removed old export files"
+                    );
+                }
+            }
+            Err(e) => {
+                error!(
+                    path = %export_dir.display(),
+                    error = %e,
+                    "Failed to read exports directory during cleanup"
+                );
+            }
+        }
+    }
+}

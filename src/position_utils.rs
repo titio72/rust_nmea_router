@@ -71,6 +71,10 @@ impl PositionQueue {
         self.samples.back().map(|s| s.timestamp)
     }
 
+    pub fn get_earliest_position_timestamp(&self) -> Option<Instant> {
+        self.samples.front().map(|s| s.timestamp)
+    }
+    
     pub fn get_rolling_median_position(&self, time_window: Duration, min_num_samples: usize, now: Instant) -> (usize, Option<Position>) {
         let recent_positions: Vec<&Position> = self.samples
             .iter()

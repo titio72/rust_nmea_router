@@ -208,6 +208,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Load the last trip from database if available
     if let Some(ref db) = vessel_db {
         vessel_status_handler.load_last_trip(db);
+        vessel_status_handler.load_last_vessel_status(db);
     }
 
     // Start web server if enabled and database is available

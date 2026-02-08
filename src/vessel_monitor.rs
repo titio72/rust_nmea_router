@@ -28,8 +28,9 @@ pub struct VesselStatus {
     pub wind_speed_variance: Option<f64>,
     pub wind_angle_deg: Option<f64>,
     pub wind_angle_variance: Option<f64>,
-    pub timestamp: Instant,
     pub average_heading_deg: Option<f64>,
+    pub timestamp: Instant,
+    pub period: Duration,
 }
 
 pub struct VesselVector {
@@ -67,24 +68,19 @@ impl VesselStatus {
         self.current_position
     }
 
-    pub fn get_vector_from(&self, last_status: &Option<VesselStatus>) -> Option<VesselVector> {
-        if let Some(previous) = last_status {
-            let position_1 = previous.get_effective_position();
-            let position_2 = self.get_effective_position();
-            let distance_nm = position_1.distance_to_nm(&position_2);
-            let course_from_deg = position_1.course_from_deg(&position_2);
-            let time_msecs = self.timestamp.duration_since(previous.timestamp).as_millis() as u64;
-            Some(VesselVector {
-                position_1,
-                position_2,
-                delta_time_ms: time_msecs,
-                distance_nm,
-                course_deg: course_from_deg,
-            })
-        }
-        else {
-            None
-        }
+    pub fn get_vector_from(&self, position: Position, timestamp: Instant) -> Option<VesselVector> {
+        let position_1 = position;
+        let position_2 = self.get_effective_position();
+        let distance_nm = position_1.distance_to_nm(&position_2);
+        let course_from_deg = position_1.course_from_deg(&position_2);
+        let time_msecs = self.timestamp.duration_since(timestamp).as_millis() as u64;
+        Some(VesselVector {
+            position_1,
+            position_2,
+            delta_time_ms: time_msecs,
+            distance_nm,
+            course_deg: course_from_deg,
+        })
     }
 }
 
@@ -245,6 +241,7 @@ impl VesselMonitor {
         self.last_event_time = now;
 
         let current_position = self.positions.get_latest_position().unwrap();
+        let start_sampling_time = self.positions.get_earliest_position_timestamp().unwrap_or(now);
         let (number_of_samples, median_position) = self.positions.get_rolling_median_position(self.status_report_period, MIN_SAMPLES_FOR_VALIDATION, now);
         let max_speed_kn = self.speeds.get_max(self.status_report_period, now).unwrap_or(0.0);
         let is_moored = self.is_moored(now);
@@ -266,6 +263,7 @@ impl VesselMonitor {
             is_moored,
             engine_on: self.engine_on,
             timestamp,
+            period: now.duration_since(start_sampling_time),
             wind_speed_kn,
             max_wind_speed_kn,
             wind_speed_variance: None, // Variance calculation not implemented

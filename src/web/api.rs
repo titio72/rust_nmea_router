@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Query, State, Multipart},
     http::StatusCode,
     response::Json,
     routing::get,
@@ -86,6 +86,12 @@ pub struct TimeRangeQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ExportTripQuery {
+    pub id: u32,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TimeRangeRequiredQuery {
     pub start: String,
     pub end: String,
@@ -94,6 +100,13 @@ pub struct TimeRangeRequiredQuery {
 #[derive(Debug, Deserialize)]
 pub struct HeatmapQuery {
     pub date: String,  // Date in YYYY-MM-DD format
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExportFileInfo {
+    pub name: String,
+    pub size: u64,
+    pub modified: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -296,6 +309,142 @@ pub async fn update_trip_description(
     }
 }
 
+pub async fn export_trip(
+    State(state): State<AppState>,
+    Query(params): Query<ExportTripQuery>,
+) -> Result<Json<ApiResponse<String>>, StatusCode> {
+    info!(?params, "POST /api/export_trip called");
+    
+    // Determine the export path
+    let export_path = params.path.clone().unwrap_or_else(|| {
+        format!("static/exports/trip_{}.json", params.id)
+    });
+    
+    info!(trip_id = params.id, path = %export_path, "Exporting trip");
+    
+    match state.db.export_trip(params.id as i64, &export_path) {
+        Ok(()) => {
+            info!(trip_id = params.id, path = %export_path, "Trip exported successfully");
+            Ok(Json(ApiResponse::ok(format!("Trip {} exported to {}", params.id, export_path))))
+        }
+        Err(e) => {
+            error!(error = %e, trip_id = params.id, "Failed to export trip");
+            {
+                let bt = Backtrace::force_capture();
+                error!(?bt, "Backtrace for error");
+                Ok(Json(ApiResponse::error(e.to_string())))
+            }
+        }
+    }
+}
+
+pub async fn import_trip(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Json<ApiResponse<String>>, StatusCode> {
+    info!("POST /api/import_trip called");
+    
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let field_name = field.name().unwrap_or("unknown").to_string();
+        
+        // Only process the "file" field
+        if field_name != "file" {
+            continue;
+        }
+        
+        if let Ok(json_content) = field.text().await {
+            info!("Processing uploaded JSON file for trip import");
+            
+            match state.db.import_trip(&json_content) {
+                Ok(trip_id) => {
+                    info!(trip_id = trip_id, "Trip imported successfully");
+                    return Ok(Json(ApiResponse::ok(format!("Trip imported successfully with ID: {}", trip_id))));
+                }
+                Err(e) => {
+                    error!(error = %e, "Failed to import trip");
+                    let error_msg = e.to_string();
+                    return Ok(Json(ApiResponse::error(error_msg)));
+                }
+            }
+        } else {
+            error!("Failed to read uploaded file");
+            return Ok(Json(ApiResponse::error("Failed to read file".to_string())));
+        }
+    }
+    
+    Ok(Json(ApiResponse::error("No file uploaded".to_string())))
+}
+
+pub async fn list_exports() -> Result<Json<ApiResponse<Vec<ExportFileInfo>>>, StatusCode> {
+    use std::fs;
+    use std::path::Path;
+    
+    info!("GET /api/list_exports called");
+    
+    let export_dir = Path::new("static/exports");
+    
+    // Create the directory if it doesn't exist
+    if !export_dir.exists() {
+        match fs::create_dir_all(export_dir) {
+            Ok(_) => {},
+            Err(e) => {
+                error!(error = %e, "Failed to create exports directory");
+                return Ok(Json(ApiResponse::error(e.to_string())));
+            }
+        }
+    }
+    
+    match fs::read_dir(export_dir) {
+        Ok(entries) => {
+            let mut files = Vec::new();
+            
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Ok(metadata) = path.metadata() {
+                            if let Some(name) = path.file_name() {
+                                if let Some(name_str) = name.to_str() {
+                                    // Only include JSON files
+                                    if name_str.ends_with(".json") {
+                                        let modified = match metadata.modified() {
+                                            Ok(time) => {
+                                                match chrono::DateTime::<chrono::Utc>::from(time)
+                                                    .format("%Y-%m-%d %H:%M:%S UTC")
+                                                    .to_string()
+                                                {
+                                                    s => s,
+                                                }
+                                            }
+                                            Err(_) => "Unknown".to_string(),
+                                        };
+                                        
+                                        files.push(ExportFileInfo {
+                                            name: name_str.to_string(),
+                                            size: metadata.len(),
+                                            modified,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Sort by name (most recent first, assuming naming convention)
+            files.sort_by(|a, b| b.name.cmp(&a.name));
+            
+            info!("Found {} export files", files.len());
+            Ok(Json(ApiResponse::ok(files)))
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to read exports directory");
+            Ok(Json(ApiResponse::error(e.to_string())))
+        }
+    }
+}
+
 pub async fn get_google_maps_key(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Option<String>>>, StatusCode> {
@@ -388,6 +537,9 @@ pub async fn set_metrics_status(
 pub fn create_api_router(state: AppState) -> Router {
     Router::new()
         .route("/trip_description", post(update_trip_description))
+        .route("/export_trip", get(export_trip))
+        .route("/import_trip", post(import_trip))
+        .route("/list_exports", get(list_exports))
         .route("/trips", get(get_trips))
         .route("/trip", get(get_trip))
         .route("/track", get(get_track))

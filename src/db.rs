@@ -2,7 +2,7 @@ use mysql::*;
 use mysql::prelude::*;
 use std::{error::Error, time::{Duration, Instant}, sync::{Arc, Mutex}};
 use std::time::{SystemTime};
-use crate::{environmental_monitor::{MetricData, MetricId}, utilities::{dirty_instant_to_systemtime, haversine_distance_nm}};
+use crate::{environmental_monitor::{MetricData, MetricId}, position_utils::Position, utilities::{dirty_instant_to_systemtime, haversine_distance_nm}};
 use crate::trip::Trip;
 use chrono::NaiveDateTime;
 use tracing::{info, warn};
@@ -10,24 +10,45 @@ use tracing::{info, warn};
 /// Encapsulates vessel status data for database insertion
 #[derive(Debug, Clone)]
 pub struct VesselStatusOperation {
-    pub time: Instant,
-    pub latitude: f64,
-    pub longitude: f64,
+    pub timestamp: Instant,
+    pub position: Position,
     pub average_speed_kn: f64,
     pub max_speed_kn: f64,
     pub is_moored: bool,
     pub engine_on: bool,
     pub total_distance_nm: f64,
     pub total_time_ms: u64,
-    pub average_wind_speed_kn: Option<f64>,
+    pub wind_speed_kn: Option<f64>,
     #[allow(dead_code)]
     pub wind_speed_variance: Option<f64>,
-    pub average_wind_angle_deg: Option<f64>,
+    pub wind_angle_deg: Option<f64>,
     #[allow(dead_code)]
     pub wind_angle_variance: Option<f64>,
     pub cog_deg: Option<f64>,
     pub average_heading_deg: Option<f64>,
 }
+
+/*
+pub struct VesselStatus {
+    pub timestamp: Instant,
+    pub current_position: Position,
+    pub median_position: Option<Position>,
+    pub number_of_samples: usize,
+    pub max_speed_kn: f64,       // Knots
+    pub is_moored: bool,
+    pub engine_on: bool,
+    pub wind_speed_kn: Option<f64>,
+    #[allow(dead_code)] // Used in database writes but not in internal logic
+    pub max_wind_speed_kn: Option<f64>,
+    pub wind_speed_variance: Option<f64>,
+    pub wind_angle_deg: Option<f64>,
+    pub wind_angle_variance: Option<f64>,
+    pub average_heading_deg: Option<f64>,
+    pub period: Duration,
+}
+
+*/
+
 
 /// Represents a trip operation to be performed atomically with vessel status insert
 pub enum TripOperation {
@@ -102,6 +123,335 @@ impl VesselDatabase {
         Ok(())
     }
     
+    /// Export a trip and its associated data to a portable SQL script
+    /// 
+    /// This function creates a SQL script containing:
+    /// 1. The trip record
+    /// 2. All vessel status records within the trip's time range
+    /// 3. All environmental metrics records within the trip's time range
+    /// 
+    /// Before exporting, it checks if there's an overlapping trip in the database
+    /// and fails if one is found.
+    /// 
+    /// # Arguments
+    /// * `trip_id` - The ID of the trip to export
+    /// * `output_path` - Path where the SQL script will be written
+    /// 
+    /// # Returns
+    /// Result indicating success or error
+    #[allow(dead_code)]
+    pub fn export_trip<P: AsRef<std::path::Path>>(&self, trip_id: i64, output_path: P) -> Result<(), Box<dyn Error>> {
+        use serde_json::{json, Value};
+        use std::fs::File;
+        
+        let mut conn = self.pool.get_conn()?;
+        
+        // Step 1: Fetch the trip to export with formatted timestamps
+        let trip_row: Option<mysql::Row> = conn.exec_first(
+            "SELECT id, 
+                    DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as start_ts,
+                    DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
+                    description, total_distance_sailed, 
+                    total_distance_motoring, total_time_sailing, total_time_motoring, 
+                    total_time_moored, 
+                    start_timestamp as start_ts_raw, end_timestamp as end_ts_raw
+             FROM trips WHERE id = :id",
+            params! { "id" => trip_id },
+        )?;
+        
+        let trip_row = trip_row.ok_or("Trip not found")?;
+        let trip_id_fetched: i64 = trip_row.get(0).ok_or("Missing id")?;
+        let start_ts_str: String = trip_row.get(1).ok_or("Missing start_timestamp")?;
+        let end_ts_str: String = trip_row.get(2).ok_or("Missing end_timestamp")?;
+        let description: String = trip_row.get(3).ok_or("Missing description")?;
+        let total_distance_sailed: f64 = trip_row.get(4).ok_or("Missing total_distance_sailed")?;
+        let total_distance_motoring: f64 = trip_row.get(5).ok_or("Missing total_distance_motoring")?;
+        let total_time_sailing: u64 = trip_row.get(6).ok_or("Missing total_time_sailing")?;
+        let total_time_motoring: u64 = trip_row.get(7).ok_or("Missing total_time_motoring")?;
+        let total_time_moored: u64 = trip_row.get(8).ok_or("Missing total_time_moored")?;
+        let start_ts: mysql::Value = trip_row.get(9).ok_or("Missing start_timestamp_raw")?;
+        let end_ts: mysql::Value = trip_row.get(10).ok_or("Missing end_timestamp_raw")?;
+
+        // Step 2: Fetch vessel status records within time range with formatted timestamps
+        let vessel_statuses: Vec<mysql::Row> = conn.exec(
+            "SELECT DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as ts_formatted, 
+                    latitude, longitude, average_speed_kn, max_speed_kn, 
+                    is_moored, engine_on, total_distance_nm, total_time_ms, 
+                    average_wind_speed_kn, average_wind_angle_deg, cog_deg, 
+                    average_heading_deg 
+             FROM vessel_status 
+             WHERE timestamp >= :start_ts AND timestamp <= :end_ts
+             ORDER BY timestamp ASC",
+            params! {
+                "start_ts" => &start_ts,
+                "end_ts" => &end_ts,
+            },
+        )?;
+        
+        // Step 3: Fetch environmental metrics within time range with formatted timestamps
+        let env_metrics: Vec<mysql::Row> = conn.exec(
+            "SELECT DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as ts_formatted, 
+                    metric_id, value_avg, value_max, value_min, unit 
+             FROM environmental_data 
+             WHERE timestamp >= :start_ts AND timestamp <= :end_ts
+             ORDER BY timestamp ASC",
+            params! {
+                "start_ts" => &start_ts,
+                "end_ts" => &end_ts,
+            },
+        )?;
+        
+        // Step 4: Build JSON structure
+        let mut vessel_statuses_json: Vec<Value> = Vec::new();
+        for row in vessel_statuses {
+            let timestamp: String = row.get(0).ok_or("Missing timestamp")?;
+            let latitude: Option<f64> = row.get_opt(1).and_then(|v| v.ok()).flatten();
+            let longitude: Option<f64> = row.get_opt(2).and_then(|v| v.ok()).flatten();
+            let avg_speed: Option<f64> = row.get_opt(3).and_then(|v| v.ok()).flatten();
+            let max_speed: Option<f64> = row.get_opt(4).and_then(|v| v.ok()).flatten();
+            let is_moored: bool = row.get(5).ok_or("Missing is_moored")?;
+            let engine_on: bool = row.get(6).ok_or("Missing engine_on")?;
+            let total_dist: Option<f64> = row.get_opt(7).and_then(|v| v.ok()).flatten();
+            let total_time: Option<u64> = row.get_opt(8).and_then(|v| v.ok()).flatten();
+            let wind_speed: Option<f64> = row.get_opt(9).and_then(|v| v.ok()).flatten();
+            let wind_angle: Option<f64> = row.get_opt(10).and_then(|v| v.ok()).flatten();
+            let cog: Option<f64> = row.get_opt(11).and_then(|v| v.ok()).flatten();
+            let heading: Option<f64> = row.get_opt(12).and_then(|v| v.ok()).flatten();
+            
+            vessel_statuses_json.push(json!({
+                "timestamp": timestamp,
+                "latitude": latitude,
+                "longitude": longitude,
+                "average_speed_kn": avg_speed,
+                "max_speed_kn": max_speed,
+                "is_moored": is_moored,
+                "engine_on": engine_on,
+                "total_distance_nm": total_dist,
+                "total_time_ms": total_time,
+                "average_wind_speed_kn": wind_speed,
+                "average_wind_angle_deg": wind_angle,
+                "cog_deg": cog,
+                "average_heading_deg": heading,
+            }));
+        }
+        
+        let mut env_metrics_json: Vec<Value> = Vec::new();
+        for row in env_metrics {
+            let timestamp: String = row.get(0).ok_or("Missing timestamp")?;
+            let metric_id: u8 = row.get(1).ok_or("Missing metric_id")?;
+            let value_avg: Option<f32> = row.get_opt(2).and_then(|v| v.ok()).flatten();
+            let value_max: Option<f32> = row.get_opt(3).and_then(|v| v.ok()).flatten();
+            let value_min: Option<f32> = row.get_opt(4).and_then(|v| v.ok()).flatten();
+            let unit: Option<String> = row.get_opt(5).and_then(|v| v.ok()).flatten();
+            
+            env_metrics_json.push(json!({
+                "timestamp": timestamp,
+                "metric_id": metric_id,
+                "value_avg": value_avg,
+                "value_max": value_max,
+                "value_min": value_min,
+                "unit": unit,
+            }));
+        }
+        
+        let export_data = json!({
+            "trip": {
+                "id": trip_id_fetched,
+                "description": description,
+                "start_timestamp": start_ts_str,
+                "end_timestamp": end_ts_str,
+                "total_distance_sailed": total_distance_sailed,
+                "total_distance_motoring": total_distance_motoring,
+                "total_time_sailing": total_time_sailing,
+                "total_time_motoring": total_time_motoring,
+                "total_time_moored": total_time_moored,
+            },
+            "vessel_statuses": vessel_statuses_json,
+            "environmental_metrics": env_metrics_json,
+            "export_metadata": {
+                "generated_at": chrono::Local::now().to_rfc3339(),
+                "trip_id": trip_id,
+            }
+        });
+        
+        // Create parent directories if they don't exist
+        if let Some(parent) = std::path::Path::new(output_path.as_ref()).parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        
+        let file = File::create(&output_path)?;
+        serde_json::to_writer_pretty(file, &export_data)?;
+        
+        info!("Trip {} exported successfully to: {}", trip_id, output_path.as_ref().display());
+        Ok(())
+    }
+
+    pub fn import_trip(&self, json_data: &str) -> Result<i64, Box<dyn Error>> {
+        use serde_json::Value;
+        
+        let json: Value = serde_json::from_str(json_data)?;
+        
+        // Parse trip data
+        let trip = &json["trip"];
+        let vessel_statuses = &json["vessel_statuses"];
+        let env_metrics = &json["environmental_metrics"];
+        
+        // Extract trip fields
+        let description = trip["description"]
+            .as_str()
+            .ok_or("Missing or invalid trip.description")?;
+        let start_ts_str = trip["start_timestamp"]
+            .as_str()
+            .ok_or("Missing or invalid trip.start_timestamp")?;
+        let end_ts_str = trip["end_timestamp"]
+            .as_str()
+            .ok_or("Missing or invalid trip.end_timestamp")?;
+        let total_distance_sailed = trip["total_distance_sailed"]
+            .as_f64()
+            .ok_or("Missing or invalid trip.total_distance_sailed")?;
+        let total_distance_motoring = trip["total_distance_motoring"]
+            .as_f64()
+            .ok_or("Missing or invalid trip.total_distance_motoring")?;
+        let total_time_sailing = trip["total_time_sailing"]
+            .as_u64()
+            .ok_or("Missing or invalid trip.total_time_sailing")?;
+        let total_time_motoring = trip["total_time_motoring"]
+            .as_u64()
+            .ok_or("Missing or invalid trip.total_time_motoring")?;
+        let total_time_moored = trip["total_time_moored"]
+            .as_u64()
+            .ok_or("Missing or invalid trip.total_time_moored")?;
+        
+        let mut conn = self.pool.get_conn()?;
+        
+        // Check for overlapping trips
+        // Parse the start_timestamp to compare with existing trips' end_timestamps
+        let new_trip_start = chrono::DateTime::parse_from_rfc3339(start_ts_str)
+            .map_err(|e| format!("Invalid start_timestamp format: {}", e))?;
+        
+        let overlapping_trip: Option<(i64, String)> = conn.exec_first(
+            "SELECT id, end_timestamp FROM trips WHERE end_timestamp >= :new_start ORDER BY end_timestamp DESC LIMIT 1",
+            mysql::params! {
+                "new_start" => new_trip_start.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+            },
+        )?;
+        
+        if let Some((existing_id, existing_end_ts)) = overlapping_trip {
+            return Err(format!(
+                "Trip overlaps with existing trip ID {}. Existing trip ends at {}, new trip starts at {}",
+                existing_id, existing_end_ts, start_ts_str
+            ).into());
+        }
+        
+        // Start transaction for atomic insert
+        let mut tx = conn.start_transaction(TxOpts::default())?;
+        
+        // Insert trip
+        tx.exec_drop(
+            "INSERT INTO trips (description, start_timestamp, end_timestamp, total_distance_sailed, total_distance_motoring, total_time_sailing, total_time_motoring, total_time_moored)
+             VALUES (:desc, :start_ts, :end_ts, :dist_sailed, :dist_motoring, :time_sailing, :time_motoring, :time_moored)",
+            mysql::params! {
+                "desc" => description,
+                "start_ts" => new_trip_start.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+                "end_ts" => chrono::DateTime::parse_from_rfc3339(end_ts_str)?
+                    .format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+                "dist_sailed" => total_distance_sailed,
+                "dist_motoring" => total_distance_motoring,
+                "time_sailing" => total_time_sailing,
+                "time_motoring" => total_time_motoring,
+                "time_moored" => total_time_moored,
+            },
+        )?;
+        
+        let new_trip_id = tx.last_insert_id().ok_or("Failed to get inserted trip ID")? as i64;
+        
+        // Insert vessel statuses
+        if let Some(statuses) = vessel_statuses.as_array() {
+            for status in statuses {
+                let timestamp = status["timestamp"]
+                    .as_str()
+                    .ok_or("Missing timestamp in vessel_status")?;
+                let latitude = status["latitude"].as_f64();
+                let longitude = status["longitude"].as_f64();
+                let avg_speed = status["average_speed_kn"].as_f64();
+                let max_speed = status["max_speed_kn"].as_f64();
+                let is_moored = status["is_moored"]
+                    .as_bool()
+                    .ok_or("Missing is_moored in vessel_status")?;
+                let engine_on = status["engine_on"]
+                    .as_bool()
+                    .ok_or("Missing engine_on in vessel_status")?;
+                let total_dist = status["total_distance_nm"].as_f64();
+                let total_time = status["total_time_ms"].as_u64();
+                let wind_speed = status["average_wind_speed_kn"].as_f64();
+                let wind_angle = status["average_wind_angle_deg"].as_f64();
+                let cog = status["cog_deg"].as_f64();
+                let heading = status["average_heading_deg"].as_f64();
+                
+                let ts_datetime = chrono::DateTime::parse_from_rfc3339(timestamp)?
+                    .format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+                
+                tx.exec_drop(
+                    "INSERT INTO vessel_status (timestamp, latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on, total_distance_nm, total_time_ms, average_wind_speed_kn, average_wind_angle_deg, cog_deg, average_heading_deg)
+                     VALUES (:ts, :lat, :lon, :avg_spd, :max_spd, :moored, :engine, :tot_dist, :tot_time, :wind_spd, :wind_ang, :cog, :hdg)",
+                    mysql::params! {
+                        "ts" => ts_datetime,
+                        "lat" => latitude,
+                        "lon" => longitude,
+                        "avg_spd" => avg_speed,
+                        "max_spd" => max_speed,
+                        "moored" => is_moored,
+                        "engine" => engine_on,
+                        "tot_dist" => total_dist,
+                        "tot_time" => total_time,
+                        "wind_spd" => wind_speed,
+                        "wind_ang" => wind_angle,
+                        "cog" => cog,
+                        "hdg" => heading,
+                    },
+                )?;
+            }
+        }
+        
+        // Insert environmental metrics
+        if let Some(metrics) = env_metrics.as_array() {
+            for metric in metrics {
+                let timestamp = metric["timestamp"]
+                    .as_str()
+                    .ok_or("Missing timestamp in environmental_data")?;
+                let metric_id = metric["metric_id"]
+                    .as_u64()
+                    .ok_or("Missing metric_id in environmental_data")? as u8;
+                let value_avg = metric["value_avg"].as_f64().map(|v| v as f32);
+                let value_max = metric["value_max"].as_f64().map(|v| v as f32);
+                let value_min = metric["value_min"].as_f64().map(|v| v as f32);
+                let unit = metric["unit"].as_str();
+                
+                let ts_datetime = chrono::DateTime::parse_from_rfc3339(timestamp)?
+                    .format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+                
+                tx.exec_drop(
+                    "INSERT INTO environmental_data (timestamp, metric_id, value_avg, value_max, value_min, unit)
+                     VALUES (:ts, :metric_id, :val_avg, :val_max, :val_min, :unit)",
+                    mysql::params! {
+                        "ts" => ts_datetime,
+                        "metric_id" => metric_id,
+                        "val_avg" => value_avg,
+                        "val_max" => value_max,
+                        "val_min" => value_min,
+                        "unit" => unit,
+                    },
+                )?;
+            }
+        }
+        
+        tx.commit()?;
+        
+        info!("Trip imported successfully with ID: {}", new_trip_id);
+        Ok(new_trip_id)
+    }
 
     pub fn update_trip_description(&self, trip_id: i64, new_description: &str) -> Result<(), Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
@@ -156,7 +506,7 @@ impl VesselDatabase {
         let mut tx = conn.start_transaction(TxOpts::default())?;
         
         // Insert vessel status
-        let timestamp = chrono::DateTime::<chrono::Utc>::from(dirty_instant_to_systemtime(status_op.time));
+        let timestamp = chrono::DateTime::<chrono::Utc>::from(dirty_instant_to_systemtime(status_op.timestamp));
                
                 tx.exec_drop(
                         r"INSERT INTO vessel_status 
@@ -164,16 +514,16 @@ impl VesselDatabase {
                             VALUES (:timestamp, :latitude, :longitude, :avg_speed, :max_speed, :is_moored, :engine_on, :total_distance, :total_time, :avg_wind_speed, :avg_wind_angle, :cog_deg, :avg_heading_deg)",
                         params! {
                                 "timestamp" => timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
-                                "latitude" => status_op.latitude,
-                                "longitude" => status_op.longitude,
+                                "latitude" => status_op.position.latitude,
+                                "longitude" => status_op.position.longitude,
                                 "avg_speed" => status_op.average_speed_kn,
                                 "max_speed" => status_op.max_speed_kn,
                                 "is_moored" => status_op.is_moored,
                                 "engine_on" => status_op.engine_on,
                                 "total_distance" => status_op.total_distance_nm,
                                 "total_time" => status_op.total_time_ms,
-                                "avg_wind_speed" => status_op.average_wind_speed_kn,
-                                "avg_wind_angle" => status_op.average_wind_angle_deg,
+                                "avg_wind_speed" => status_op.wind_speed_kn,
+                                "avg_wind_angle" => status_op.wind_angle_deg,
                                 "cog_deg" => status_op.cog_deg,
                                 "avg_heading_deg" => status_op.average_heading_deg,
                         },
@@ -349,6 +699,77 @@ impl VesselDatabase {
             Ok(None)
         }
     }
+
+    /// Get the last written record from vessel_status table
+    /// Returns the most recent vessel status record as a VesselStatusOperation
+    pub fn get_last_vessel_status(&self) -> Result<Option<VesselStatusOperation>, Box<dyn Error>> {
+        let mut conn = self.pool.get_conn()?;
+        
+        let row: Option<mysql::Row> = conn.query_first(
+            r"SELECT 
+                timestamp,
+                latitude,
+                longitude,
+                average_speed_kn,
+                max_speed_kn,
+                is_moored,
+                engine_on,
+                total_distance_nm,
+                total_time_ms,
+                average_wind_speed_kn,
+                average_wind_angle_deg,
+                cog_deg,
+                average_heading_deg
+             FROM vessel_status
+             ORDER BY timestamp DESC
+             LIMIT 1",
+        )?;
+        
+        if let Some(row) = row {
+            let timestamp_str: String = row.get(0).ok_or("Failed to get timestamp")?;
+            let latitude: Option<f64> = row.get_opt(1).and_then(|v| v.ok()).flatten();
+            let longitude: Option<f64> = row.get_opt(2).and_then(|v| v.ok()).flatten();
+            let average_speed_kn: Option<f64> = row.get_opt(3).and_then(|v| v.ok()).flatten();
+            let max_speed_kn: Option<f64> = row.get_opt(4).and_then(|v| v.ok()).flatten();
+            let is_moored: bool = row.get(5).ok_or("Failed to get is_moored")?;
+            let engine_on: bool = row.get(6).ok_or("Failed to get engine_on")?;
+            let total_distance_nm: Option<f64> = row.get_opt(7).and_then(|v| v.ok()).flatten();
+            let total_time_ms: u64 = row.get(8).ok_or("Failed to get total_time_ms")?;
+            let wind_speed_kn: Option<f64> = row.get_opt(9).and_then(|v| v.ok()).flatten();
+            let wind_angle_deg: Option<f64> = row.get_opt(10).and_then(|v| v.ok()).flatten();
+            let cog_deg: Option<f64> = row.get_opt(11).and_then(|v| v.ok()).flatten();
+            let average_heading_deg: Option<f64> = row.get_opt(12).and_then(|v| v.ok()).flatten();
+
+            // Convert timestamp string to Instant via SystemTime
+            let ts_clean = timestamp_str.trim_end_matches('Z');
+            let dt = NaiveDateTime::parse_from_str(ts_clean, "%Y-%m-%d %H:%M:%S%.f")?;
+            let datetime = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc);
+            let system_time = SystemTime::from(datetime);
+            let timestamp = system_time.elapsed().map(|d| std::time::Instant::now() - d).unwrap_or_else(|_| std::time::Instant::now());
+
+            Ok(Some(VesselStatusOperation {
+                timestamp,
+                position: Position {
+                    latitude: latitude.unwrap_or(0.0),
+                    longitude: longitude.unwrap_or(0.0),
+                },
+                average_speed_kn: average_speed_kn.unwrap_or(0.0),
+                max_speed_kn: max_speed_kn.unwrap_or(0.0),
+                is_moored,
+                engine_on,
+                total_distance_nm: total_distance_nm.unwrap_or(0.0),
+                total_time_ms,
+                wind_speed_kn,
+                wind_speed_variance: None,
+                wind_angle_deg,
+                wind_angle_variance: None,
+                cog_deg,
+                average_heading_deg,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
     
     /// Attempt to reconnect to the database with exponential backoff
     /// Returns Some(VesselDatabase) if successful, None if all retries fail
@@ -373,6 +794,8 @@ impl VesselDatabase {
         warn!("Failed to reconnect to database after {} attempts", max_retries);
         None
     }
+
+
 }
 
 /// Manages database health check timing and execution
@@ -580,17 +1003,17 @@ impl VesselDatabase {
         
         if let Some(row) = row {
             let trip = TripSummary {
-                id: row.get("id").unwrap_or(0),
-                description: row.get::<String, _>("description").unwrap_or_default(),
-                start_date: row.get::<String, _>("start_ts").unwrap_or_default(),
-                end_date: row.get::<String, _>("end_ts").unwrap_or_default(),
-                total_distance_nm: row.get::<f64, _>("total_distance").unwrap_or(0.0),
-                total_time_ms: row.get::<i64, _>("total_time").unwrap_or(0),
-                sailing_time_ms: row.get::<i64, _>("total_time_sailing").unwrap_or(0),
-                motoring_time_ms: row.get::<i64, _>("total_time_motoring").unwrap_or(0),
-                moored_time_ms: row.get::<i64, _>("total_time_moored").unwrap_or(0),
-                sailing_distance_nm: row.get::<f64, _>("total_distance_sailed").unwrap_or(0.0),
-                motoring_distance_nm: row.get::<f64, _>("total_distance_motoring").unwrap_or(0.0),
+                id: row.get_opt("id").and_then(|v| v.ok()).unwrap_or(0),
+                description: row.get_opt::<String, _>("description").and_then(|v| v.ok()).unwrap_or_default(),
+                start_date: row.get_opt::<String, _>("start_ts").and_then(|v| v.ok()).unwrap_or_default(),
+                end_date: row.get_opt::<String, _>("end_ts").and_then(|v| v.ok()).unwrap_or_default(),
+                total_distance_nm: row.get_opt::<f64, _>("total_distance").and_then(|v| v.ok()).unwrap_or(0.0),
+                total_time_ms: row.get_opt::<i64, _>("total_time").and_then(|v| v.ok()).unwrap_or(0),
+                sailing_time_ms: row.get_opt::<i64, _>("total_time_sailing").and_then(|v| v.ok()).unwrap_or(0),
+                motoring_time_ms: row.get_opt::<i64, _>("total_time_motoring").and_then(|v| v.ok()).unwrap_or(0),
+                moored_time_ms: row.get_opt::<i64, _>("total_time_moored").and_then(|v| v.ok()).unwrap_or(0),
+                sailing_distance_nm: row.get_opt::<f64, _>("total_distance_sailed").and_then(|v| v.ok()).unwrap_or(0.0),
+                motoring_distance_nm: row.get_opt::<f64, _>("total_distance_motoring").and_then(|v| v.ok()).unwrap_or(0.0),
             };
             Ok(Some(trip))
         } else {
@@ -635,17 +1058,17 @@ impl VesselDatabase {
         let trips = results
             .iter()
             .map(|row| TripSummary {
-                id: row.get("id").unwrap_or(0),
-                description: row.get::<String, _>("description").unwrap_or_default(),
-                start_date: row.get::<String, _>("start_ts").unwrap_or_default(),
-                end_date: row.get::<String, _>("end_ts").unwrap_or_default(),
-                total_distance_nm: row.get::<f64, _>("total_distance").unwrap_or(0.0),
-                total_time_ms: row.get::<i64, _>("total_time").unwrap_or(0),
-                sailing_time_ms: row.get::<i64, _>("total_time_sailing").unwrap_or(0),
-                motoring_time_ms: row.get::<i64, _>("total_time_motoring").unwrap_or(0),
-                moored_time_ms: row.get::<i64, _>("total_time_moored").unwrap_or(0),
-                sailing_distance_nm: row.get::<f64, _>("total_distance_sailed").unwrap_or(0.0),
-                motoring_distance_nm: row.get::<f64, _>("total_distance_motoring").unwrap_or(0.0),
+                id: row.get_opt("id").and_then(|v| v.ok()).unwrap_or(0),
+                description: row.get_opt::<String, _>("description").and_then(|v| v.ok()).unwrap_or_default(),
+                start_date: row.get_opt::<String, _>("start_ts").and_then(|v| v.ok()).unwrap_or_default(),
+                end_date: row.get_opt::<String, _>("end_ts").and_then(|v| v.ok()).unwrap_or_default(),
+                total_distance_nm: row.get_opt::<f64, _>("total_distance").and_then(|v| v.ok()).unwrap_or(0.0),
+                total_time_ms: row.get_opt::<i64, _>("total_time").and_then(|v| v.ok()).unwrap_or(0),
+                sailing_time_ms: row.get_opt::<i64, _>("total_time_sailing").and_then(|v| v.ok()).unwrap_or(0),
+                motoring_time_ms: row.get_opt::<i64, _>("total_time_motoring").and_then(|v| v.ok()).unwrap_or(0),
+                moored_time_ms: row.get_opt::<i64, _>("total_time_moored").and_then(|v| v.ok()).unwrap_or(0),
+                sailing_distance_nm: row.get_opt::<f64, _>("total_distance_sailed").and_then(|v| v.ok()).unwrap_or(0.0),
+                motoring_distance_nm: row.get_opt::<f64, _>("total_distance_motoring").and_then(|v| v.ok()).unwrap_or(0.0),
             })
             .collect();
 
@@ -691,30 +1114,42 @@ impl VesselDatabase {
         let track = results
             .iter()
             .map(|row| TrackPoint {
-                timestamp: row.get::<String, _>("timestamp").unwrap_or_default(),
-                latitude: self.fetch_value(row, "latitude"),
-                longitude: self.fetch_value(row, "longitude"),
-                avg_speed_kn: self.fetch_value(row, "average_speed_kn"),
-                max_speed_kn: self.fetch_value(row, "max_speed_kn"),
-                moored: row.get::<i32, _>("is_moored").unwrap_or(0) != 0,
-                engine_on: row.get::<i32, _>("engine_on").unwrap_or(0) != 0,
-                total_distance_nm: self.fetch_value(row, "total_distance_nm"),
-                total_time_ms: row.get::<u64, _>("total_time_ms").unwrap_or(0),
-                average_wind_speed_kn: self.fetch_value(row, "average_wind_speed_kn"),
-                average_wind_angle_deg: self.fetch_value(row, "average_wind_angle_deg"),
-                cog_deg: self.fetch_value(row, "cog_deg"),
-                average_heading_deg: self.fetch_value(row, "average_heading_deg"),
+                timestamp: row.get_opt::<String, _>("timestamp")
+                    .and_then(|v| v.ok())
+                    .unwrap_or_default(),
+                latitude: row.get_opt::<f64, _>("latitude")
+                    .and_then(|v| v.ok()),
+                longitude: row.get_opt::<f64, _>("longitude")
+                    .and_then(|v| v.ok()),
+                avg_speed_kn: row.get_opt::<f64, _>("average_speed_kn")
+                    .and_then(|v| v.ok()),
+                max_speed_kn: row.get_opt::<f64, _>("max_speed_kn")
+                    .and_then(|v| v.ok()),
+                moored: row.get_opt::<i32, _>("is_moored")
+                    .and_then(|v| v.ok())
+                    .map(|v| v != 0)
+                    .unwrap_or(false),
+                engine_on: row.get_opt::<i32, _>("engine_on")
+                    .and_then(|v| v.ok())
+                    .map(|v| v != 0)
+                    .unwrap_or(false),
+                total_distance_nm: row.get_opt::<f64, _>("total_distance_nm")
+                    .and_then(|v| v.ok()),
+                total_time_ms: row.get_opt::<u64, _>("total_time_ms")
+                    .and_then(|v| v.ok())
+                    .unwrap_or(0),
+                average_wind_speed_kn: row.get_opt::<f64, _>("average_wind_speed_kn")
+                    .and_then(|v| v.ok()),
+                average_wind_angle_deg: row.get_opt::<f64, _>("average_wind_angle_deg")
+                    .and_then(|v| v.ok()),
+                cog_deg: row.get_opt::<f64, _>("cog_deg")
+                    .and_then(|v| v.ok()),
+                average_heading_deg: row.get_opt::<f64, _>("average_heading_deg")
+                    .and_then(|v| v.ok()),
             })
             .collect();
 
         Ok(track)
-    }
-
-    fn fetch_value(&self, row: &Row, column: &str) -> Option<f64> {
-        match std::panic::catch_unwind(|| row.get::<f64, _>(column)) {
-            Ok(v) => v,
-            Err(_panic) => None,
-        }
     }
 
     /// Fetch environmental metrics by metric_id with optional trip_id or date range
@@ -751,11 +1186,18 @@ impl VesselDatabase {
         let metrics = results
             .iter()
             .map(|row| WebMetricData {
-                timestamp: row.get::<String, _>("timestamp").unwrap_or_default(),
-                metric_id: row.get::<String, _>("metric_id").unwrap_or_default(),
-                avg_value: row.get("value_avg"),
-                max_value: row.get("value_max"),
-                min_value: row.get("value_min")
+                timestamp: row.get_opt::<String, _>("timestamp")
+                    .and_then(|v| v.ok())
+                    .unwrap_or_default(),
+                metric_id: row.get_opt::<String, _>("metric_id")
+                    .and_then(|v| v.ok())
+                    .unwrap_or_default(),
+                avg_value: row.get_opt::<f64, _>("value_avg")
+                    .and_then(|v| v.ok()),
+                max_value: row.get_opt::<f64, _>("value_max")
+                    .and_then(|v| v.ok()),
+                min_value: row.get_opt::<f64, _>("value_min")
+                    .and_then(|v| v.ok())
             })
             .collect();
 
@@ -810,9 +1252,13 @@ impl VesselDatabase {
 
         // Process each row and accumulate distances in buckets
         for row in results {
-            let speed: Option<f64> = row.get("average_speed_kn");
-            let distance: Option<f64> = row.get("total_distance_nm");
-            let engine_on: i32 = row.get("engine_on").unwrap_or(0);
+            let speed: Option<f64> = row.get_opt("average_speed_kn")
+                .and_then(|v| v.ok());
+            let distance: Option<f64> = row.get_opt("total_distance_nm")
+                .and_then(|v| v.ok());
+            let engine_on: i32 = row.get_opt("engine_on")
+                .and_then(|v| v.ok())
+                .unwrap_or(0);
             
             if let (Some(speed), Some(distance)) = (speed, distance) {
                 let bucket_index = ((speed / bucket_size).floor() as usize).min(num_buckets - 1);
@@ -890,9 +1336,12 @@ impl VesselDatabase {
         // Collect all data points first
         let mut data_points = Vec::new();
         for row in results {
-            let wind_direction: Option<f64> = row.get("average_wind_angle_deg");
-            let wind_speed: Option<f64> = row.get("average_wind_speed_kn");
-            let timestamp: Option<String> = row.get("timestamp");
+            let wind_direction: Option<f64> = row.get_opt("average_wind_angle_deg")
+                .and_then(|v| v.ok());
+            let wind_speed: Option<f64> = row.get_opt("average_wind_speed_kn")
+                .and_then(|v| v.ok());
+            let timestamp: Option<String> = row.get_opt("timestamp")
+                .and_then(|v| v.ok());
             
             if let (Some(direction), Some(speed), Some(ts)) = (wind_direction, wind_speed, timestamp) {
                 let dt = chrono::NaiveDateTime::parse_from_str(&ts, "%Y-%m-%d %H:%M:%S%.f")
@@ -1074,11 +1523,19 @@ impl VesselDatabase {
         // Collect track points
         let mut track_points = Vec::new();
         for row in &results {
-            let timestamp: String = row.get("timestamp").unwrap_or_default();
-            let latitude: Option<f64> = row.get("latitude");
-            let longitude: Option<f64> = row.get("longitude");
-            let speed: Option<f64> = row.get("average_speed_kn");
-            let engine_on: bool = row.get("engine_on").unwrap_or(false);
+            let timestamp: String = row.get_opt("timestamp")
+                .and_then(|v| v.ok())
+                .unwrap_or_default();
+            let latitude: Option<f64> = row.get_opt("latitude")
+                .and_then(|v| v.ok());
+            let longitude: Option<f64> = row.get_opt("longitude")
+                .and_then(|v| v.ok());
+            let speed: Option<f64> = row.get_opt("average_speed_kn")
+                .and_then(|v| v.ok());
+            let engine_on: bool = row.get_opt("engine_on")
+                .and_then(|v| v.ok())
+                .map(|v: i32| v != 0)
+                .unwrap_or(false);
 
             if let (Some(lat), Some(lon), Some(spd)) = (latitude, longitude, speed) {
                 track_points.push((timestamp, lat, lon, spd, engine_on));
@@ -1118,7 +1575,7 @@ impl VesselDatabase {
         let query = format!(
             r"SELECT DATE(vs.timestamp) as day, COALESCE(SUM(COALESCE(vs.total_distance_nm, 0)), 0) as total_distance
              FROM vessel_status vs
-             WHERE DATE(vs.timestamp) BETWEEN '{}' AND '{}'
+             WHERE DATE(vs.timestamp) BETWEEN '{}' AND '{}' AND vs.is_moored = 0
              GROUP BY DATE(vs.timestamp)
              ORDER BY vs.timestamp",
             start_dt, end_dt
@@ -1136,8 +1593,12 @@ impl VesselDatabase {
         let mut total_distance: f64 = 0.0;
 
         for row in results {
-            let date: String = row.get("day").unwrap_or_default();
-            let distance: f64 = row.get("total_distance").unwrap_or(0.0);
+            let date: String = row.get_opt("day")
+                .and_then(|v| v.ok())
+                .unwrap_or_default();
+            let distance: f64 = row.get_opt("total_distance")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
             
             days.push(HeatmapDay {
                 date,
@@ -1279,5 +1740,59 @@ mod tests {
         let db2 = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
         assert!(db2.get_system_status("test_key").unwrap());
     }
+
+    #[test]
+    fn test_export_trip() {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let db = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
+        
+        // Use trip 132 which we know exists from other tests
+        let trip_id = 132i64;
+        let export_path = PathBuf::from("/tmp/test_trip_export.json");
+        
+        // Remove file if it exists from previous test run
+        let _ = fs::remove_file(&export_path);
+        
+        // Perform export
+        let result = db.export_trip(trip_id, &export_path);
+        assert!(result.is_ok(), "Export should succeed: {:?}", result.err());
+        
+        // Verify file was created and has content
+        assert!(export_path.exists(), "Export file should exist");
+        let metadata = fs::metadata(&export_path).unwrap();
+        assert!(metadata.len() > 0, "Export file should not be empty");
+        
+        // Verify file contains valid JSON
+        let contents = fs::read_to_string(&export_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&contents)
+            .expect("Export file should contain valid JSON");
+        
+        // Verify JSON structure
+        assert!(json["trip"].is_object(), "Should have trip object");
+        assert_eq!(json["trip"]["id"], trip_id, "Trip ID should match");
+        assert!(json["trip"]["description"].is_string(), "Trip should have description");
+        assert!(json["trip"]["start_timestamp"].is_string(), "Trip should have start_timestamp");
+        assert!(json["trip"]["end_timestamp"].is_string(), "Trip should have end_timestamp");
+        
+        // Verify arrays exist
+        assert!(json["vessel_statuses"].is_array(), "Should have vessel_statuses array");
+        assert!(json["environmental_metrics"].is_array(), "Should have environmental_metrics array");
+        assert!(json["export_metadata"].is_object(), "Should have export_metadata object");
+        
+        // Vessel statuses should have records if they exist in database
+        let vessel_statuses = json["vessel_statuses"].as_array().unwrap();
+        if !vessel_statuses.is_empty() {
+            let first_status = &vessel_statuses[0];
+            assert!(first_status["timestamp"].is_string(), "Status should have timestamp");
+            assert!(first_status["is_moored"].is_boolean(), "Status should have is_moored");
+            assert!(first_status["engine_on"].is_boolean(), "Status should have engine_on");
+        }
+        
+        // Clean up
+        fs::remove_file(&export_path).expect("Should be able to delete test file");
+    }
+
 
 }

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trip Details - NMEA Router</title>
+    <link rel="icon" type="image/png" href="/nmeasail.png">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
     <!-- Google Maps API will be loaded dynamically -->
     <style>
@@ -21,17 +22,17 @@
             --card-shadow: rgba(0,0,0,0.1);
         }
         body.dark-theme {
-            --bg-primary: #1a1a1a;
-            --bg-secondary: #2d2d2d;
-            --bg-tertiary: #3a3a3a;
-            --bg-accent: #2a3a42;
-            --text-primary: #e0e0e0;
-            --text-secondary: #b0b0b0;
-            --text-tertiary: #c0c0c0;
+            --bg-primary: #0f1f3c;
+            --bg-secondary: #1a2f4d;
+            --bg-tertiary: #253d5a;
+            --bg-accent: #1e3a52;
+            --text-primary: #e0e8f0;
+            --text-secondary: #a8b8cc;
+            --text-tertiary: #c8d8e8;
             --text-bold: #ffffff;
-            --border-color: #444;
-            --link-color: #5dade2;
-            --card-shadow: rgba(0,0,0,0.3);
+            --border-color: #3a5a7f;
+            --link-color: #5dbaff;
+            --card-shadow: rgba(0,0,0,0.4);
         }
         body {
             font-family: Arial, sans-serif;
@@ -109,6 +110,38 @@
             font-size: 24px;
             font-weight: bold;
             color: var(--text-bold);
+        }
+        .progress-bar-container {
+            width: 100%;
+            height: 24px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            margin-top: 10px;
+        }
+        .progress-bar-sailing {
+            height: 100%;
+            background-color: #27ae60;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 11px;
+            font-weight: bold;
+            transition: width 0.3s ease;
+        }
+        .progress-bar-motoring {
+            height: 100%;
+            background-color: #e74c3c;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 11px;
+            font-weight: bold;
+            transition: width 0.3s ease;
         }
         .map-container {
             background: var(--bg-secondary);
@@ -239,6 +272,13 @@
             border-left: 3px solid var(--link-color);
             transition: background-color 0.3s ease, border-color 0.3s ease;
         }
+        .fastest-segment-card {
+            cursor: pointer;
+        }
+        .fastest-segment-card:hover {
+            background-color: var(--bg-secondary);
+            box-shadow: 0 0 8px rgba(93, 186, 255, 0.3);
+        }
         .analytics-card-title {
             font-size: 12px;
             font-weight: bold;
@@ -269,7 +309,7 @@
         <div class="header-bar">
             <a href="index.html" class="back-link">&larr; Back to Trip Dashboard</a>
             <button class="theme-toggle" onclick="toggleTheme()">
-                <span id="theme-icon">🌙</span> <span id="theme-text">Dark</span>
+                <span id="theme-icon">◐</span> <span id="theme-text">Dark</span>
             </button>
         </div>
         <h1>Trip Details</h1>
@@ -329,7 +369,7 @@
         }
 
         function updateThemeButton(isDark) {
-            document.getElementById('theme-icon').textContent = isDark ? '☀️' : '🌙';
+            document.getElementById('theme-icon').textContent = isDark ? '◑' : '◐';
             document.getElementById('theme-text').textContent = isDark ? 'Light' : 'Dark';
         }
 
@@ -354,6 +394,10 @@
         let currentLegs = [];
         let selectedLeg = null; // null means entire trip
         let allCharts = {};
+        let currentMap = null; // Global reference to the map
+        let currentAnalyticsData = null; // Global reference to analytics data
+        let currentTrackData = null; // Global reference to track data for segment markers
+        let segmentMarkers = []; // Array to store segment start/end markers
 
         if (!tripId) {
             document.getElementById('content').innerHTML =
@@ -600,7 +644,7 @@
                 // Fastest 1NM
                 if (analyticsData.fastest_1nm) {
                     const segment = analyticsData.fastest_1nm;
-                    analyticsHtml += '<div class="analytics-card">' +
+                    analyticsHtml += '<div class="analytics-card fastest-segment-card" data-segment-type="1nm" onclick="handleSegmentClick(event, \'1nm\')">' +
                         '<div class="analytics-card-title">Fastest 1 NM</div>' +
                         '<div class="analytics-value">' + segment.average_speed_kn.toFixed(2) + ' knots</div>' +
                         '<div class="analytics-detail">Distance: ' + segment.distance_nm.toFixed(2) + ' NM</div>' +
@@ -613,7 +657,7 @@
                 // Fastest 5NM
                 if (analyticsData.fastest_5nm) {
                     const segment = analyticsData.fastest_5nm;
-                    analyticsHtml += '<div class="analytics-card">' +
+                    analyticsHtml += '<div class="analytics-card fastest-segment-card" data-segment-type="5nm" onclick="handleSegmentClick(event, \'5nm\')">' +
                         '<div class="analytics-card-title">Fastest 5 NM</div>' +
                         '<div class="analytics-value">' + segment.average_speed_kn.toFixed(2) + ' knots</div>' +
                         '<div class="analytics-detail">Distance: ' + segment.distance_nm.toFixed(2) + ' NM</div>' +
@@ -626,7 +670,7 @@
                 // Fastest 10NM
                 if (analyticsData.fastest_10nm) {
                     const segment = analyticsData.fastest_10nm;
-                    analyticsHtml += '<div class="analytics-card">' +
+                    analyticsHtml += '<div class="analytics-card fastest-segment-card" data-segment-type="10nm" onclick="handleSegmentClick(event, \'10nm\')">' +
                         '<div class="analytics-card-title">Fastest 10 NM</div>' +
                         '<div class="analytics-value">' + segment.average_speed_kn.toFixed(2) + ' knots</div>' +
                         '<div class="analytics-detail">Distance: ' + segment.distance_nm.toFixed(2) + ' NM</div>' +
@@ -657,12 +701,19 @@
                     '<div class="info-value">' + totalDistance.toFixed(1) + ' NM</div>' +
                 '</div>' +
                 '<div class="info-item">' +
-                    '<div class="info-label">Sailing Distance</div>' +
-                    '<div class="info-value">' + sailingDistance.toFixed(1) + ' NM (' + sailingPercent.toFixed(1) + '%)</div>' +
-                '</div>' +
-                '<div class="info-item">' +
-                    '<div class="info-label">Motoring Distance</div>' +
-                    '<div class="info-value">' + motoringDistance.toFixed(1) + ' NM (' + (100 - sailingPercent).toFixed(1) + '%)</div>' +
+                    '<div class="info-label">Sailing vs Motoring</div>' +
+                    '<div style="display: flex; gap: 15px; align-items: center; margin-top: 10px;">' +
+                        '<div style="flex: 1;">' +
+                            '<div class="progress-bar-container">' +
+                                '<div class="progress-bar-sailing" style="width: ' + sailingPercent.toFixed(1) + '%;">' + (sailingPercent.toFixed(1) > 5 ? sailingPercent.toFixed(0) + '%' : '') + '</div>' +
+                                '<div class="progress-bar-motoring" style="width: ' + (100 - sailingPercent).toFixed(1) + '%;">' + ((100 - sailingPercent).toFixed(1) > 5 ? (100 - sailingPercent).toFixed(0) + '%' : '') + '</div>' +
+                            '</div>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div style="font-size: 12px; color: var(--text-secondary); margin-top: 8px;">' +
+                        '<div>Sailing: ' + sailingDistance.toFixed(1) + ' NM</div>' +
+                        '<div>Motoring: ' + motoringDistance.toFixed(1) + ' NM</div>' +
+                    '</div>' +
                 '</div>' +
                 '<div class="info-item">' +
                     '<div class="info-label">Total Time</div>' +
@@ -718,8 +769,146 @@
             allCharts.speedDistribution = createSpeedDistributionChart(speedDistData);
             allCharts.windStatistics = createWindStatisticsChart(windStatsData);
 
+            // Save analytics data globally for segment marker handling
+            currentAnalyticsData = analyticsData;
+            currentTrackData = trackData;
+
             // Initialize the map
             initializeMap(trackData);
+        }
+
+        function handleSegmentClick(event, segmentType) {
+            event.stopPropagation();
+
+            if (!currentMap || !currentAnalyticsData || !currentTrackData) {
+                console.error('Map, analytics data, or track data not initialized');
+                return;
+            }
+
+            // Get the segment data based on type
+            let segment = null;
+            if (segmentType === '1nm') {
+                segment = currentAnalyticsData.fastest_1nm;
+            } else if (segmentType === '5nm') {
+                segment = currentAnalyticsData.fastest_5nm;
+            } else if (segmentType === '10nm') {
+                segment = currentAnalyticsData.fastest_10nm;
+            }
+
+            if (!segment) {
+                console.error('Segment data not found');
+                return;
+            }
+
+            // Find start and end points in currentTrackData based on timestamps
+            const startTime = new Date(segment.start_timestamp).getTime();
+            const endTime = new Date(segment.end_timestamp).getTime();
+
+            let startPoint = null;
+            let endPoint = null;
+
+            for (let point of currentTrackData) {
+                const pointTime = new Date(point.timestamp).getTime();
+                // Find closest start point (within 1 second tolerance)
+                if (!startPoint && Math.abs(pointTime - startTime) < 1000) {
+                    startPoint = point;
+                }
+                // Find closest end point (within 1 second tolerance)
+                if (Math.abs(pointTime - endTime) < 1000) {
+                    endPoint = point;
+                }
+            }
+
+            if (startPoint && endPoint) {
+                displaySegmentMarkers(startPoint, endPoint, segmentType);
+            }
+        }
+
+        function displaySegmentMarkers(startPoint, endPoint, segmentType) {
+            // Reset previous markers
+            resetSegmentMarkers();
+
+            if (!currentMap) {
+                return;
+            }
+
+            // Create start marker (blue/yellow)
+            const startMarker = new google.maps.Marker({
+                position: { lat: startPoint.latitude, lng: startPoint.longitude },
+                map: currentMap,
+                title: segmentType + ' Segment Start',
+                icon: {
+                    path: 'M 0,0 C -2,-20 -10,-22 -10,-30 L -10,-50 L 10,-50 L 10,-30 C 10,-22 2,-20 0,0 z',
+                    fillColor: '#FFD700',
+                    fillOpacity: 1,
+                    strokeColor: '#FFFFFF',
+                    strokeWeight: 2,
+                    scale: 0.8,
+                    anchor: new google.maps.Point(0, 0)
+                },
+                zIndex: 2000
+            });
+
+            // Create end marker (purple)
+            const endMarker = new google.maps.Marker({
+                position: { lat: endPoint.latitude, lng: endPoint.longitude },
+                map: currentMap,
+                title: segmentType + ' Segment End',
+                icon: {
+                    path: 'M 0,0 C -2,-20 -10,-22 -10,-30 L -10,-50 L 10,-50 L 10,-30 C 10,-22 2,-20 0,0 z',
+                    fillColor: '#9C27B0',
+                    fillOpacity: 1,
+                    strokeColor: '#FFFFFF',
+                    strokeWeight: 2,
+                    scale: 0.8,
+                    anchor: new google.maps.Point(0, 0)
+                },
+                zIndex: 2000
+            });
+
+            // Add info windows
+            const startInfoWindow = new google.maps.InfoWindow({
+                content: '<div style="font-family: Arial, sans-serif;">' +
+                    '<strong>' + segmentType + ' Segment Start</strong><br>' +
+                    'Speed: ' + (startPoint.avg_speed_kn || 'N/A').toFixed(2) + ' kn<br>' +
+                    formatDate(startPoint.timestamp) +
+                '</div>'
+            });
+
+            const endInfoWindow = new google.maps.InfoWindow({
+                content: '<div style="font-family: Arial, sans-serif;">' +
+                    '<strong>' + segmentType + ' Segment End</strong><br>' +
+                    'Speed: ' + (endPoint.avg_speed_kn || 'N/A').toFixed(2) + ' kn<br>' +
+                    formatDate(endPoint.timestamp) +
+                '</div>'
+            });
+
+            startMarker.addListener('click', () => {
+                startInfoWindow.open(currentMap, startMarker);
+            });
+
+            endMarker.addListener('click', () => {
+                endInfoWindow.open(currentMap, endMarker);
+            });
+
+            // Store markers for later removal
+            segmentMarkers.push(startMarker);
+            segmentMarkers.push(endMarker);
+        }
+
+        function resetSegmentMarkers() {
+            // Remove all segment markers from map
+            for (let marker of segmentMarkers) {
+                marker.setMap(null);
+            }
+            segmentMarkers = [];
+
+            // Remove highlight from segment cards
+            const cards = document.querySelectorAll('.fastest-segment-card');
+            cards.forEach(card => {
+                card.style.backgroundColor = '';
+                card.style.borderColor = '';
+            });
         }
 
         function createSpeedChart(trackData) {
@@ -1320,7 +1509,13 @@
                 fullscreenControl: true
             });
 
-            // Fit the map to show all track points
+            // Save map reference globally
+            currentMap = map;
+
+            // Add click listener to reset markers when clicking on the map
+            map.addListener('click', () => {
+                resetSegmentMarkers();
+            });            // Fit the map to show all track points
             map.fitBounds(bounds);
 
             // Create colored track segments based on speed
@@ -1339,7 +1534,7 @@
                         fillOpacity: 1,
                         strokeColor: '#FFFFFF',
                         strokeWeight: 2,
-                        scale: 1,
+                        scale: 0.7,
                         anchor: new google.maps.Point(0, 0)
                     },
                     zIndex: 1000
@@ -1356,7 +1551,7 @@
                         fillOpacity: 1,
                         strokeColor: '#FFFFFF',
                         strokeWeight: 2,
-                        scale: 1,
+                        scale: 0.7,
                         anchor: new google.maps.Point(0, 0)
                     },
                     zIndex: 1000
