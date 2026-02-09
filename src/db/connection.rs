@@ -43,8 +43,18 @@ impl VesselDatabase {
             system_status_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         };
         
-        // Load cache from database (non-fatal if table doesn't exist)
+        // Ensure system_status table exists
         if let Ok(mut conn) = db.pool.get_conn() {
+            // Create table if it doesn't exist
+            let _ = conn.query_drop(
+                "CREATE TABLE IF NOT EXISTS system_status (
+                    status_key VARCHAR(255) PRIMARY KEY,
+                    status_value VARCHAR(255) NOT NULL,
+                    INDEX idx_status_key (status_key)
+                )"
+            );
+            
+            // Load cache from database
             if let Ok(rows) = conn.query::<(String, String), _>("SELECT status_key, status_value FROM system_status") {
                 let mut cache = db.system_status_cache.lock().unwrap();
                 for (key, value) in rows {
@@ -52,7 +62,6 @@ impl VesselDatabase {
                     cache.insert(key, enabled);
                 }
             }
-            // If table doesn't exist, that's okay - cache will start empty and defaults to true
         }
 
         Ok(db)

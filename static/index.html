@@ -21,7 +21,7 @@
             justify-content: center;
         }
         .import-trip-btn:hover {
-            opacity: 0.8;
+            background: var(--btn-hover);
         }
         .tracking-toggle-container {
             display: flex;
@@ -180,7 +180,13 @@
             color: var(--text-bold);
             flex: 1;
         }
-        .trip-edit-btn {
+        .trip-title-id {
+            font-size: 16px;
+            font-weight: bold;
+            color: var(--text-secondary);
+            flex: 1;
+        }
+        .trip-btn {
             background: none;
             border: none;
             color: var(--text-secondary);
@@ -189,47 +195,8 @@
             padding: 0 4px;
             transition: color 0.2s;
         }
-        .trip-edit-btn:hover {
-            color: var(--sailing-color);
-        }
-        .trip-export-btn {
-            background: none;
-            border: none;
-            color: var(--text-secondary);
-            font-size: 16px;
-            cursor: pointer;
-            padding: 0 4px;
-            transition: color 0.2s;
-            margin-left: 5px;
-        }
-        .trip-export-btn:hover {
-            color: var(--sailing-color);
-        }
-        .trip-delete-btn {
-            background: none;
-            border: none;
-            color: var(--text-secondary);
-            font-size: 16px;
-            cursor: pointer;
-            padding: 0 4px;
-            transition: color 0.2s;
-            margin-left: 5px;
-        }
-        .trip-delete-btn:hover {
-            color: var(--sailing-color);
-        }
-        .trip-trim-btn {
-            background: none;
-            border: none;
-            color: var(--text-secondary);
-            font-size: 16px;
-            cursor: pointer;
-            padding: 0 4px;
-            transition: color 0.2s;
-            margin-left: 5px;
-        }
-        .trip-trim-btn:hover {
-            color: var(--sailing-color);
+        .trip-btn:hover {
+            background: var(--btn-hover);
         }
         .trip-dates {
             color: var(--text-secondary);
@@ -282,17 +249,12 @@
         }
         .progress-sailing {
             height: 100%;
-            background-color: var(--sailing-color);
+            background: linear-gradient(to right, #ff9900, #4caf50);
             transition: width 0.3s ease;
         }
         .progress-motoring {
             height: 100%;
             background-color: var(--motoring-color);
-            transition: width 0.3s ease;
-        }
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(to right, var(--sailing-color) 0%, var(--sailing-color) var(--sailing-percent), var(--motoring-color) var(--sailing-percent), var(--motoring-color) 100%);
             transition: width 0.3s ease;
         }
         .no-trips {
@@ -358,7 +320,7 @@
             background-color: #229954;
         }
         #heatmapSection, #tripsSection {
-            max-width: 1200px;
+            max-width: 1500px;
             margin: 0 auto 25px auto;
             background: var(--bg-tertiary);
             border: 1px solid var(--border-color);
@@ -419,8 +381,8 @@
         }
         .heatmap {
             display: grid;
-            grid-template-columns: repeat(54, 17px);
-            grid-template-rows: repeat(7, 17px);
+            grid-template-columns: repeat(54, 23px);
+            grid-template-rows: repeat(7, 23px);
             gap: 4px;
             margin-bottom: 8px;
         }
@@ -561,7 +523,7 @@
         <div style="display: flex; align-items: center; gap: 15px;">
             <img id="brandLogo" src="/Itaca_v3.svg" alt="Itaca Logo" style="height: 40px; width: auto;">
             <h2 style="margin: 0; color: var(--text-primary);">NMEA Router</h2>
-            <a href="/yearly-stats.html" style="color: var(--link-color); text-decoration: none; font-size: 14px; margin-left: 15px;" title="View yearly statistics">📊 Yearly Stats</a>
+            <a href="/yearly-stats.html" style="color: var(--link-color); text-decoration: none; font-size: 14px; margin-left: 15px;" title="View yearly statistics">⊕ Yearly Stats</a>
         </div>
         <div style="display: flex; gap: 15px; align-items: center;">
             <div class="tracking-toggle-container" onclick="toggleTracking()">
@@ -745,11 +707,11 @@
                 html += '<div class="trip-card" onclick="window.location.href=\'trip.html?id=' + trip.id + '\'">' +
                     '<div class="trip-line-1">' +
                         '<div class="trip-header">' +
-                            '<div class="trip-title">' + (trip.description || 'Trip ' + trip.id) + ' (ID: ' + trip.id + ')</div>' +
-                            '<button class="trip-edit-btn" onclick="openEditModal(event, ' + trip.id + ', \'' + (trip.description || '').replace(/'/g, "\\'") + '\')" title="Edit description">✎</button>' +
-                            '<button class="trip-export-btn" onclick="exportTrip(event, ' + trip.id + ')" title="Export trip">⬇</button>' +
-                            '<button class="trip-trim-btn" onclick="trimTrip(event, ' + trip.id + ')" title="Trim trip">✂</button>' +
-                            '<button class="trip-delete-btn" onclick="deleteTrip(event, ' + trip.id + ')" title="Delete trip">🗑</button>' +
+                            '<div class="trip-title">' + (trip.description || 'Trip ' + trip.id) + '<span class="trip-title-id"> (ID: ' + trip.id + ')</span>  ' + '</div>' +
+                            '<button class="trip-btn" onclick="openEditModal(event, ' + trip.id + ', \'' + (trip.description || '').replace(/'/g, "\\'") + '\')" title="Edit description">✎</button>' +
+                            '<button class="trip-btn" onclick="exportTrip(event, ' + trip.id + ')" title="Export trip">⬇</button>' +
+                            '<button class="trip-btn" onclick="trimTrip(event, ' + trip.id + ')" title="Trim trip">✂</button>' +
+                            '<button class="trip-btn" onclick="deleteTrip(event, ' + trip.id + ')" title="Delete trip">🗑</button>' +
                         '</div>' +
                     '</div>' +
                     '<div class="trip-line-2">' +

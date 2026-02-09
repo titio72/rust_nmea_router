@@ -22,6 +22,7 @@
     --heatmap-3: #27ae60;
     --heatmap-4: #1e8449;
     --heatmap-5: #0b5345;
+    --btn-hover: rgba(127, 255, 0, 0.8);
 }
 
 body.dark-theme {
@@ -43,9 +44,10 @@ body.dark-theme {
     --heatmap-empty: #0f1f3c;
     --heatmap-1: #1e3a52;
     --heatmap-2: #2d5a7f;
-    --heatmap-3: #3d7aac;
-    --heatmap-4: #4d9ad9;
-    --heatmap-5: #5dbaff;
+    --heatmap-3: #3d7a45;
+    --heatmap-4: #4d9a25;
+    --heatmap-5: #5dff11;
+    --btn-hover: rgba(255, 255, 0, 0.2);
 }
 
 body {
@@ -66,13 +68,13 @@ h1 {
     color: var(--text-primary);
     text-align: center;
     margin-bottom: 30px;
-    max-width: 1200px;
+    max-width: 1500px;
     margin-left: auto;
     margin-right: auto;
 }
 
 .header-bar {
-    max-width: 1200px;
+    max-width: 1500px;
     margin: 0 auto 20px auto;
     display: flex;
     justify-content: space-between;
