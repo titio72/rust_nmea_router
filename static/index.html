@@ -205,6 +205,32 @@
         .trip-export-btn:hover {
             color: var(--sailing-color);
         }
+        .trip-delete-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 16px;
+            cursor: pointer;
+            padding: 0 4px;
+            transition: color 0.2s;
+            margin-left: 5px;
+        }
+        .trip-delete-btn:hover {
+            color: var(--sailing-color);
+        }
+        .trip-trim-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 16px;
+            cursor: pointer;
+            padding: 0 4px;
+            transition: color 0.2s;
+            margin-left: 5px;
+        }
+        .trip-trim-btn:hover {
+            color: var(--sailing-color);
+        }
         .trip-dates {
             color: var(--text-secondary);
             font-size: 14px;
@@ -723,6 +749,8 @@
                             '<div class="trip-title">' + (trip.description || 'Trip ' + trip.id) + ' (ID: ' + trip.id + ')</div>' +
                             '<button class="trip-edit-btn" onclick="openEditModal(event, ' + trip.id + ', \'' + (trip.description || '').replace(/'/g, "\\'") + '\')" title="Edit description">✎</button>' +
                             '<button class="trip-export-btn" onclick="exportTrip(event, ' + trip.id + ')" title="Export trip">⬇</button>' +
+                            '<button class="trip-trim-btn" onclick="trimTrip(event, ' + trip.id + ')" title="Trim trip">✂</button>' +
+                            '<button class="trip-delete-btn" onclick="deleteTrip(event, ' + trip.id + ')" title="Delete trip">🗑</button>' +
                         '</div>' +
                     '</div>' +
                     '<div class="trip-line-2">' +
@@ -1203,9 +1231,10 @@
         async function exportTrip(event, tripId) {
             event.stopPropagation();
             
+            let originalText;
             try {
                 // Show a loading indicator
-                const originalText = event.target.textContent;
+                originalText = event.target.textContent;
                 event.target.textContent = '⏳';
                 event.target.disabled = true;
                 
@@ -1228,34 +1257,78 @@
                     document.body.appendChild(link);
                     link.click();
                     document.body.removeChild(link);
-                    
-                    // After a short delay, delete the file from the server
-                    setTimeout(async () => {
-                        try {
-                            const deleteResponse = await fetch(`/exports/trip_${tripId}.json`, {
-                                method: 'DELETE'
-                            });
-                            // Note: The DELETE method may not be supported for static files
-                            // This is handled by the server if needed
-                        } catch (e) {
-                            console.warn('Could not delete exported file, will be cleaned up manually');
-                        }
-                    }, 1000);
-                    
-                    event.target.textContent = '✓';
-                    setTimeout(() => {
-                        event.target.textContent = originalText;
-                        event.target.disabled = false;
-                    }, 2000);
                 } else {
-                    throw new Error(result.error || 'Unknown error');
+                    alert('Error: ' + (result.message || 'Export failed'));
                 }
             } catch (error) {
-                console.error('Error exporting trip:', error);
-                alert('Failed to export trip. Check console for details.');
+                console.error('Export error:', error);
+                alert('Export failed: ' + error.message);
+            } finally {
                 event.target.textContent = originalText;
                 event.target.disabled = false;
             }
+        }
+
+        function trimTrip(event, tripId) {
+            event.stopPropagation();
+            
+            // Find the trip description from the page
+            const tripCard = event.target.closest('.trip-card');
+            const tripTitle = tripCard ? tripCard.querySelector('.trip-title').textContent : 'Trip ' + tripId;
+            
+            if (confirm(`Are you sure you want to trim this trip?\n\n"${tripTitle}"\n\nThis will remove idle periods before the boat starts moving and after it moors.\n\nThe operation will:\n1. Find when the boat starts moving (is_moored = 0)\n2. Find when the boat gets moored (is_moored = 1) after final movement\n3. Apply 1-hour safety buffers before/after\n4. Delete data outside the trimmed period\n\nThis action cannot be undone.`)) {
+                trimTrip_Confirmed(tripId);
+            }
+        }
+
+        function trimTrip_Confirmed(tripId) {
+            fetch(`/api/trim_trip?id=${tripId}`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    alert('Trip trimmed successfully. Data outside the movement period has been removed.');
+                    location.reload();
+                } else {
+                    alert('Error trimming trip: ' + (data.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error trimming trip:', error);
+                alert('Failed to trim trip: ' + error.message);
+            });
+        }
+
+        function deleteTrip(event, tripId) {
+            event.stopPropagation();
+            
+            // Find the trip description from the page
+            const tripCard = event.target.closest('.trip-card');
+            const tripTitle = tripCard ? tripCard.querySelector('.trip-title').textContent : 'Trip ' + tripId;
+            
+            if (confirm(`Are you sure you want to delete this trip?\n\n"${tripTitle}"\n\nThis will also delete all associated environmental and vessel status data.\n\nThis action cannot be undone.`)) {
+                deleteTrip_Confirmed(tripId);
+            }
+        }
+
+        function deleteTrip_Confirmed(tripId) {
+            fetch(`/api/delete_trip?id=${tripId}`, {
+                method: 'DELETE'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    alert('Trip deleted successfully.');
+                    location.reload();
+                } else {
+                    alert('Error deleting trip: ' + (data.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error deleting trip:', error);
+                alert('Failed to delete trip: ' + error.message);
+            });
         }
 
         // Allow Enter key to save

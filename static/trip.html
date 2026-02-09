@@ -813,76 +813,64 @@
             // Reset previous markers
             resetSegmentMarkers();
 
-            if (!currentMap) {
+            if (!currentMap || !currentTrackData) {
                 return;
             }
 
-            // Create start marker (blue/yellow)
-            const startMarker = new google.maps.Marker({
-                position: { lat: startPoint.latitude, lng: startPoint.longitude },
-                map: currentMap,
-                title: segmentType + ' Segment Start',
-                icon: {
-                    path: 'M 0,0 C -2,-20 -10,-22 -10,-30 L -10,-50 L 10,-50 L 10,-30 C 10,-22 2,-20 0,0 z',
-                    fillColor: '#FFD700',
-                    fillOpacity: 1,
-                    strokeColor: '#FFFFFF',
-                    strokeWeight: 2,
-                    scale: 0.8,
-                    anchor: new google.maps.Point(0, 0)
-                },
-                zIndex: 2000
+            // Find all points between startPoint and endPoint timestamps
+            const startTime = new Date(startPoint.timestamp).getTime();
+            const endTime = new Date(endPoint.timestamp).getTime();
+            
+            const segmentPoints = currentTrackData.filter(point => {
+                const pointTime = new Date(point.timestamp).getTime();
+                return pointTime >= startTime && pointTime <= endTime;
             });
 
-            // Create end marker (purple)
-            const endMarker = new google.maps.Marker({
-                position: { lat: endPoint.latitude, lng: endPoint.longitude },
-                map: currentMap,
-                title: segmentType + ' Segment End',
-                icon: {
-                    path: 'M 0,0 C -2,-20 -10,-22 -10,-30 L -10,-50 L 10,-50 L 10,-30 C 10,-22 2,-20 0,0 z',
-                    fillColor: '#9C27B0',
-                    fillOpacity: 1,
-                    strokeColor: '#FFFFFF',
-                    strokeWeight: 2,
-                    scale: 0.8,
-                    anchor: new google.maps.Point(0, 0)
-                },
-                zIndex: 2000
-            });
+            if (segmentPoints.length > 0) {
+                // Create polyline for the segment in bright orange
+                const segmentPath = segmentPoints
+                    .filter(point => point.latitude !== null && point.longitude !== null)
+                    .map(point => ({ lat: point.latitude, lng: point.longitude }));
 
-            // Add info windows
-            const startInfoWindow = new google.maps.InfoWindow({
-                content: '<div style="font-family: Arial, sans-serif;">' +
-                    '<strong>' + segmentType + ' Segment Start</strong><br>' +
-                    'Speed: ' + (startPoint.avg_speed_kn || 'N/A').toFixed(2) + ' kn<br>' +
-                    formatDate(startPoint.timestamp) +
-                '</div>'
-            });
+                const segmentLine = new google.maps.Polyline({
+                    path: segmentPath,
+                    geodesic: true,
+                    strokeColor: '#FF8800',
+                    strokeOpacity: 1.0,
+                    strokeWeight: 6,
+                    map: currentMap,
+                    zIndex: 2000
+                });
 
-            const endInfoWindow = new google.maps.InfoWindow({
-                content: '<div style="font-family: Arial, sans-serif;">' +
-                    '<strong>' + segmentType + ' Segment End</strong><br>' +
-                    'Speed: ' + (endPoint.avg_speed_kn || 'N/A').toFixed(2) + ' kn<br>' +
-                    formatDate(endPoint.timestamp) +
-                '</div>'
-            });
+                segmentMarkers.push(segmentLine);
 
-            startMarker.addListener('click', () => {
-                startInfoWindow.open(currentMap, startMarker);
-            });
+                // Calculate bounds for segment and zoom to fit
+                let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+                segmentPath.forEach(point => {
+                    minLat = Math.min(minLat, point.lat);
+                    maxLat = Math.max(maxLat, point.lat);
+                    minLng = Math.min(minLng, point.lng);
+                    maxLng = Math.max(maxLng, point.lng);
+                });
 
-            endMarker.addListener('click', () => {
-                endInfoWindow.open(currentMap, endMarker);
-            });
+                // Add padding to show segment comfortably
+                const latPadding = (maxLat - minLat) * 0.3 || 0.01;
+                const lngPadding = (maxLng - minLng) * 0.3 || 0.01;
 
-            // Store markers for later removal
-            segmentMarkers.push(startMarker);
-            segmentMarkers.push(endMarker);
+                const segmentBounds = {
+                    north: maxLat + latPadding,
+                    south: minLat - latPadding,
+                    east: maxLng + lngPadding,
+                    west: minLng - lngPadding
+                };
+
+                // Fit map to segment bounds
+                currentMap.fitBounds(segmentBounds);
+            }
         }
 
         function resetSegmentMarkers() {
-            // Remove all segment markers from map
+            // Remove all segment markers/polylines from map
             for (let marker of segmentMarkers) {
                 marker.setMap(null);
             }

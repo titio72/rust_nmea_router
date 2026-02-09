@@ -4,6 +4,7 @@ use axum::{
     response::Json,
     routing::get,
     routing::post,
+    routing::delete,
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -326,6 +327,52 @@ pub async fn update_trip_description(
     }
 }
 
+pub async fn delete_trip(
+    State(state): State<AppState>,
+    Query(params): Query<TripIdQuery>,
+) -> Result<Json<ApiResponse<()>>, StatusCode> {
+
+    info!(?params, "DELETE /api/trip called");
+    
+    match state.db.delete_trip(params.id) {
+        Ok(()) => {
+            info!(trip_id = params.id, "Trip deleted successfully");
+            Ok(Json(ApiResponse::ok(())))
+        },
+        Err(e) => {
+            error!(error = %e, trip_id = params.id, "Failed to delete trip");
+            {
+                let bt = Backtrace::force_capture();
+                error!(?bt, "Backtrace for error");
+                Ok(Json(ApiResponse::error(e.to_string())))
+            }
+        }
+    }
+}
+
+pub async fn trim_trip(
+    State(state): State<AppState>,
+    Query(params): Query<TripIdQuery>,
+) -> Result<Json<ApiResponse<()>>, StatusCode> {
+
+    info!(?params, "POST /api/trim_trip called");
+    
+    match state.db.trim_trip(params.id) {
+        Ok(()) => {
+            info!(trip_id = params.id, "Trip trimmed successfully");
+            Ok(Json(ApiResponse::ok(())))
+        },
+        Err(e) => {
+            error!(error = %e, trip_id = params.id, "Failed to trim trip");
+            {
+                let bt = Backtrace::force_capture();
+                error!(?bt, "Backtrace for error");
+                Ok(Json(ApiResponse::error(e.to_string())))
+            }
+        }
+    }
+}
+
 pub async fn export_trip(
     State(state): State<AppState>,
     Query(params): Query<ExportTripQuery>,
@@ -554,6 +601,8 @@ pub async fn set_metrics_status(
 pub fn create_api_router(state: AppState) -> Router {
     Router::new()
         .route("/trip_description", post(update_trip_description))
+        .route("/delete_trip", delete(delete_trip))
+        .route("/trim_trip", post(trim_trip))
         .route("/export_trip", get(export_trip))
         .route("/import_trip", post(import_trip))
         .route("/list_exports", get(list_exports))
