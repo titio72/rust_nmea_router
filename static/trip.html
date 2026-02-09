@@ -7,6 +7,8 @@
     <link rel="icon" type="image/png" href="/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <!-- Google Maps API will be loaded dynamically -->
     <style>
         #tripDetails {
@@ -891,16 +893,18 @@
             // Filter out data points where boat is moored (speed should be 0 or very low)
             const validData = trackData.filter(point => !point.moored && point.avg_speed_kn > 0.1);
 
-            const labels = validData.map(point => formatTime(point.timestamp));
-            const speeds = validData.map(point => point.avg_speed_kn);
+            // Convert data to time-scale format with proper Date objects
+            const chartData = validData.map(point => ({
+                x: new Date(point.timestamp),
+                y: point.avg_speed_kn
+            }));
 
             return new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: labels,
                     datasets: [{
                         label: 'Average Speed (knots)',
-                        data: speeds,
+                        data: chartData,
                         borderColor: '#3498db',
                         backgroundColor: 'rgba(52, 152, 219, 0.1)',
                         fill: true,
@@ -923,6 +927,13 @@
                             grid: { color: colors.grid }
                         },
                         x: {
+                            type: 'time',
+                            time: {
+                                unit: 'minute',
+                                displayFormats: {
+                                    minute: 'HH:mm:ss'
+                                }
+                            },
                             title: {
                                 display: true,
                                 text: 'Time',
@@ -954,16 +965,18 @@
             // Filter out data points where heading is not available
             const validData = trackData.filter(point => point.average_heading_deg !== null && point.average_heading_deg !== undefined);
 
-            const labels = validData.map(point => formatTime(point.timestamp));
-            const headings = validData.map(point => point.average_heading_deg);
+            // Convert data to time-scale format with proper Date objects
+            const chartData = validData.map(point => ({
+                x: new Date(point.timestamp),
+                y: point.average_heading_deg
+            }));
 
             return new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: labels,
                     datasets: [{
                         label: 'Heading (degrees)',
-                        data: headings,
+                        data: chartData,
                         borderColor: '#e74c3c',
                         backgroundColor: 'rgba(231, 76, 60, 0.1)',
                         fill: true,
@@ -994,6 +1007,13 @@
                             grid: { color: colors.grid }
                         },
                         x: {
+                            type: 'time',
+                            time: {
+                                unit: 'minute',
+                                displayFormats: {
+                                    minute: 'HH:mm:ss'
+                                }
+                            },
                             title: {
                                 display: true,
                                 text: 'Time',
@@ -1027,16 +1047,18 @@
             // Filter out data points where wind speed is not available
             const validData = trackData.filter(point => point.average_wind_speed_kn !== null && point.average_wind_speed_kn !== undefined);
 
-            const labels = validData.map(point => formatTime(point.timestamp));
-            const windSpeeds = validData.map(point => point.average_wind_speed_kn);
+            // Convert data to time-scale format with proper Date objects
+            const chartData = validData.map(point => ({
+                x: new Date(point.timestamp),
+                y: point.average_wind_speed_kn
+            }));
 
             return new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: labels,
                     datasets: [{
                         label: 'Wind Speed (knots)',
-                        data: windSpeeds,
+                        data: chartData,
                         borderColor: '#27ae60',
                         backgroundColor: 'rgba(39, 174, 96, 0.1)',
                         fill: true,
@@ -1059,6 +1081,13 @@
                             grid: { color: colors.grid }
                         },
                         x: {
+                            type: 'time',
+                            time: {
+                                unit: 'minute',
+                                displayFormats: {
+                                    minute: 'HH:mm:ss'
+                                }
+                            },
                             title: {
                                 display: true,
                                 text: 'Time',
