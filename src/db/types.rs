@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Instant, Duration};
 use crate::trip::Trip;
 use crate::position_utils::Position;
+use crate::utilities::EngineStatus;
 
 /// Encapsulates vessel status data for database insertion
 #[derive(Debug, Clone)]
@@ -12,7 +13,7 @@ pub struct VesselStatusOperation {
     pub average_speed_kn: f64,
     pub max_speed_kn: f64,
     pub is_moored: bool,
-    pub engine_on: bool,
+    pub engine_on: EngineStatus,
     pub total_distance_nm: f64,
     pub total_time_ms: u64,
     pub wind_speed_kn: Option<f64>,
@@ -70,7 +71,7 @@ pub struct TrackPoint {
     pub avg_speed_kn: Option<f64>,
     pub max_speed_kn: Option<f64>,
     pub moored: bool,
-    pub engine_on: bool,
+    pub engine_on: u8,  // 0=off, 1=on, 2=unknown
     pub total_distance_nm: Option<f64>,
     pub total_time_ms: u64,
     pub average_wind_speed_kn: Option<f64>,

@@ -19,7 +19,7 @@ impl VesselDatabase {
     ///     average_speed_kn DECIMAL(6,3) NOT NULL,
     ///     max_speed_kn DECIMAL(6,3) NOT NULL,
     ///     is_moored BOOLEAN NOT NULL,
-    ///     engine_on BOOLEAN NOT NULL DEFAULT 0,
+    ///     engine_on TINYINT(1) NOT NULL DEFAULT 2, -- 0 = off, 1 = on, 2 = unknown
     ///     total_distance_nm DOUBLE NOT NULL DEFAULT 0,
     ///     total_time_ms BIGINT NOT NULL DEFAULT 0,
     ///     average_wind_speed_kn DECIMAL(6,3),

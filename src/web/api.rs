@@ -315,9 +315,12 @@ pub async fn update_trip_description(
     info!(?params, "POST /api/trip_description called");
     
     match state.db.update_trip_description(params.id as i64, &params.description) {
-        Ok(()) => Ok(Json(ApiResponse::ok(()))),
+        Ok(()) => {
+            info!(trip_id = params.id, description = %params.description, "Trip description updated successfully");
+            Ok(Json(ApiResponse::ok(())))
+        },
         Err(e) => {
-            error!(error = %e, "Failed to update trip description");
+            error!(error = %e, trip_id = params.id, "Failed to update trip description");
             {
                 let bt = Backtrace::force_capture();
                 error!(?bt, "Backtrace for error");
@@ -562,6 +565,7 @@ pub async fn set_tracking_status(
     let response = TrackingStatusResponse {
         enabled: request.enabled,
     };
+    info!("Tracking status updated to: {}", request.enabled);
     Ok(Json(ApiResponse::ok(response)))
 }
 

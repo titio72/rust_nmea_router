@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS vessel_status (
     average_wind_speed_kn DECIMAL(6,3) COMMENT 'Average wind speed over reporting period in knots (NULL if no wind data)',
     average_wind_angle_deg DECIMAL(6,3) COMMENT 'Average wind direction over reporting period in degrees (NULL if no wind data)',
     is_moored BOOLEAN NOT NULL COMMENT 'TRUE if vessel is moored (position stable for 2+ minutes within 30m radius)',
-    engine_on BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'TRUE if engine is running',
+    engine_on TINYINT NOT NULL DEFAULT 2 COMMENT 'Engine status: 0=off, 1=on, 2=unknown',
     total_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Distance traveled since last report in nautical miles (straight-line Haversine)',
     total_time_ms BIGINT NOT NULL DEFAULT 0 COMMENT 'Time elapsed since last report in milliseconds',
     cog_deg DECIMAL(6,3) COMMENT 'Course over ground over reporting period in degrees (NULL if no position fix)',
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS environmental_data (
     value_avg FLOAT COMMENT 'Average value over collection period',
     value_max FLOAT COMMENT 'Maximum value over collection period',
     value_min FLOAT COMMENT 'Minimum value over collection period',
-    unit CHAR(10) COMMENT 'Unit of measurement (Pa, C, %, m/s, deg)',
+    unit CHAR(3) COMMENT 'Unit of measurement (Pa, C, %, kn, deg)',
     UNIQUE KEY unique_metric_time (timestamp, metric_id),
     INDEX idx_timestamp (timestamp),
     INDEX idx_metric (metric_id, timestamp)

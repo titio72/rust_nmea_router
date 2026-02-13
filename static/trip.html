@@ -130,6 +130,54 @@
             flex: 1;
             min-height: 300px;
         }
+        .mapLegend {
+            margin-top: 15px;
+            padding: 15px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+        }
+        .legendTitle {
+            font-weight: bold;
+            color: var(--text-bold);
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .legendItem {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .legendColor {
+            width: 16px;
+            height: 16px;
+            border-radius: 2px;
+            margin-right: 10px;
+            border: 1px solid var(--border-color);
+        }
+        .legendColorGradient {
+            width: 16px;
+            height: 16px;
+            margin-right: 10px;
+            background: linear-gradient(to right, #ff0000, #ffff00, #0000ff);
+            border-radius: 2px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: white;
+        }
+        .legendSubItem {
+            margin-left: 26px;
+            font-size: 12px;
+            color: var(--text-tertiary);
+        }
+        #map {
+            flex: 1;
+            min-height: 300px;
+        }
         .chartsContainer {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
@@ -421,7 +469,8 @@
                 displayEl.textContent = 'Entire Trip';
                 selectLeg(null);
             } else {
-                displayEl.textContent = 'Leg ' + leg.leg_number;
+                const totalLegs = currentLegs.length;
+                displayEl.textContent = 'Leg ' + leg.leg_number + ' of ' + totalLegs;
                 selectLeg(leg.leg_number);
             }
         }
@@ -717,6 +766,22 @@
             '</div>' +
             '<div class="mapContainer">' +
                 '<div id="map"></div>' +
+                '<div id="mapLegend" class="mapLegend">' +
+                    '<div class="legendTitle">Track Color Legend</div>' +
+                    '<div class="legendItem">' +
+                        '<div class="legendColor" style="background-color: #FFD700;"></div>' +
+                        '<span>Unknown Engine Status</span>' +
+                    '</div>' +
+                    '<div class="legendItem">' +
+                        '<div class="legendColor" style="background-color: #888888;"></div>' +
+                        '<span>Engine On (Motoring)</span>' +
+                    '</div>' +
+                    '<div class="legendItem">' +
+                        '<div class="legendColorGradient">●</div>' +
+                        '<span>Sailing (Engine Off) - Color by Speed</span>' +
+                    '</div>' +
+                    '<div class="legendSubItem">Red = Fast, Yellow = Medium, Blue = Slow</div>' +
+                '</div>' +
             '</div></div>' +
 
             '<div class="chartsContainer">' +
@@ -1604,13 +1669,16 @@
                 const point1 = trackPoints[i];
                 const point2 = trackPoints[i + 1];
 
-                // Determine color based on engine status
+                // Determine color based on engine status (0=off, 1=on, 2=unknown)
                 let color;
-                if (point2.engine_on) {
+                if (point2.engine_on === 1) {
                     // Use dark grey when engine is on (motoring)
                     color = '#888888';
+                } else if (point2.engine_on === 2) {
+                    // Use gold when engine status is unknown
+                    color = '#FFD700';
                 } else {
-                    // Use speed-based color when sailing
+                    // Use speed-based color when sailing (engine off)
                     const speed = point2.avg_speed_kn || point1.avg_speed_kn || 0;
                     color = getSpeedColor(speed);
                 }

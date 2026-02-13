@@ -2,13 +2,13 @@ use std::time::{Duration, Instant};
 use nmea2k::pgns::{CogSogRapidUpdate, HeadingReference, PositionRapidUpdate};
 use crate::mooring_detection::MooringDetectionQueue;
 use crate::position_utils::{Position, PositionQueue};
-use crate::utilities::{TimedQueue, calculate_true_wind};
+use crate::utilities::{TimedQueue, calculate_true_wind, EngineStatus};
 
 const MOORING_DETECTION_WINDOW: Duration = Duration::from_secs(180); // 3 minutes
 #[allow(dead_code)] // Used in mooring detection logic based on position (but we switched to VMG-based detection, so this is now unused)
 const MOORING_THRESHOLD_METERS: f64 = 30.0; // 30 meters radius
-const MOORING_THRESHOLD_VMG_KNOTS: f64 = 0.1; // 0.1 knots
-const MOORING_ACCURACY: f64 = 0.90; // 90% of positions within threshold
+const MOORING_THRESHOLD_VMG_KNOTS: f64 = 0.25; // 0.25 knots
+const MOORING_ACCURACY: f64 = 0.85; // 85% of positions within threshold
 const MAX_VALID_SOG_KN: f64 = 25.0; // 25 knots (noise filter)
 const MAX_POSITION_DEVIATION_METERS: f64 = 100.0; // Maximum distance from median (noise filter)
 const MIN_SAMPLES_FOR_VALIDATION: usize = 10; // Minimum samples required for validation 
@@ -21,7 +21,7 @@ pub struct VesselStatus {
     pub number_of_samples: usize,
     pub max_speed_kn: f64,       // Knots
     pub is_moored: bool,
-    pub engine_on: bool,
+    pub engine_on: EngineStatus,
     pub wind_speed_kn: Option<f64>,
     #[allow(dead_code)] // Used in database writes but not in internal logic
     pub max_wind_speed_kn: Option<f64>,
@@ -95,9 +95,10 @@ pub struct VesselMonitor {
     wind_angles: TimedQueue<f64>,
     headings: TimedQueue<f64>,
     last_event_time: Instant,
-    engine_on: bool,
+    engine_on: EngineStatus,
     status_report_ready: bool,
     first_report: bool,
+    mooring_status: Option<bool>, // None = unknown, Some(true) = moored, Some(false) = underway
 }
 
 impl VesselMonitor {
@@ -115,9 +116,10 @@ impl VesselMonitor {
             wind_angles: TimedQueue::new(sample_age_window),
             headings: TimedQueue::new(sample_age_window),
             last_event_time: now,
-            engine_on: false,
+            engine_on: EngineStatus::Unknown,
             status_report_ready: false,
             first_report: true,
+            mooring_status: None,
         }
     }
 
@@ -162,6 +164,16 @@ impl VesselMonitor {
             let cog_deg = cog_sog_msg.cog.to_degrees();
             let vmg_kn = sog_kn * (cog_deg - last_heading).to_radians().cos();
             self.vmg_for_mooring.add_sample(vmg_kn, timestamp);
+        } else {
+            // No valid heading available, cannot calculate VMG for mooring detection, but the raw sog is almost as good as an approximation for mooring detection, so we can still add the speed sample to the mooring detection queue
+            self.vmg_for_mooring.add_sample(sog_kn, timestamp);
+        }
+
+        // Update mooring status based on VMG
+        let new_status = Some(self.vmg_for_mooring.is_stationary(timestamp));
+        if new_status != self.mooring_status {
+            self.mooring_status = new_status;
+            println!("Mooring status changed: {:?}", self.mooring_status);
         }
 
         self.speeds.add_sample(sog_kn, timestamp);
@@ -190,7 +202,12 @@ impl VesselMonitor {
     /// Process engine rapid update to determine engine status
     /// Expected maximum rate is 1 Hz
     pub fn process_engine(&mut self, engine_msg: &nmea2k::pgns::EngineRapidUpdate, _timestamp: Instant) {
-        self.engine_on = engine_msg.is_engine_running();
+        // Determine engine status from RPM: > 100 = on, <= 100 = off, missing/invalid = unknown
+        self.engine_on = match engine_msg.engine_speed {
+            Some(rpm) if rpm > 100.0 => EngineStatus::On,
+            Some(rpm) if rpm <= 100.0 => EngineStatus::Off,
+            _ => EngineStatus::Unknown,
+        };
     }
 
     /// Process vessel heading message
@@ -261,7 +278,7 @@ impl VesselMonitor {
             number_of_samples,
             max_speed_kn,
             is_moored,
-            engine_on: self.engine_on,
+            engine_on: self.engine_on.clone(),
             timestamp,
             period: now.duration_since(start_sampling_time),
             wind_speed_kn,

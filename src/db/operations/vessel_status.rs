@@ -32,7 +32,7 @@ impl VesselDatabase {
                 "avg_speed" => status_op.average_speed_kn,
                 "max_speed" => status_op.max_speed_kn,
                 "is_moored" => status_op.is_moored,
-                "engine_on" => status_op.engine_on,
+                "engine_on" => status_op.engine_on.as_u8(),
                 "total_distance" => status_op.total_distance_nm,
                 "total_time" => status_op.total_time_ms,
                 "avg_wind_speed" => status_op.wind_speed_kn,
@@ -208,7 +208,8 @@ impl VesselDatabase {
             let average_speed_kn: Option<f64> = row.get_opt(3).and_then(|v| v.ok()).flatten();
             let max_speed_kn: Option<f64> = row.get_opt(4).and_then(|v| v.ok()).flatten();
             let is_moored: bool = row.get(5).ok_or("Failed to get is_moored")?;
-            let engine_on: bool = row.get(6).ok_or("Failed to get engine_on")?;
+            let engine_on_u8: u8 = row.get(6).ok_or("Failed to get engine_on")?;
+            let engine_on = crate::utilities::EngineStatus::from_u8(engine_on_u8);
             let total_distance_nm: Option<f64> = row.get_opt(7).and_then(|v| v.ok()).flatten();
             let total_time_ms: u64 = row.get(8).ok_or("Failed to get total_time_ms")?;
             let wind_speed_kn: Option<f64> = row.get_opt(9).and_then(|v| v.ok()).flatten();

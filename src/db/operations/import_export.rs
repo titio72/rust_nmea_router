@@ -92,7 +92,7 @@ impl VesselDatabase {
             let avg_speed: Option<f64> = row.get_opt(3).and_then(|v| v.ok()).flatten();
             let max_speed: Option<f64> = row.get_opt(4).and_then(|v| v.ok()).flatten();
             let is_moored: bool = row.get(5).ok_or("Missing is_moored")?;
-            let engine_on: bool = row.get(6).ok_or("Missing engine_on")?;
+            let engine_on: u8 = row.get(6).ok_or("Missing engine_on")?;  // 0=off, 1=on, 2=unknown
             let total_dist: Option<f64> = row.get_opt(7).and_then(|v| v.ok()).flatten();
             let total_time: Option<u64> = row.get_opt(8).and_then(|v| v.ok()).flatten();
             let wind_speed: Option<f64> = row.get_opt(9).and_then(|v| v.ok()).flatten();
@@ -262,9 +262,12 @@ impl VesselDatabase {
                 let is_moored = status["is_moored"]
                     .as_bool()
                     .ok_or("Missing is_moored in vessel_status")?;
-                let engine_on = status["engine_on"]
-                    .as_bool()
-                    .ok_or("Missing engine_on in vessel_status")?;
+                // Handle both old boolean format and new u8 format for engine_on
+                let engine_on: u8 = match &status["engine_on"] {
+                    v if v.is_boolean() => if v.as_bool().unwrap_or(false) { 1 } else { 0 },
+                    v if v.is_u64() => v.as_u64().unwrap_or(2) as u8,
+                    _ => 2,  // Default to unknown
+                };
                 let total_dist = status["total_distance_nm"].as_f64();
                 let total_time = status["total_time_ms"].as_u64();
                 let wind_speed = status["average_wind_speed_kn"].as_f64();

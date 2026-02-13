@@ -1,4 +1,5 @@
-use std::{time::{SystemTime}};
+use std::{time::{SystemTime}}; 
+use crate::utilities::EngineStatus;
 
 #[derive(Debug, Clone)]
 pub struct Trip {
@@ -30,20 +31,22 @@ impl Trip {
     }
     
     /// Update the trip with new vessel status data
+    /// Unknown engine status is treated as sailing (conservative approach)
     pub fn update(&mut self, 
         end_timestamp: SystemTime,
         distance: f64, 
         time_ms: u64, 
-        engine_on: bool, 
+        engine_on: EngineStatus, 
         is_moored: bool) {
         self.end_timestamp = end_timestamp;
         
         if is_moored {
             self.total_time_moored += time_ms;
-        } else if engine_on {
+        } else if engine_on.is_on() {
             self.total_distance_motoring += distance;
             self.total_time_motoring += time_ms;
         } else {
+            // Both Off and Unknown are treated as sailing
             self.total_distance_sailed += distance;
             self.total_time_sailing += time_ms;
         }
@@ -98,7 +101,7 @@ mod tests {
         let mut trip = Trip::new(now, "Test Trip".to_string());
         
         let later = now + Duration::from_secs(100);
-        trip.update(later, 1000.0, 100000, false, false);
+        trip.update(later, 1000.0, 100000, EngineStatus::Off, false);
         
         assert_eq!(trip.total_distance_sailed, 1000.0);
         assert_eq!(trip.total_time_sailing, 100000);
@@ -113,7 +116,7 @@ mod tests {
         let mut trip = Trip::new(now, "Test Trip".to_string());
         
         let later = now + Duration::from_secs(100);
-        trip.update(later, 2000.0, 100000, true, false);
+        trip.update(later, 2000.0, 100000, EngineStatus::On, false);
         
         assert_eq!(trip.total_distance_motoring, 2000.0);
         assert_eq!(trip.total_time_motoring, 100000);
@@ -128,7 +131,7 @@ mod tests {
         let mut trip = Trip::new(now, "Test Trip".to_string());
         
         let later = now + Duration::from_secs(100);
-        trip.update(later, 0.0, 100000, false, true);
+        trip.update(later, 0.0, 100000, EngineStatus::Off, true);
         
         assert_eq!(trip.total_time_moored, 100000);
         assert_eq!(trip.total_distance_sailed, 0.0);
@@ -161,8 +164,8 @@ mod tests {
         let mut trip = Trip::new(now, "Test Trip".to_string());
         
         let later = now + Duration::from_secs(100);
-        trip.update(later, 1000.0, 50000, false, false); // sailing
-        trip.update(later, 500.0, 50000, true, false);   // motoring
+        trip.update(later, 1000.0, 50000, EngineStatus::Off, false); // sailing
+        trip.update(later, 500.0, 50000, EngineStatus::On, false);   // motoring
         
         assert_eq!(trip.total_distance(), 1500.0);
     }
@@ -173,9 +176,9 @@ mod tests {
         let mut trip = Trip::new(now, "Test Trip".to_string());
         
         let later = now + Duration::from_secs(100);
-        trip.update(later, 1000.0, 30000, false, false); // sailing
-        trip.update(later, 500.0, 40000, true, false);   // motoring
-        trip.update(later, 0.0, 50000, false, true);     // moored
+        trip.update(later, 1000.0, 30000, EngineStatus::Off, false); // sailing
+        trip.update(later, 500.0, 40000, EngineStatus::On, false);   // motoring
+        trip.update(later, 0.0, 50000, EngineStatus::Off, true);     // moored
         
         assert_eq!(trip.total_time(), 120000);
     }

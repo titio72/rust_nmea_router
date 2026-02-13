@@ -14,10 +14,11 @@ This project is a learning and production-grade effort, inspired by https://gith
   - Environmental Data (130306, 130312, 130313, 130314)
   - Attitude/Roll (127257)
   - Depth & Water Speed (128267, 128259)
+  - Engine Data (127488)
   - System Time (126992)
 - **REST API & Web Interface**: JSON endpoints for trips, track data, environmental metrics, and speed distribution analysis, plus responsive web dashboard with interactive charts and Google Maps integration
 - **Adaptive Database Persistence**:
-  - Moored vessels: 30-minute intervals
+  - Moored vessels: 5-minute intervals
   - Underway vessels: 30-second intervals
   - Per-metric environmental intervals
 - **Database Resilience**:
@@ -25,7 +26,7 @@ This project is a learning and production-grade effort, inspired by https://gith
   - Automatic retry on failed writes
   - Transaction atomicity for vessel status and trip updates
   - Continues operation if database unavailable
-- **Time Synchronization Protection**: Blocks database writes when NMEA2000 time differs from system time by more than 500ms (configurable)
+- **Time Synchronization Protection**: Blocks database writes when NMEA2000 time differs from system time by more than 1000ms (configurable)
 - **Configuration Validation**: Comprehensive validation with auto-correction and sensible defaults
 - **CLI Options**: Test configuration (--validate-config), display help (--help)
 - **Automatic Reconnection**: Retries CAN interface connection every 10 seconds on failure
@@ -127,7 +128,7 @@ Edit `config.json` to customize settings:
   - Invalid values will cause startup failure
 
 #### Time Synchronization
-- `skew_threshold_ms`: Maximum allowed time difference between NMEA2000 and system time in milliseconds. Database writes are blocked when exceeded (default: 500ms, minimum: 100ms)
+- `skew_threshold_ms`: Maximum allowed time difference between NMEA2000 and system time in milliseconds. Database writes are blocked when exceeded (default: 1000ms, minimum: 100ms)
 - `set_system_time`: Enable automatic system time synchronization from NMEA2000 GPS time (default: false)
   - **Important**: Requires root/sudo privileges to set system time
   - Useful for systems without NTP or other time synchronization
@@ -144,8 +145,8 @@ Edit `config.json` to customize settings:
 - `database_name`: Target database name
 
 #### Vessel Status Intervals
-- `interval_moored_seconds`: DB write interval when vessel is moored (default: 1800, valid range: 30-600)
-- `interval_underway_seconds`: DB write interval when vessel is underway (default: 30, valid range: 30-600)
+- `interval_moored_seconds`: DB write interval when vessel is moored (default: 300, valid range: 30-3600)
+- `interval_underway_seconds`: DB write interval when vessel is underway (default: 30, valid range: 10-600)
 
 #### Environmental Metrics Intervals
 Individual persistence intervals for each environmental metric (all values in seconds, valid range: 30-600):
@@ -178,8 +179,8 @@ The application automatically validates the configuration on startup and applies
 
 #### Skew Threshold Validation
 - **Minimum Value**: 100 milliseconds
-- **Below Minimum**: Reverts to default 500ms with a warning
-- **Example**: `skew_threshold_ms: 50` will revert to 500ms
+- **Below Minimum**: Reverts to default 1000ms with a warning
+- **Example**: `skew_threshold_ms: 50` will revert to 1000ms
 
 All validation errors are logged with warnings but do not prevent startup (except for invalid CAN interface names).
 
@@ -546,7 +547,7 @@ Tests cover:
 
 4. **Vessel Monitor** ([vessel_monitor.rs](src/vessel_monitor.rs))
    - Tracks vessel position, speed, and heading
-   - Detects mooring status using position history
+   - Detects mooring status using the mooring detection algorithm
    - Adaptive database persistence (moored vs underway)
 
 5. **Environmental Monitor** ([environmental_monitor.rs](src/environmental_monitor.rs))
@@ -555,14 +556,14 @@ Tests cover:
    - Per-metric persistence intervals for efficient storage
    - Metric-by-metric database writes for optimal performance
 
-6. **Database** ([db.rs](src/db.rs))
+6. **Database** ([src/db/mod.rs](src/db/mod.rs))
    - Connection pool management with health checks
    - Transaction support for atomic operations
    - Vessel status and trip inserts (atomic)
    - Environmental metrics inserts
    - Automatic reconnection with exponential backoff
 
-7. **PGN Decoders** ([pgns/](src/pgns/))
+7. **PGN Decoders** ([nmea2k/src/pgns/](nmea2k/src/pgns/))
    - Individual decoders for each supported PGN
    - Binary data parsing with validation
    - Unit conversions (radians to degrees, Kelvin to Celsius, etc.)
@@ -574,7 +575,7 @@ CAN Bus (vcan0/can0) [500ms timeout]
     ↓
 SocketCAN Interface
     ↓
-N2kStreamReader (Fast Packet Assembly)
+StreamReader (Fast Packet Assembly)
     ↓
 PGN Decoders (Binary → Structured Data)
     ↓
@@ -588,14 +589,13 @@ Database (MariaDB) [if time synchronized]
 
 ### Mooring Detection Algorithm
 
-The application automatically detects when a vessel is moored:
+The application automatically detects when a vessel is moored using a velocity-based algorithm:
 
-1. Maintains a 2-minute sliding window of position samples
-2. Calculates maximum distance between any two positions in the window
-3. If all positions are within 10 meters, vessel is considered moored
-4. Mooring status affects database persistence interval:
-   - Moored: 30-minute intervals (reduces database load)
-   - Underway: 30-second intervals (higher resolution tracking)
+1.  Maintains a 3-minute sliding window of speed (Velocity Made Good) samples.
+2.  If 90% of the samples in the window are below 0.1 knots, the vessel is considered moored.
+3.  Mooring status affects the database persistence interval:
+    *   **Moored**: 5-minute intervals (reduces database load)
+    *   **Underway**: 30-second intervals (higher resolution tracking)
 
 ### Time Synchronization Protection
 
@@ -692,6 +692,7 @@ Each metric is persisted independently based on its configured interval.
 | 127250 | Vessel Heading | Heading (Magnetic/True) |
 | 127251 | Rate of Turn | ROT (degrees/second) |
 | 127257 | Attitude | Yaw, Pitch, Roll |
+| 127488 | Engine Data | Engine RPM |
 | 128259 | Speed (Water Referenced) | Speed through water |
 | 128267 | Water Depth | Depth, Offset |
 | 129025 | Position Rapid Update | Latitude, Longitude |
@@ -719,7 +720,7 @@ CREATE TABLE vessel_status (
   average_wind_speed_kn DECIMAL(6,3) COMMENT 'Average wind speed over reporting period in knots (NULL if no wind data)',
   average_wind_angle_deg DECIMAL(6,3) COMMENT 'Average wind direction over reporting period in degrees (NULL if no wind data)',
   is_moored BOOLEAN NOT NULL COMMENT 'TRUE if vessel is moored (position stable for 2+ minutes within 30m radius)',
-  engine_on BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'TRUE if engine is running',
+  engine_on TINYINT NOT NULL DEFAULT 2 COMMENT '1 if engine is running, 0 if the engine is off, and 2 if unknown',
   total_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Distance traveled since last report in nautical miles (straight-line Haversine)',
   total_time_ms BIGINT NOT NULL DEFAULT 0 COMMENT 'Time elapsed since last report in milliseconds',
   INDEX idx_timestamp (timestamp),
@@ -859,19 +860,19 @@ src/
 ├── stream_reader.rs          # NMEA2000 frame assembly
 └── pgns/                     # PGN decoders
     ├── mod.rs
-    ├── pgn126992.rs          # System Time
-    ├── pgn127250.rs          # Vessel Heading
-    ├── pgn127251.rs          # Rate of Turn
-    ├── pgn127257.rs          # Attitude
-    ├── pgn128259.rs          # Speed (Water)
-    ├── pgn128267.rs          # Water Depth
-    ├── pgn129025.rs          # Position Rapid
-    ├── pgn129026.rs          # COG & SOG Rapid
-    ├── pgn129029.rs          # GNSS Position
-    ├── pgn130306.rs          # Wind Data
-    ├── pgn130312.rs          # Temperature
-    ├── pgn130313.rs          # Humidity
-    └── pgn130314.rs          # Actual Pressure
+    ├── attitude.rs          # Attitude
+    ├── cog_sog.rs           # COG & SOG Rapid
+    ├── depth.rs          # Water Depth
+    ├── engine.rs          # Engine Data
+    ├── heading.rs          # Vessel Heading
+    ├── humidity.rs          # Humidity
+    ├── position.rs          # Position Rapid
+    ├── pressure.rs          # Actual Pressure
+    ├── rate_of_turn.rs          # Rate of Turn
+    ├── speed.rs          # Speed (Water)
+    ├── system_time.rs          # System Time
+    ├── temperature.rs          # Temperature
+    └── wind.rs          # Wind Data
 ```
 
 

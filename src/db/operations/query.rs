@@ -230,10 +230,9 @@ impl VesselDatabase {
                     .and_then(|v| v.ok())
                     .map(|v| v != 0)
                     .unwrap_or(false),
-                engine_on: row.get_opt::<i32, _>("engine_on")
+                engine_on: row.get_opt::<u8, _>("engine_on")
                     .and_then(|v| v.ok())
-                    .map(|v| v != 0)
-                    .unwrap_or(false),
+                    .unwrap_or(2),  // Default to unknown if not available
                 total_distance_nm: row.get_opt::<f64, _>("total_distance_nm")
                     .and_then(|v| v.ok()),
                 total_time_ms: row.get_opt::<u64, _>("total_time_ms")
@@ -357,14 +356,15 @@ impl VesselDatabase {
                 .and_then(|v| v.ok());
             let distance: Option<f64> = row.get_opt("total_distance_nm")
                 .and_then(|v| v.ok());
-            let engine_on: i32 = row.get_opt("engine_on")
+            let engine_on: u8 = row.get_opt("engine_on")
                 .and_then(|v| v.ok())
-                .unwrap_or(0);
+                .unwrap_or(2);  // Default to unknown
             
             if let (Some(speed), Some(distance)) = (speed, distance) {
                 let bucket_index = ((speed / bucket_size).floor() as usize).min(num_buckets - 1);
                 
-                if engine_on != 0 {
+                // Only count as motoring if engine_on == 1, treat unknown (2) as sailing
+                if engine_on == 1 {
                     motoring_buckets[bucket_index] += distance;
                 } else {
                     sailing_buckets[bucket_index] += distance;
@@ -515,7 +515,8 @@ impl VesselDatabase {
         for row in &results {
             let timestamp: String = row.get("timestamp").unwrap_or_default();
             let is_moored: bool = row.get("is_moored").unwrap_or(false);
-            let engine_on: bool = row.get("engine_on").unwrap_or(false);
+            let engine_on_u8: u8 = row.get("engine_on").unwrap_or(2); // 0=off, 1=on, 2=unknown
+            let engine_on = engine_on_u8 == 1; // Only treat 1 (On) as true
             let interval_distance: f64 = row.get("total_distance_nm").unwrap_or(0.0);
             let interval_time: u64 = row.get("total_time_ms").unwrap_or(0);
 
@@ -635,7 +636,7 @@ impl VesselDatabase {
                 .and_then(|v| v.ok());
             let engine_on: bool = row.get_opt("engine_on")
                 .and_then(|v| v.ok())
-                .map(|v: i32| v != 0)
+                .map(|v: u8| v == 1) // Only treat 1 (On) as true
                 .unwrap_or(false);
 
             if let (Some(lat), Some(lon), Some(spd)) = (latitude, longitude, speed) {
@@ -919,7 +920,8 @@ mod tests {
             let first_status = &vessel_statuses[0];
             assert!(first_status["timestamp"].is_string(), "Status should have timestamp");
             assert!(first_status["is_moored"].is_boolean(), "Status should have is_moored");
-            assert!(first_status["engine_on"].is_boolean(), "Status should have engine_on");
+            // engine_on is now a number (0=off, 1=on, 2=unknown)
+            assert!(first_status["engine_on"].is_u64() || first_status["engine_on"].is_i64(), "Status should have engine_on as number");
         }
         
         // Clean up

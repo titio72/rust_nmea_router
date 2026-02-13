@@ -1,6 +1,6 @@
 use tracing::{info, warn, debug};
 
-use crate::utilities::dirty_instant_to_systemtime;
+use crate::utilities::{dirty_instant_to_systemtime, EngineStatus};
 use crate::vessel_monitor::{VesselStatus};
 use crate::db::{VesselDatabase, TripOperation, VesselStatusOperation};
 use crate::trip::Trip;
@@ -242,7 +242,7 @@ mod tests {
             average_speed_kn: 0.0,
             max_speed_kn: 0.0,
             is_moored: true,
-            engine_on: false,
+            engine_on: EngineStatus::Off,
             total_distance_nm: 0.0,
             total_time_ms: 0,
             wind_speed_kn: None,
@@ -272,7 +272,7 @@ mod tests {
             average_speed_kn: 5.0,
             max_speed_kn: 10.0,
             is_moored: false,
-            engine_on: true,
+            engine_on: EngineStatus::On,
             total_distance_nm: 1.5,
             total_time_ms: 1000,
             wind_speed_kn: Some(15.0),

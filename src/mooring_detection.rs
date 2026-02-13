@@ -2,7 +2,7 @@ use std::{collections::VecDeque, time::{Duration, Instant}};
 
 use crate::utilities::Sample;
 
-const MINUM_NUMBER_OF_SAMPLES_FOR_MOORING_DETECTION: usize = 100;
+const MIN_SAMPLES_FOR_MOORING_DETECTION: usize = 100;
 
 #[derive(Debug, Clone)]
 pub struct MooringDetectionQueue {
@@ -53,11 +53,14 @@ impl MooringDetectionQueue {
     }
 
     pub fn is_stationary(&self, _now: Instant) -> bool {
-        if self.samples_total < MINUM_NUMBER_OF_SAMPLES_FOR_MOORING_DETECTION {
-            return false;
+        if self.samples_total == 0 {
+            return true; // No samples, assume stationary
+        } else if self.samples_total < MIN_SAMPLES_FOR_MOORING_DETECTION {
+            // Not enough data to determine, assume stationary to avoid false negatives
+            return self.samples_below_threshold == self.samples_total; // All samples must be below threshold to consider stationary
+        } else {
+            (self.samples_below_threshold as f64 / self.samples_total as f64) >= self.accuracy
         }
-        let ratio = self.samples_below_threshold as f64 / self.samples_total as f64;
-        ratio >= self.accuracy
     }
 }
 
@@ -160,7 +163,7 @@ mod tests {
         }
         
         assert_eq!(queue.samples_total, 50);
-        assert!(!queue.is_stationary(now)); // Should return false
+        assert!(queue.is_stationary(now)); // Should return true
     }
 
     #[test]

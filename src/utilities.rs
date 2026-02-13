@@ -111,6 +111,41 @@ pub fn haversine_distance_nm(lat1_deg: f64, lon1_deg: f64, lat2_deg: f64, lon2_d
     radius_earth_nm * c
 }
 
+/// Engine status with three possible states
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum EngineStatus {
+    Off = 0,
+    On = 1,
+    Unknown = 2,
+}
+
+impl EngineStatus {
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            0 => EngineStatus::Off,
+            1 => EngineStatus::On,
+            _ => EngineStatus::Unknown,
+        }
+    }
+    
+    pub fn as_u8(&self) -> u8 {
+        *self as u8
+    }
+    
+    pub fn is_on(&self) -> bool {
+        matches!(self, EngineStatus::On)
+    }
+    
+    pub fn is_off(&self) -> bool {
+        matches!(self, EngineStatus::Off)
+    }
+    
+    pub fn is_unknown(&self) -> bool {
+        matches!(self, EngineStatus::Unknown)
+    }
+}
+
 #[derive(Debug)]
 pub enum VariationError {
     InvalidDate,
