@@ -3,6 +3,7 @@ use std::error::Error;
 use chrono::NaiveDateTime;
 use mysql::params;
 use mysql::prelude::Queryable;
+use tracing::info;
 
 impl VesselDatabase {
     pub fn update_trip_description(&self, trip_id: i64, new_description: &str) -> Result<(), Box<dyn Error>> {
@@ -21,9 +22,11 @@ impl VesselDatabase {
         let mut conn = self.pool.get_conn()
             .map_err(|e| format!("Database connection error: {}", e))?;
 
+        let mut tx = conn.start_transaction(mysql::TxOpts::default())?;
+
         // First, fetch the trip to get its time range
-        let trip_row: Option<mysql::Row> = conn.exec_first(
-            r"SELECT start_timestamp, end_timestamp FROM trips WHERE id = :trip_id",
+        let trip_row: Option<mysql::Row> = tx.exec_first(
+            r"SELECT DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f') as start_timestamp, DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S.%f') as end_timestamp FROM trips WHERE id = :trip_id",
             params! {
                 "trip_id" => trip_id,
             },
@@ -33,17 +36,17 @@ impl VesselDatabase {
             return Err("Trip not found".into());
         }
 
-        let trip_row = trip_row.unwrap();
-        let start_timestamp: String = trip_row.get_opt("start_timestamp")
-            .and_then(|v| v.ok())
+        let mut trip_row = trip_row.unwrap();
+        let start_timestamp: String = trip_row
+            .take("start_timestamp")
             .ok_or("Missing start_timestamp")?;
-        let end_timestamp: String = trip_row.get_opt("end_timestamp")
-            .and_then(|v| v.ok())
+        let end_timestamp: String = trip_row
+            .take("end_timestamp")
             .ok_or("Missing end_timestamp")?;
 
         // Delete environmental data in the time range
-        conn.exec_drop(
-            r"DELETE FROM environmental_monitoring 
+        tx.exec_drop(
+            r"DELETE FROM environmental_data 
               WHERE timestamp >= :start AND timestamp <= :end",
             params! {
                 "start" => &start_timestamp,
@@ -52,7 +55,7 @@ impl VesselDatabase {
         ).map_err(|e| format!("Failed to delete environmental data: {}", e))?;
 
         // Delete vessel status data in the time range
-        conn.exec_drop(
+        tx.exec_drop(
             r"DELETE FROM vessel_status 
               WHERE timestamp >= :start AND timestamp <= :end",
             params! {
@@ -62,12 +65,14 @@ impl VesselDatabase {
         ).map_err(|e| format!("Failed to delete vessel status data: {}", e))?;
 
         // Delete the trip record
-        conn.exec_drop(
+        tx.exec_drop(
             r"DELETE FROM trips WHERE id = :trip_id",
             params! {
                 "trip_id" => trip_id,
             },
         ).map_err(|e| format!("Failed to delete trip: {}", e))?;
+
+        tx.commit()?;
 
         Ok(())
     }
@@ -76,9 +81,11 @@ impl VesselDatabase {
         let mut conn = self.pool.get_conn()
             .map_err(|e| format!("Database connection error: {}", e))?;
 
+        let mut tx = conn.start_transaction(mysql::TxOpts::default())?;
+
         // Fetch the trip record
-        let trip_row: Option<mysql::Row> = conn.exec_first(
-            r"SELECT start_timestamp, end_timestamp FROM trips WHERE id = :trip_id",
+        let trip_row: Option<mysql::Row> = tx.exec_first(
+            r"SELECT DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f') as start_timestamp, DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S.%f') as end_timestamp FROM trips WHERE id = :trip_id",
             params! {
                 "trip_id" => trip_id,
             },
@@ -88,22 +95,22 @@ impl VesselDatabase {
             return Err("Trip not found".into());
         }
 
-        let trip_row = trip_row.unwrap();
-        let original_start: String = trip_row.get_opt("start_timestamp")
-            .and_then(|v| v.ok())
+        let mut trip_row = trip_row.unwrap();
+        let original_start: String = trip_row
+            .take("start_timestamp")
             .ok_or("Missing start_timestamp")?;
-        let original_end: String = trip_row.get_opt("end_timestamp")
-            .and_then(|v| v.ok())
+        let original_end: String = trip_row
+            .take("end_timestamp")
             .ok_or("Missing end_timestamp")?;
 
         // Parse timestamps to work with them
-        let start_dt = NaiveDateTime::parse_from_str(&original_start, "%Y-%m-%d %H:%M:%S")
+        let start_dt = NaiveDateTime::parse_from_str(&original_start, "%Y-%m-%d %H:%M:%S%.f")
             .map_err(|e| format!("Failed to parse start timestamp: {}", e))?;
-        let end_dt = NaiveDateTime::parse_from_str(&original_end, "%Y-%m-%d %H:%M:%S")
+        let end_dt = NaiveDateTime::parse_from_str(&original_end, "%Y-%m-%d %H:%M:%S%.f")
             .map_err(|e| format!("Failed to parse end timestamp: {}", e))?;
 
         // Find when the boat starts moving: first timestamp where is_moored = 0
-        let first_moving: Option<mysql::Row> = conn.exec_first(
+        let first_moving: Option<mysql::Row> = tx.exec_first(
             r"SELECT timestamp FROM vessel_status 
               WHERE timestamp >= :start AND timestamp <= :end AND is_moored = 0
               ORDER BY timestamp ASC LIMIT 1",
@@ -114,7 +121,7 @@ impl VesselDatabase {
         ).map_err(|e| format!("Failed to find first moving timestamp: {}", e))?;
 
         // Find when the boat gets permanently moored: find last is_moored = 0, then first is_moored = 1 after that
-        let last_moving: Option<mysql::Row> = conn.exec_first(
+        let last_moving: Option<mysql::Row> = tx.exec_first(
             r"SELECT timestamp FROM vessel_status 
               WHERE timestamp >= :start AND timestamp <= :end AND is_moored = 0
               ORDER BY timestamp DESC LIMIT 1",
@@ -128,7 +135,7 @@ impl VesselDatabase {
             let last_moving_ts: String = last_mov_row.get_opt("timestamp")
                 .and_then(|v| v.ok())
                 .ok_or("Missing timestamp in last moving row")?;
-            conn.exec_first(
+            tx.exec_first(
                 r"SELECT timestamp FROM vessel_status 
                   WHERE timestamp > :last_moving AND timestamp <= :end AND is_moored = 1
                   ORDER BY timestamp ASC LIMIT 1",
@@ -179,8 +186,8 @@ impl VesselDatabase {
         };
 
         // Delete environmental_monitoring data outside the new range
-        conn.exec_drop(
-            r"DELETE FROM environmental_monitoring 
+        tx.exec_drop(
+            r"DELETE FROM environmental_data 
               WHERE (timestamp < :new_start OR timestamp > :new_end)
               AND timestamp >= :orig_start AND timestamp <= :orig_end",
             params! {
@@ -192,7 +199,7 @@ impl VesselDatabase {
         ).map_err(|e| format!("Failed to delete trimmed environmental data: {}", e))?;
 
         // Delete vessel_status data outside the new range
-        conn.exec_drop(
+        tx.exec_drop(
             r"DELETE FROM vessel_status 
               WHERE (timestamp < :new_start OR timestamp > :new_end)
               AND timestamp >= :orig_start AND timestamp <= :orig_end",
@@ -205,7 +212,7 @@ impl VesselDatabase {
         ).map_err(|e| format!("Failed to delete trimmed vessel status data: {}", e))?;
 
         // Update the trip with new timestamps and recalculate total_time_moored
-        conn.exec_drop(
+        tx.exec_drop(
             r"UPDATE trips SET 
                 start_timestamp = :new_start, 
                 end_timestamp = :new_end,
@@ -218,6 +225,7 @@ impl VesselDatabase {
             },
         ).map_err(|e| format!("Failed to update trip: {}", e))?;
 
+        tx.commit()?;
         Ok(())
     }
 }
