@@ -4,6 +4,8 @@ use tracing::{info, warn};
 
 pub use crate::stream_reader::N2kFrame;
 
+const CAN_CONNECTION_RETRY_INTERVAL_SECS: u64 = 5; // Interval between CAN connection retries
+
 /// Opens a CAN socket with automatic retry on failure
 /// 
 /// # Arguments
@@ -20,8 +22,8 @@ pub fn open_can_socket_with_retry(interface: &str) -> CanSocket {
             }
             Err(e) => {
                 warn!("Failed to open CAN interface '{}': {}", interface, e);
-                warn!("Retrying in 10 seconds...");
-                std::thread::sleep(Duration::from_secs(10));
+                warn!("Retrying in {} seconds...", CAN_CONNECTION_RETRY_INTERVAL_SECS);
+                std::thread::sleep(Duration::from_secs(CAN_CONNECTION_RETRY_INTERVAL_SECS));
             }
         }
     }

@@ -1,6 +1,6 @@
 use tracing::{info, warn, debug};
 
-use crate::utilities::{dirty_instant_to_systemtime, EngineStatus};
+use crate::utilities::{dirty_instant_to_systemtime};
 use crate::vessel_monitor::{VesselStatus};
 use crate::db::{VesselDatabase, TripOperation, VesselStatusOperation};
 use crate::trip::Trip;
@@ -15,6 +15,8 @@ pub struct VesselStatusState {
 pub struct VesselStatusHandler {
     state: VesselStatusState,
 }
+
+const MAXIMUM_AGE_VALID_PREVIOUS_REPORT_SECS: u64 = 6 * 3600; // 6 hours - If the last persisted status is older than this, we won't use it for vector calculations
 
 impl VesselStatusHandler {
     pub fn new() -> Self {
@@ -72,7 +74,7 @@ impl VesselStatusHandler {
 
     fn shall_accept_last_status(&self, last_status: &Option<VesselStatusOperation>, new_status: &VesselStatus) -> bool {
         if let Some(last_status) = last_status {
-            new_status.timestamp.duration_since(last_status.timestamp) < std::time::Duration::from_secs(3600 /* 1 hour */) 
+            new_status.timestamp.duration_since(last_status.timestamp) < std::time::Duration::from_secs(MAXIMUM_AGE_VALID_PREVIOUS_REPORT_SECS) 
                 && new_status.get_effective_position().distance_to_nm(&last_status.position) < 8.0
         } else {
             false

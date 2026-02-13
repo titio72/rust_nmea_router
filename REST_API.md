@@ -245,7 +245,7 @@ Retrieve environmental sensor data (temperature, pressure, humidity, wind, etc.)
 - `2` - Cabin Temperature (°C)
 - `3` - Water Temperature (°C)
 - `4` - Humidity (%)
-- `5` - Wind Speed (m/s)
+- `5` - Wind Speed (knots)
 - `6` - Wind Direction (degrees)
 - `7` - Roll (degrees)
 
@@ -339,6 +339,546 @@ curl -X POST http://localhost:8080/api/trip_description \
   "status": "error",
   "data": null,
   "error": "Trip not found or database error"
+}
+```
+
+---
+
+### 6. Delete Trip
+
+Delete a trip and all associated data from the database.
+
+**Endpoint**: `DELETE /api/delete_trip`
+
+**Query Parameters**:
+- `id` (required, integer): Trip ID to delete
+
+**Example**:
+```bash
+curl -X DELETE "http://localhost:8080/api/delete_trip?id=132"
+```
+
+**Success Response**:
+```json
+{
+  "status": "ok",
+  "data": null,
+  "error": null
+}
+```
+
+**Error Response**:
+```json
+{
+  "status": "error",
+  "data": null,
+  "error": "Trip not found"
+}
+```
+
+---
+
+### 7. Trim Trip
+
+Remove waypoints from the beginning and end of a trip to clean up data around mooring events.
+
+**Endpoint**: `POST /api/trim_trip`
+
+**Query Parameters**:
+- `id` (required, integer): Trip ID to trim
+
+**Example**:
+```bash
+curl -X POST "http://localhost:8080/api/trim_trip?id=132"
+```
+
+**Success Response**:
+```json
+{
+  "status": "ok",
+  "data": null,
+  "error": null
+}
+```
+
+---
+
+### 8. Export Trip
+
+Export a trip to a JSON file for backup or sharing.
+
+**Endpoint**: `GET /api/export_trip`
+
+**Query Parameters**:
+- `id` (required, integer): Trip ID to export
+- `path` (optional, string): Custom export file path (default: `static/exports/trip_{id}.json`)
+
+**Example**:
+```bash
+# Export to default location
+curl "http://localhost:8080/api/export_trip?id=132"
+
+# Export to custom location
+curl "http://localhost:8080/api/export_trip?id=132&path=custom_exports/my_trip.json"
+```
+
+**Success Response**:
+```json
+{
+  "status": "ok",
+  "data": "Trip 132 exported to static/exports/trip_132.json",
+  "error": null
+}
+```
+
+---
+
+### 9. Import Trip
+
+Import a previously exported trip from a JSON file.
+
+**Endpoint**: `POST /api/import_trip`
+
+**Content-Type**: `multipart/form-data`
+
+**Form Fields**:
+- `file` (required, file): JSON file containing trip data
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/import_trip \
+  -F "file=@path/to/trip_132.json"
+```
+
+**Success Response**:
+```json
+{
+  "status": "ok",
+  "data": "Trip imported successfully with ID: 145",
+  "error": null
+}
+```
+
+**Error Response**:
+```json
+{
+  "status": "error",
+  "data": null,
+  "error": "Invalid JSON format or missing required fields"
+}
+```
+
+---
+
+### 10. List Exports
+
+List all available exported trip files in the exports directory.
+
+**Endpoint**: `GET /api/list_exports`
+
+**Example**:
+```bash
+curl http://localhost:8080/api/list_exports
+```
+
+**Response**:
+```json
+{
+  "status": "ok",
+  "data": [
+    {
+      "name": "trip_132.json",
+      "size": 45832,
+      "modified": "2026-02-13 15:30:45 UTC"
+    },
+    {
+      "name": "trip_131.json",
+      "size": 38291,
+      "modified": "2026-02-12 10:15:22 UTC"
+    }
+  ],
+  "error": null
+}
+```
+
+**Fields**:
+- `name`: Filename of the export
+- `size`: File size in bytes
+- `modified`: Last modification time (UTC)
+
+---
+
+### 11. Get Speed Distribution
+
+Retrieve speed distribution histogram data showing time spent at different speed ranges.
+
+**Endpoint**: `GET /api/speed_distribution`
+
+**Query Parameters**:
+- `id` (optional, integer): Filter by specific trip
+- `start` (optional, string): Start date/time (ISO 8601 format)
+- `end` (optional, string): End date/time (ISO 8601 format)
+
+**Example**:
+```bash
+# Get speed distribution for a specific trip
+curl "http://localhost:8080/api/speed_distribution?id=132"
+
+# Get speed distribution for a date range
+curl "http://localhost:8080/api/speed_distribution?start=2026-02-01T00:00:00&end=2026-02-03T23:59:59"
+```
+
+**Response**:
+```json
+{
+  "status": "ok",
+  "data": {
+    "labels": ["0.0-0.5", "0.5-1.0", "1.0-1.5", "1.5-2.0", "2.0-2.5"],
+    "sailing": [0.05, 0.08, 0.15, 0.20, 0.18],
+    "motoring": [0.02, 0.10, 0.12, 0.08, 0.03]
+  },
+  "error": null
+}
+```
+
+**Fields**:
+- `labels`: Speed range buckets in knots (0.5 knot increments)
+- `sailing`: Percentage of time spent sailing in each speed range
+- `motoring`: Percentage of time spent motoring in each speed range
+
+---
+
+### 12. Get Wind Statistics
+
+Retrieve comprehensive wind statistics for a trip or date range.
+
+**Endpoint**: `GET /api/wind_statistics`
+
+**Query Parameters**:
+- `id` (optional, integer): Filter by specific trip
+- `start` (optional, string): Start date/time (ISO 8601 format)
+- `end` (optional, string): End date/time (ISO 8601 format)
+
+**Example**:
+```bash
+curl "http://localhost:8080/api/wind_statistics?id=132"
+```
+
+**Response**:
+```json
+{
+  "status": "ok",
+  "data": {
+    "avg_wind_speed_kn": 14.2,
+    "max_wind_speed_kn": 24.5,
+    "min_wind_speed_kn": 2.1,
+    "dominant_wind_direction_deg": 235,
+    "wind_direction_variance": 45.3
+  },
+  "error": null
+}
+```
+
+---
+
+### 13. Get Trip Legs
+
+Retrieve breakdown of leg segments within a trip (segments between mooring events).
+
+**Endpoint**: `GET /api/trip_legs`
+
+**Query Parameters**:
+- `id` (required, integer): Trip ID
+
+**Example**:
+```bash
+curl "http://localhost:8080/api/trip_legs?id=132"
+```
+
+**Response**:
+```json
+{
+  "status": "ok",
+  "data": {
+    "legs": [
+      {
+        "leg_number": 1,
+        "start_time": "2026-02-02T08:30:00",
+        "end_time": "2026-02-02T12:45:00",
+        "distance_nm": 18.5,
+        "duration_ms": 15300000,
+        "sailing_time_ms": 15000000,
+        "motoring_time_ms": 300000,
+        "avg_speed_kn": 4.5
+      }
+    ]
+  },
+  "error": null
+}
+```
+
+---
+
+### 14. Get Track Analytics
+
+Retrieve advanced analytics for track data over a date range.
+
+**Endpoint**: `GET /api/track_analytics`
+
+**Query Parameters**:
+- `start` (required, string): Start date/time (ISO 8601 format)
+- `end` (required, string): End date/time (ISO 8601 format)
+
+**Example**:
+```bash
+curl "http://localhost:8080/api/track_analytics?start=2026-02-01T00:00:00&end=2026-02-03T23:59:59"
+```
+
+**Response**:
+```json
+{
+  "status": "ok",
+  "data": {
+    "total_distance_nm": 125.4,
+    "total_duration_ms": 432000000,
+    "avg_speed_kn": 6.8,
+    "max_speed_kn": 18.5,
+    "waypoints_count": 1250,
+    "sailing_percentage": 65.5,
+    "motoring_percentage": 28.3,
+    "moored_percentage": 6.2
+  },
+  "error": null
+}
+```
+
+---
+
+### 15. Get Monthly Statistics
+
+Retrieve monthly statistics aggregated across all trips.
+
+**Endpoint**: `GET /api/monthly_statistics`
+
+**Example**:
+```bash
+curl http://localhost:8080/api/monthly_statistics
+```
+
+**Response**:
+```json
+{
+  "status": "ok",
+  "data": {
+    "months": [
+      {
+        "year": 2026,
+        "month": 1,
+        "trip_count": 8,
+        "total_distance_nm": 425.3,
+        "total_sailing_time_hours": 58.5,
+        "total_motoring_time_hours": 22.3
+      },
+      {
+        "year": 2026,
+        "month": 2,
+        "trip_count": 5,
+        "total_distance_nm": 189.7,
+        "total_sailing_time_hours": 31.2,
+        "total_motoring_time_hours": 14.1
+      }
+    ]
+  },
+  "error": null
+}
+```
+
+---
+
+### 16. Get Heatmap
+
+Retrieve heatmap data showing vessel positions for a specific date.
+
+**Endpoint**: `GET /api/heatmap`
+
+**Query Parameters**:
+- `date` (required, string): Date in YYYY-MM-DD format
+
+**Example**:
+```bash
+curl "http://localhost:8080/api/heatmap?date=2026-02-02"
+```
+
+**Response**:
+```json
+{
+  "status": "ok",
+  "data": {
+    "points": [
+      {
+        "latitude": 45.5231,
+        "longitude": -122.6765,
+        "weight": 5,
+        "timestamp": "2026-02-02T08:30:15"
+      },
+      {
+        "latitude": 45.5245,
+        "longitude": -122.6782,
+        "weight": 3,
+        "timestamp": "2026-02-02T08:35:20"
+      }
+    ]
+  },
+  "error": null
+}
+```
+
+---
+
+### 17. Get Google Maps API Key
+
+Retrieve the configured Google Maps API key.
+
+**Endpoint**: `GET /api/config/google_maps_key`
+
+**Example**:
+```bash
+curl http://localhost:8080/api/config/google_maps_key
+```
+
+**Response** (if configured):
+```json
+{
+  "status": "ok",
+  "data": "AIzaSyDxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "error": null
+}
+```
+
+**Response** (if not configured):
+```json
+{
+  "status": "ok",
+  "data": null,
+  "error": null
+}
+```
+
+---
+
+### 18. Get Tracking Status
+
+Retrieve the current tracking enable/disable status.
+
+**Endpoint**: `GET /api/tracking/status`
+
+**Example**:
+```bash
+curl http://localhost:8080/api/tracking/status
+```
+
+**Response**:
+```json
+{
+  "status": "ok",
+  "data": {
+    "enabled": true
+  },
+  "error": null
+}
+```
+
+---
+
+### 19. Set Tracking Status
+
+Enable or disable vessel tracking. This setting persists across application restarts.
+
+**Endpoint**: `POST /api/tracking/status`
+
+**Content-Type**: `application/json`
+
+**Request Body**:
+```json
+{
+  "enabled": false
+}
+```
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/tracking/status \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": false}'
+```
+
+**Response**:
+```json
+{
+  "status": "ok",
+  "data": {
+    "enabled": false
+  },
+  "error": null
+}
+```
+
+---
+
+### 20. Get Metrics Status
+
+Retrieve the current environmental metrics collection enable/disable status.
+
+**Endpoint**: `GET /api/metrics/status`
+
+**Example**:
+```bash
+curl http://localhost:8080/api/metrics/status
+```
+
+**Response**:
+```json
+{
+  "status": "ok",
+  "data": {
+    "enabled": true
+  },
+  "error": null
+}
+```
+
+---
+
+### 21. Set Metrics Status
+
+Enable or disable environmental metrics collection. This setting persists across application restarts.
+
+**Endpoint**: `POST /api/metrics/status`
+
+**Content-Type**: `application/json`
+
+**Request Body**:
+```json
+{
+  "enabled": false
+}
+```
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/metrics/status \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": false}'
+```
+
+**Response**:
+```json
+{
+  "status": "ok",
+  "data": {
+    "enabled": false
+  },
+  "error": null
 }
 ```
 
@@ -496,8 +1036,8 @@ curl -X POST http://localhost:8080/api/trip_description \
 ## Data Aggregation
 
 ### Track Points
-Track points are aggregated based on the `status_report_period` configured in `config.json`:
-- **Underway**: Default 10 seconds
+Track points are aggregated based on the configured intervals in `config.json`:
+- **Underway**: Default 30 seconds
 - **Moored**: Default 5 minutes
 
 ### Environmental Metrics
@@ -514,7 +1054,7 @@ The web server configuration is in `config.json`:
 
 ```json
 {
-  "web_server": {
+  "web": {
     "enabled": true,
     "port": 8080
   }
@@ -522,8 +1062,8 @@ The web server configuration is in `config.json`:
 ```
 
 **Settings**:
-- `enabled`: Enable/disable the web server
-- `port`: TCP port for the web server (default: 8080)
+- `enabled`: Enable/disable the web server (default: `true`)
+- `port`: TCP port for the web server (default: `8080`)
 
 ---
 
