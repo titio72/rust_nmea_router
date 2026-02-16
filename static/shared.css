@@ -68,9 +68,22 @@ h1 {
     color: var(--text-primary);
     text-align: center;
     margin-bottom: 30px;
+}
+
+h2 {
+    color: var(--text-primary);
+    margin-top: 0px;
+    margin-bottom: 15px;
+}
+
+.level-1-container {
     max-width: 1500px;
-    margin-left: auto;
-    margin-right: auto;
+    margin: 0 auto 25px auto;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 25px;
+    box-shadow: 0 2px 5px var(--card-shadow);
 }
 
 .header-bar {
@@ -93,6 +106,33 @@ h1 {
 
 .back-link:hover {
     text-decoration: underline;
+}
+
+.navigation-links {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.nav-link {
+    color: var(--link-color);
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 14px;
+    transition: all 0.2s ease;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.nav-link:hover {
+    opacity: 0.8;
+    text-decoration: underline;
+}
+
+.nav-link-active {
+    color: var(--text-bold);
+    background: var(--bg-accent);
+    font-weight: 600;
 }
 
 .theme-toggle {

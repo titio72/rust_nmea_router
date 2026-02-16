@@ -13,11 +13,13 @@ use std::{backtrace::Backtrace, sync::Arc};
 
 use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData, SpeedDistributionData, WindStatisticsData, TripLegsData, TrackAnalytics, HeatmapData};
 use crate::config::Config;
+use crate::web::websocket::BroadcastChannels;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<VesselDatabase>,
     pub config: Arc<Config>,
+    pub broadcast: Arc<BroadcastChannels>,
 }
 
 #[derive(Debug, Serialize)]
@@ -625,6 +627,7 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/tracking/status", post(set_tracking_status))
         .route("/metrics/status", get(get_metrics_status))
         .route("/metrics/status", post(set_metrics_status))
+        .route("/ws/realtime", get(super::websocket::websocket_handler))
         .with_state(state)
 }
 #[cfg(test)]
@@ -651,9 +654,11 @@ mod tests {
         let db = create_test_db();
         let mut config = crate::config::Config::default();
         config.web.google_maps_api_key = Some("your_google_maps_api_key_here".to_string());
+        let broadcast = Arc::new(BroadcastChannels::new());
         let state = AppState {
             db: Arc::new(db),
             config: Arc::new(config),
+            broadcast,
         };
         create_api_router(state)
     }

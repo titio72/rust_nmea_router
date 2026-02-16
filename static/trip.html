@@ -6,6 +6,7 @@
     <title>Trip Details - NMEA Router</title>
     <link rel="icon" type="image/png" href="/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
+    <script src="/shared-theme.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -14,15 +15,6 @@
         #tripDetails {
             width: 100%;
             padding: 0;
-        }
-        #tripContainer {
-            max-width: 1500px;
-            margin: 0 auto 25px auto;
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 25px;
-            box-shadow: 0 2px 5px var(--card-shadow);
         }
         .tripInfo {
             display: grid;
@@ -294,11 +286,10 @@
             <span id="theme-icon">◐</span> <span id="theme-text">Dark</span>
         </button>
     </div>
-    <div id="tripContainer">
-        <div id="legSelectorContainer"></div>
-        <div id="tripDetails"></div>
-    </div>
-
+        <div id="tripContainer" class="level-1-container">
+            <div id="legSelectorContainer"></div>
+            <div id="tripDetails"></div>
+        </div>
     <script>
         // Load Google Maps API key dynamically
         async function loadGoogleMapsAPI() {
@@ -324,21 +315,9 @@
         // Load Google Maps API on page load
         loadGoogleMapsAPI();
 
-        // Theme management
-        function initTheme() {
-            const savedTheme = localStorage.getItem('theme') || 'light';
-            if (savedTheme === 'dark') {
-                document.body.classList.add('dark-theme');
-                updateThemeButton(true);
-            }
-            updateBrandLogo(savedTheme === 'dark');
-        }
-
+        // Theme management - override toggleTheme to reload charts when theme changes
         function toggleTheme() {
-            const isDark = document.body.classList.toggle('dark-theme');
-            localStorage.setItem('theme', isDark ? 'dark' : 'light');
-            updateThemeButton(isDark);
-            updateBrandLogo(isDark);
+            baseToggleTheme();
             
             // Recreate all charts with new theme
             if (currentTrip && selectedLeg !== undefined) {
@@ -346,16 +325,6 @@
                     console.error('Failed to reload charts:', error);
                 });
             }
-        }
-
-        function updateBrandLogo(isDark) {
-            const brandLogo = document.getElementById('brandLogo');
-            brandLogo.src = isDark ? '/Itaca_v3_dark.svg' : '/Itaca_v3.svg';
-        }
-
-        function updateThemeButton(isDark) {
-            document.getElementById('theme-icon').textContent = isDark ? '◑' : '◐';
-            document.getElementById('theme-text').textContent = isDark ? 'Light' : 'Dark';
         }
 
         function getChartColors() {
@@ -368,7 +337,7 @@
         }
 
         // Initialize theme on page load
-        initTheme();
+        initializeTheme();
 
         // Get trip ID from URL parameters
         const urlParams = new URLSearchParams(window.location.search);

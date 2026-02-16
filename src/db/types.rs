@@ -1,6 +1,6 @@
 use mysql::Pool;
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant, SystemTime};
 use crate::trip::Trip;
 use crate::position_utils::Position;
 use crate::utilities::EngineStatus;
@@ -61,6 +61,24 @@ pub struct TripSummary {
     pub moored_time_ms: i64,
     pub sailing_distance_nm: f64,
     pub motoring_distance_nm: f64,
+}
+
+impl TripSummary {
+    #[allow(dead_code)]
+    pub fn start_timestamp(&self) -> Result<std::time::SystemTime, Box<dyn std::error::Error>> {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&self.start_date) {
+            return Ok(SystemTime::UNIX_EPOCH + Duration::from_secs(dt.timestamp() as u64));
+        }
+        Err("Invalid start_date format".into())
+    }
+
+    #[allow(dead_code)]
+    pub fn end_timestamp(&self) -> Result<std::time::SystemTime, Box<dyn std::error::Error>> {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&self.end_date) {
+            return Ok(SystemTime::UNIX_EPOCH + Duration::from_secs(dt.timestamp() as u64));
+        }
+        Err("Invalid end_date format".into())
+    }
 }
 
 #[derive(Debug, serde::Serialize)]

@@ -1,3 +1,7 @@
+// Configuration Management
+// Guidelines: Configuration fields are read-only. Mutable application state belongs in the database.
+// For conventions on field naming and defaults, see: AGENTS.md
+//
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -278,12 +282,32 @@ impl Default for EnvironmentalConfig {
 
 impl Config {
     /// Load configuration from a JSON file
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+    /// In test mode, loads test_config.json instead of config.json if no path specified
+    fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
         let contents = fs::read_to_string(path)?;
         let mut config: Config = serde_json::from_str(&contents)?;
         config.validate_and_fix()?;
         Ok(config)
     }
+    
+    #[cfg(not(test))]
+    pub fn load_for_context() -> Result<Self, Box<dyn std::error::Error>> {
+        // Load configuration - try ./config.json first, then /etc/nmea_router/config.json
+        let config_path = if std::path::Path::new("./config.json").exists() {
+            "./config.json"        
+        } else {
+            "/etc/nmea_router/config.json"
+        };
+        Self::from_file(config_path)
+    }    
+    
+    /// Load configuration with automatic test mode detection
+    /// When cfg(test) is active, loads test_config.json by default
+    #[cfg(test)]
+    pub fn load_for_context() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::from_file("test_config.json")
+    }
+
     
     /// Validate configuration and fix invalid values by reverting to defaults
     /// Returns an error if CAN interface is invalid (unrecoverable)

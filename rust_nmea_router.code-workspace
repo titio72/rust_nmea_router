@@ -1,0 +1,132 @@
+{
+  "folders": [
+    {
+      "path": "."
+    }
+  ],
+  "settings": {
+    // Rust & Cargo
+    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.checkOnSave.command": "clippy",
+    "[rust]": {
+      "editor.formatOnSave": true,
+      "editor.defaultFormatter": "rust-lang.rust-analyzer"
+    },
+    
+    // General Editor Settings
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "rust-lang.rust-analyzer",
+    "editor.rulers": [100, 120],
+    "editor.wordWrap": "on",
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    
+    // Terminal
+    "terminal.integrated.defaultProfile.linux": "bash",
+    "terminal.integrated.env.linux": {
+      "RUST_BACKTRACE": "1"
+    },
+    
+    // Tasks
+    "tasks.version": "2.0.0"
+  },
+  "extensions": {
+    "recommendations": [
+      "rust-lang.rust-analyzer",
+      "serayuzgur.crates",
+      "vadimcn.vscode-lldb",
+      "tamasfe.even-better-toml",
+      "ms-vscode.makefile-tools"
+    ]
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "type": "lldb",
+        "request": "launch",
+        "name": "Debug cargo build",
+        "cargo": {
+          "args": [
+            "build",
+            "--bin=nmea_router",
+            "--package=nmea_router"
+          ],
+          "filter": {
+            "name": "nmea_router",
+            "kind": "bin"
+          }
+        },
+        "args": [],
+        "cwd": "${workspaceFolder}"
+      },
+      {
+        "type": "lldb",
+        "request": "launch",
+        "name": "Run tests (single-threaded)",
+        "cargo": {
+          "args": [
+            "test",
+            "--package=nmea_router",
+            "--bin=nmea_router",
+            "--",
+            "--test-threads=1",
+            "--nocapture"
+          ],
+          "filter": {
+            "name": "nmea_router",
+            "kind": "bin"
+          }
+        },
+        "args": [],
+        "cwd": "${workspaceFolder}"
+      }
+    ]
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "Cargo: build",
+        "type": "cargo",
+        "command": "build",
+        "args": [],
+        "problemMatcher": ["$rustc"],
+        "group": {
+          "kind": "build",
+          "isDefault": true
+        }
+      },
+      {
+        "label": "Cargo: test (single-threaded)",
+        "type": "shell",
+        "command": "cargo",
+        "args": ["test", "--", "--test-threads=1"],
+        "problemMatcher": ["$rustc"],
+        "group": {
+          "kind": "test"
+        }
+      },
+      {
+        "label": "Cargo: test (database tests only)",
+        "type": "shell",
+        "command": "cargo",
+        "args": ["test", "--package=nmea_router", "--bin=nmea_router", "db::", "--", "--test-threads=1", "--ignored"],
+        "problemMatcher": ["$rustc"],
+        "group": {
+          "kind": "test"
+        }
+      },
+      {
+        "label": "Cargo: clippy",
+        "type": "shell",
+        "command": "cargo",
+        "args": ["clippy", "--all-targets", "--all-features"],
+        "problemMatcher": ["$rustc"],
+        "group": {
+          "kind": "build"
+        }
+      }
+    ]
+  }
+}

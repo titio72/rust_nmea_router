@@ -1,3 +1,6 @@
+// NMEA2000 Router - Main Application Entry Point
+// For architectural guidance, coding conventions, and testing strategies, see: AGENTS.md
+//
 use std::{error::Error, time::Duration};
 use tracing::{info, warn};
 
@@ -15,6 +18,7 @@ mod app_metrics;
 mod frame_filter;
 mod web;
 mod udp_broadcaster;
+mod broadcast_monitor;
 pub mod utilities;
 
 use vessel_monitor::VesselMonitor;
@@ -26,8 +30,8 @@ use app_metrics::{AppMetrics, MetricsLogger};
 use frame_filter::should_process_n2k_message;
 use frame_filter::should_process_frame_by_id;
 use udp_broadcaster::UdpBroadcaster;
+use broadcast_monitor::BroadcastMonitor;
 // use crate::application_state::ApplicationState; // Removed: module does not exist
-
 // Import from nmea2k crate
 use nmea2k::{CanBus, Identifier, MessageHandler, N2kStreamReader};
 
@@ -100,16 +104,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                      || args.contains(&"--validate".to_string())
                      || args.contains(&"-v".to_string());
     
-    // Load configuration - try ./config.json first, then /etc/nmea_router/config.json
-    let config_path = if std::path::Path::new("./config.json").exists() {
-        "./config.json"        
-    } else {
-        "/etc/nmea_router/config.json"
-    };
-    
-    println!("Loading configuration from: {}", config_path);
-    
-    let config = match Config::from_file(config_path) {
+    // Load configuration
+    let config = match Config::load_for_context() {
         Ok(cfg) => {
             if validate_only {
                 println!("✓ Configuration validation successful");
@@ -242,6 +238,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     // Database health check manager
     let mut db_health_check = HealthCheckManager::new(Duration::from_secs(60));
+    
+    // Create broadcast monitor for realtime WebSocket data
+    let mut broadcast_monitor = BroadcastMonitor::new();
 
     // Read CAN frames in a loop
     loop {
@@ -273,9 +272,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                     // Broadcast message via UDP (if enabled)
                     udp_broadcaster.handle_message(&n2k_frame, now);
                     
+                    // Broadcast realtime data via WebSocket (independent of database/tracking flags)
+                    broadcast_monitor.handle_message(&n2k_frame, now);
+                    
                     let sync_status_and_skew = time_monitor.time_sync_status();
                     metrics.gnss_time_skew = sync_status_and_skew.skew;
                     metrics.gnss_time_skew_status = sync_status_and_skew.status;
+                    
+                    // Update broadcast monitor with latest time sync status
+                    broadcast_monitor.update_time_sync_status(
+                        match sync_status_and_skew.status {
+                            TimeSyncStatus::Synchronized => "synced".to_string(),
+                            _ => "not_synced".to_string(),
+                        },
+                        sync_status_and_skew.skew,
+                    );
+                    
                     if sync_status_and_skew.status == TimeSyncStatus::Synchronized {
                         if is_vessel_tracking_enabled(&vessel_db) {
                             vessel_monitor.handle_message(&n2k_frame, now);
@@ -358,3 +370,4 @@ fn is_vessel_tracking_enabled(vessel_db: &Option<VesselDatabase>) -> bool {
     };
     tracking_enabled
 }
+

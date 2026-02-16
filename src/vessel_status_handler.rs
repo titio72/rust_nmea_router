@@ -1,7 +1,13 @@
+// Vessel Status Handler - Persistence & Reporting Layer
+// Responsible for generating boat status reports and managing trip state transitions.
+// Database patterns: Use parameterized queries, transactions for multi-statement operations.
+// Testing: Use test infrastructure from db::test_helpers for consistent test data.
+// See: AGENTS.md for database patterns and testing strategy
+//
 use tracing::{info, warn, debug};
 
-use crate::utilities::{dirty_instant_to_systemtime};
-use crate::vessel_monitor::{VesselStatus};
+use crate::utilities::dirty_instant_to_systemtime;
+use crate::vessel_monitor::VesselStatus;
 use crate::db::{VesselDatabase, TripOperation, VesselStatusOperation};
 use crate::trip::Trip;
 
@@ -123,6 +129,9 @@ impl VesselStatusHandler {
                             trip.description, trip.id.unwrap_or(0), trip.total_distance(), trip.total_time());
                     }
                     
+                    // Note: Realtime data is now broadcast directly from NMEA message processing in main loop,
+                    // not from the aggregated vessel status handler, to ensure complete data is sent
+                    
                     return Ok(true);
                 }
                 Err(e) => {
@@ -229,6 +238,7 @@ impl VesselStatusState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utilities::EngineStatus;
 
     #[test]
     fn test_set_last_persisted_status() {

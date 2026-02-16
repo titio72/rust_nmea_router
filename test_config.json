@@ -1,0 +1,46 @@
+{
+  "can_interface": "vcan0",
+  "time": {
+    "skew_threshold_ms": 1000,
+    "set_system_time": false
+  },
+  "database": {
+    "connection": {
+      "host": "localhost",
+      "port": 3306,
+      "username": "nmea",
+      "password": "nmea",
+      "database_name": "test_nmea_router"
+    },
+    "vessel_status": {
+      "interval_moored_seconds": 300,
+      "interval_underway_seconds": 10
+    },
+    "environmental": {
+      "wind_speed_seconds": 30,
+      "wind_direction_seconds": 30,
+      "roll_seconds": 30,
+      "pressure_seconds": 120,
+      "cabin_temp_seconds": 300,
+      "water_temp_seconds": 300,
+      "humidity_seconds": 300
+    }
+  },
+  "source_filter": {
+    "pgn_source_map": {}
+  },
+  "logging": {
+    "directory": "./logs",
+    "file_prefix": "test_nmea_router",
+    "level": "debug"
+  },
+  "web": {
+    "enabled": false,
+    "port": 8081,
+    "google_maps_api_key": null
+  },
+  "udp": {
+    "enabled": false,
+    "address": "127.0.0.1:10111"
+  }
+}

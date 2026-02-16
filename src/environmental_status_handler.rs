@@ -141,6 +141,8 @@ fn handle_environment_status(
                         env_monitor.cleanup_all_samples(*metricid);
                         debug!("Environmental metric {} written to database", metricid.name());
                         written_count += 1;
+                        
+                        // Note: Realtime data is now broadcast directly from NMEA message processing in main loop
                     }
                 } else {
                     debug!("No data available for metric: {}", metricid.name());

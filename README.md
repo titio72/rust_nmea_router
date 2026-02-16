@@ -875,6 +875,35 @@ src/
     └── wind.rs          # Wind Data
 ```
 
+## Development Guidelines & Architecture
+
+For detailed architectural guidance, coding conventions, testing strategies, and best practices, refer to **[AGENTS.md](AGENTS.md)**. This document contains:
+
+- **Code Style & Conventions**: Function naming (`snake_case`), struct naming (`PascalCase`), module organization
+- **Timestamp & Duration Rules**: UTC-only timestamps, millisecond durations, event handler patterns
+- **Unit Standards**: Knots, nautical miles, Celsius, Pascals, decimal degrees
+- **Database Patterns**: Parameterized queries, transaction patterns, test infrastructure
+- **Testing Strategy**: Test helpers, data generation, tolerance-based assertions, serial execution
+- **Architecture Principles**: Layered design, state management, event-driven patterns
+- **Common Patterns**: Error handling, type conversions, Haversine calculations
+- **Performance & Security**: Best practices and guidelines
+
+### Running Database Tests
+
+Database tests require serial execution due to shared test database:
+
+```bash
+# Run all database tests (single-threaded required)
+cargo test -- --test-threads=1
+
+# Run only database tests
+cargo test --package nmea_router --bin nmea_router db:: -- --test-threads=1 --ignored
+
+# Run specific database test module
+cargo test --package nmea_router --bin nmea_router db::operations::trip -- --test-threads=1
+```
+
+The test infrastructure automatically loads test configuration and manages database reset between tests.
 
 ## License
 

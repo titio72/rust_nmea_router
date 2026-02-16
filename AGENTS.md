@@ -180,3 +180,233 @@ All the code, AI or human generated, must follow this rules.
 19. NMEA2000 messages use different units. The structure and classes representing NMEA2000 messages will expose accessors to read the values in the original units (the unit must be explicit in the name of the accessor, like get_angle_radiants), and will expose additional accessors to read values in the application units (like: get_angle_degrees)
 20. The application relies on a MySQL database for persistence
 21. Conversion from magnetic angles and true angles are performed using WMM 2025
+
+## Agent Guidelines
+
+### Overview
+These guidelines are for AI agents (including GitHub Copilot) working on the NMEA2000 Router codebase. Follow these principles to maintain code quality, consistency, and architectural integrity.
+
+### Code Style & Conventions
+
+**Naming & Structure:**
+- Function names: `snake_case` (e.g., `calculate_position_from_bearing`)
+- Struct/Type names: `PascalCase` (e.g., `VesselStatusRecord`, `TripSummary`)
+- Module names: `snake_case`
+- Constants: `UPPER_CASE`
+
+**Timestamp & Duration Rules:**
+- All timestamps are `SystemTime` in UTC (never local time)
+- All durations are in **milliseconds** as `u64` or `Duration`
+- Never call `std::time::SystemTime::now()` except in event handlers
+- Pass timestamps as parameters to functions; never compute them internally
+
+**Units (Non-Negotiable):**
+- Position: decimal degrees (latitude/longitude), precision ≥ 1 meter
+- Speed: knots
+- Distance: nautical miles
+- Temperature: Celsius
+- Pressure: Pascals (Pa)
+- Humidity: percentage (0-100)
+- Angles: decimal degrees (0-360 range)
+- Durations: milliseconds
+
+**Calculations:**
+- Use Haversine formula for: distance between positions, bearing/heading
+- Average angles: `atan2(avg_sin, avg_cos)` not simple arithmetic mean
+- Prefer median over arithmetic mean for data aggregation (unless performance-critical)
+- NMEA2000 accessors: `get_<measurement>_<original_units>()` → returns in original units; also provided: `get_<measurement>_<app_units>()`
+
+### Database & Persistence
+
+**Key Rules:**
+- MySQL/MariaDB only; never hardcode connection strings in code
+- Configuration is read-only; application state goes in database
+- All database queries use parameterized queries (`params!` macro)
+- Transactions required for multi-statement operations
+- Use individual `exec_drop()` calls within transaction, not multi-statement SQL
+
+**Test Database:**
+- Use `test_config.json` (loaded automatically in test mode)
+- Run tests with `--test-threads=1` for database tests
+- Call `reset_test_db()` at start of each test for clean state
+- Mark database tests with `#[test]` and `#[ignore]` (require explicit `--ignored` flag)
+
+### Testing Strategy
+
+**Use the Test Infrastructure:** (`src/db/test_helpers.rs`)
+- `setup_db()` → Creates test database and resets it
+- `add_test_trip()` → Insert test trip with realistic data
+- `add_test_vessel_status()` → Add vessel status records
+- `generate_track()` → Create track with waypoints
+- `assert_approx_equal()` → Safe floating-point assertions (handles precision loss)
+
+**Test Example:**
+```rust
+#[test]
+#[ignore]
+fn test_my_feature() {
+    let db = setup_db();  // Auto-loads test_config.json, resets DB
+    
+    // Create test data
+    let trip_id = add_test_trip(&db, "Test Trip".to_string(), 
+        start_time, end_time, 10.5, 2.3, 3600000, 600000, 0)?;
+    
+    // Run tests
+    let result = db.fetch_trip(trip_id)?;
+    assert_eq!(result.description, "Test Trip");
+}
+```
+
+### File Organization
+
+**Core Modules:**
+- `src/db/` - Database layer (types, operations, test helpers)
+- `src/db/operations/` - CRUD operations (trip.rs, vessel_status.rs, query.rs, etc.)
+- `src/nmea2k/` - NMEA2000 message handling and parsing
+- `src/web/` - REST API (api.rs, server.rs, websocket.rs)
+- `src/*.rs` - Business logic (vessel_monitor, environmental_monitor, trip.rs)
+
+**Test Files:**
+- `src/db/test_helpers.rs` - Helper functions and utilities
+- `src/db/test_examples.rs` - Example/integration tests
+- `src/db/operations/test_data.rs` - Batch test data operations
+- Inline tests in implementation files (with `#[cfg(test)]`)
+
+**Documentation:**
+- `doc/*.md` is the folder for documentation
+- Only `README.md` and `AGENTS.md` (this file) are in the root folder
+- When a new feature is added, `README.md` must updated automatically 
+
+### Common Patterns
+
+**Error Handling:**
+- Use `Result<T, Box<dyn Error>>` for fallible operations
+- Chain errors with `.map_err()` for context
+- Panic only in tests or truly fatal scenarios
+
+**Type Conversions:**
+```rust
+// MySQL returns DECIMAL as Bytes, need to convert
+match row.take::<mysql::Value, _>("field_name") {
+    Some(mysql::Value::Float(f)) => f as f64,
+    Some(mysql::Value::Double(d)) => d,
+    Some(mysql::Value::Bytes(b)) => String::from_utf8(b)?.parse::<f64>()?,
+    Some(mysql::Value::Int(i)) => i as f64,
+    Some(mysql::Value::UInt(u)) => u as f64,
+    None => return Err("Missing field"),
+}
+```
+
+**Transactions:**
+```rust
+let mut tx = conn.start_transaction(mysql::TxOpts::default())?;
+tx.exec_drop("SELECT @var := value", [])?;  // Session variables
+tx.exec_drop("UPDATE table SET ...", params!{...})?;  // Multiple statements
+tx.commit()?;  // Atomic
+```
+
+### Architecture Principles
+
+1. **Layered Design:** 
+   - Data layer (DB) → Business logic → REST API
+   - Dependencies flow downward only
+
+2. **State Management:**
+   - Immutable configuration only in memory
+   - All mutable state lives in database
+   - Use in-memory caches sparingly (e.g., system_status for 0-latency access)
+
+3. **Event-Driven:**
+   - NMEA2000 messages trigger events
+   - Event handlers generate timestamps
+   - Business logic receives timestamps as parameters
+
+4. **Separation of Concerns:**
+   - Parsing (NMEA2000 decoding) separate from business logic
+   - Database operations separate from queries
+   - Web API thin layer over business logic
+
+### Performance Considerations
+
+- Minimize database round-trips; use transactions
+- Batch operations when possible (`populate_multi_leg_trip`)
+- Use indexes on frequently queried columns (timestamps, trip_id)
+- Session variables in transactions to compute values server-side
+- Median calculation is expensive; use only when justified
+
+### Security
+
+- No hardcoded credentials; use config files
+- Parameterize all SQL queries
+- Validate input ranges (e.g., latitude -90..90, longitude -180..180)
+- No sensitive data in logs
+
+### UI structure
+
+**Layout & Styling:**
+- Dark and bright themes managed by `shared-theme.js` (loaded in all pages)
+- All pages share the same style - common classes must be in `shared.css`
+- Use page-specific styles sparingly (inline `<style>` tags for page-only features)
+- Pages are 1500px wide, centered with consistent margin/padding
+
+**Page Structure:**
+All pages must follow this hierarchical structure:
+```html
+<body>
+    <div class="header-bar">
+        <!-- Logo, title, navigation, theme toggle -->
+    </div>
+    <div class="level-1-container">
+        <!-- Primary content section -->
+    </div>
+    <!-- Additional level-1-container divs as needed -->
+</body>
+```
+
+**Header Bar (`.header-bar`):**
+- Fixed max-width of 1500px, centered with `margin: 0 auto 20px auto`
+- Left side: Branding image (`id="brandLogo"`) and application title
+- Right side: Theme selector button (`id="themeBtn"`, class `theme-toggle`)
+- Navigation links to other pages (optional, can be in title area)
+- Avoid page-specific widgets in the header when possible
+
+**Content Containers (`.level-1-container`):**
+- Wraps all main content sections
+- Provides consistent styling: background, border, border-radius, padding, box-shadow
+- Automatically centers with max-width: 1500px
+- Multiple containers can stack on a single page (e.g., heatmap + trips sections)
+
+**Theme Management (`shared-theme.js`):**
+- All pages must load `<script src="/shared-theme.js"></script>` in the `<head>`
+- Global theme functions provided: `initializeTheme()`, `updateBrandLogo()`, `updateThemeButton()`, `baseToggleTheme()`
+- Pages that need custom behavior when theme changes should override `toggleTheme()`:
+  ```javascript
+  const baseToggleTheme = toggleTheme;  // Save the base function
+  function toggleTheme() {
+      baseToggleTheme();  // Call the shared theme toggle
+      // Add page-specific logic here
+      // Example: reload charts, refresh heatmap, reload trip details, etc.
+  }
+  ```
+- Call `initializeTheme()` on page load to restore user's theme preference
+- Theme preference is persisted in `localStorage` with key `'theme'` (value: `'light'` or `'dark'`)
+
+**Button & DOM ID Conventions:**
+- Theme toggle button: `id="themeBtn"`, class `class="theme-toggle"`
+- Brand logo: `id="brandLogo"` for dynamic SVG swapping on theme change
+- Theme icon: `id="theme-icon"` displaying `◐` (light) or `◑` (dark)
+- Theme text: `id="theme-text"` displaying `Dark` or `Light`
+
+### Documentation
+
+- Document non-obvious calculations (bearing, true wind conversions)
+- Include units in variable names or comments (`speed_kn`, `distance_nm`)
+- Link to specifications (WMM 2025, Haversine, NMEA2000 specs)
+- Explain test data generation strategies
+
+### When in Doubt
+
+1. Check `AGENTS.md` (this file) for conventions
+2. Look at similar existing code (patterns are established)
+3. Run all tests with `cargo test -- --test-threads=1`
+4. Consult project documentation files (README.md, DATABASE_TESTING.md, etc.)

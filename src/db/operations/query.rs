@@ -839,92 +839,271 @@ fn find_fastest_segment(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, Duration};
+    use std::ops::Add;
+
+    #[cfg(test)]
+    use crate::config::Config;
+    #[cfg(test)]
+    use crate::db::test_helpers::{setup_test_db, reset_test_db, add_test_trip, add_test_vessel_status, assert_approx_equal};
+    #[cfg(test)]
+    use crate::utilities::EngineStatus;
+
+    fn setup_db() -> VesselDatabase {
+        let config = Config::load_for_context()
+            .expect("Failed to load test config - ensure test_config.json exists");
+        let db_url = config.database.connection.connection_url();
+        let db = setup_test_db(&db_url)
+            .expect("Failed to setup test database - ensure MySQL is running and test database exists");
+        reset_test_db(&db).expect("Failed to reset test database");
+        db
+    }
 
     #[test]
+    #[ignore]
     fn test_get_track() {
-        let db = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
-        let points = db.fetch_track(Some(132), None, None).unwrap();
-        assert!(!points.is_empty());
-        // Debug output removed - test verifies data retrieval works
+        let db = setup_db();
+        const ONE_HOUR_S: u64 = 3600;
+
+        // Create a test trip with vessel status records
+        let start_time = SystemTime::now();
+        let end_time = start_time.add(Duration::from_secs(2 * ONE_HOUR_S));
+
+        let trip_id = add_test_trip(
+            &db,
+            "Track Test Trip".to_string(),
+            start_time,
+            end_time,
+            10.5,
+            2.3,
+            3600000,
+            600000,
+            0,
+        ).expect("Failed to insert test trip");
+
+        // Add multiple vessel status records to create a track
+        let mut current_time = start_time;
+        let mut lat = 41.0;
+        let mut lon = 2.0;
+        while current_time < end_time {
+            add_test_vessel_status(
+                &db,
+                current_time,
+                lat,
+                lon,
+                6.5,
+                7.2,
+                Some(12.0),
+                Some(45.0),
+                false,
+                EngineStatus::Off,
+                0.5,
+                600000,
+                Some(90.0),
+                Some(92.0),
+            ).expect("Failed to insert vessel status");
+
+            current_time = current_time.add(Duration::from_secs(600)); // Every 10 minutes
+            lat += 0.01;
+            lon += 0.01;
+        }
+
+        // Fetch track by trip_id
+        let points = db.fetch_track(Some(trip_id), None, None)
+            .expect("Failed to fetch track");
+
+        // Verify track has multiple points
+        assert!(!points.is_empty(), "Track should not be empty");
+        assert!(points.len() >= 2, "Track should have at least 2 points");
+
+        // Verify first and last points are reasonable
+        let first = &points[0];
+        let last = &points[points.len() - 1];
+
+        assert_approx_equal(
+            first.latitude.expect("First point should have latitude"),
+            41.0,
+            0.02,
+            "First point latitude"
+        );
+        assert_approx_equal(
+            first.longitude.expect("First point should have longitude"),
+            2.0,
+            0.02,
+            "First point longitude"
+        );
+        assert_approx_equal(
+            last.latitude.expect("Last point should have latitude"),
+            41.0 + 0.01 * 2.0,
+            0.02,
+            "Last point latitude"
+        );
+        assert_approx_equal(
+            last.longitude.expect("Last point should have longitude"),
+            2.0 + 0.01 * 2.0,
+            0.02,
+            "Last point longitude"
+        );
     }
 
     #[test]
+    #[ignore]
     fn test_system_status_set() {
-        let db = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
-        db.set_system_status("tracking_enabled", true).unwrap();
-        assert!(db.get_system_status("tracking_enabled").unwrap());
-        db.set_system_status("tracking_enabled", false).unwrap();
-        assert!(!db.get_system_status("tracking_enabled").unwrap());
+        let db = setup_db();
+
+        // Test setting to true
+        db.set_system_status("tracking_enabled", true)
+            .expect("Failed to set tracking_enabled to true");
+        assert!(db.get_system_status("tracking_enabled")
+            .expect("Failed to get tracking_enabled"),
+            "tracking_enabled should be true");
+
+        // Test setting to false
+        db.set_system_status("tracking_enabled", false)
+            .expect("Failed to set tracking_enabled to false");
+        assert!(!db.get_system_status("tracking_enabled")
+            .expect("Failed to get tracking_enabled"),
+            "tracking_enabled should be false");
+
+        // Test different key
+        db.set_system_status("metrics_enabled", true)
+            .expect("Failed to set metrics_enabled");
+        assert!(db.get_system_status("metrics_enabled")
+            .expect("Failed to get metrics_enabled"),
+            "metrics_enabled should be true");
     }
 
     #[test]
+    #[ignore]
     fn test_system_status_default() {
-        let db = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
-        assert!(db.get_system_status("a_key_that_does_not_exist").unwrap());
+        let db = setup_db();
+
+        // Test that non-existent keys default to true
+        let result = db.get_system_status("a_key_that_does_not_exist")
+            .expect("Failed to get status");
+        assert!(result, "Non-existent keys should default to true");
     }
 
     #[test]
+    #[ignore]
     fn test_system_status_persistence() {
-        let db = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
-        db.set_system_status("test_key", true).unwrap();
-        assert!(db.get_system_status("test_key").unwrap());
-        
-        // Create a new instance to verify persistence
-        let db2 = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
-        assert!(db2.get_system_status("test_key").unwrap());
+        let db = setup_db();
+
+        // Set a status
+        db.set_system_status("test_key", true)
+            .expect("Failed to set test_key");
+        assert!(db.get_system_status("test_key")
+            .expect("Failed to get test_key"),
+            "test_key should be true after setting");
+
+        // Create a new database instance (simulates application restart)
+        let config = Config::load_for_context()
+            .expect("Failed to load test config");
+        let db_url = config.database.connection.connection_url();
+        let db2 = VesselDatabase::new(&db_url)
+            .expect("Failed to create second database instance");
+
+        // Verify value persists
+        assert!(db2.get_system_status("test_key")
+            .expect("Failed to get test_key from new instance"),
+            "test_key should persist across database instances");
     }
 
     #[test]
+    #[ignore]
     fn test_export_trip() {
         use std::fs;
         use std::path::PathBuf;
 
-        let db = VesselDatabase::new("mysql://nmea:nmea@localhost:3306/test_nmea_router").unwrap();
-        
-        // Use trip 132 which we know exists from other tests
-        let trip_id = 132i64;
+        let db = setup_db();
+        const ONE_HOUR_S: u64 = 3600;
+
+        // Create a test trip
+        let start_time = SystemTime::now();
+        let end_time = start_time.add(Duration::from_secs(3 * ONE_HOUR_S));
+
+        let trip_id = add_test_trip(
+            &db,
+            "Export Test Trip".to_string(),
+            start_time,
+            end_time,
+            15.5,
+            3.2,
+            6000000,
+            1200000,
+            0,
+        ).expect("Failed to insert test trip") as i64;
+
+        // Add some vessel status records
+        let mut current_time = start_time;
+        let mut lat = 40.5;
+        let mut lon = 1.5;
+        while current_time < end_time {
+            add_test_vessel_status(
+                &db,
+                current_time,
+                lat,
+                lon,
+                6.5,
+                7.2,
+                Some(12.0),
+                Some(45.0),
+                false,
+                EngineStatus::Off,
+                0.5,
+                1800000,
+                Some(90.0),
+                Some(92.0),
+            ).expect("Failed to insert vessel status");
+
+            current_time = current_time.add(Duration::from_secs(1800)); // Every 30 minutes
+            lat += 0.05;
+            lon += 0.05;
+        }
+
+        // Export trip
         let export_path = PathBuf::from("/tmp/test_trip_export.json");
-        
-        // Remove file if it exists from previous test run
-        let _ = fs::remove_file(&export_path);
-        
-        // Perform export
+        let _ = fs::remove_file(&export_path); // Clean up previous run
+
         let result = db.export_trip(trip_id, &export_path);
         assert!(result.is_ok(), "Export should succeed: {:?}", result.err());
-        
-        // Verify file was created and has content
+
+        // Verify file exists and has content
         assert!(export_path.exists(), "Export file should exist");
-        let metadata = fs::metadata(&export_path).unwrap();
+        let metadata = fs::metadata(&export_path)
+            .expect("Failed to get export file metadata");
         assert!(metadata.len() > 0, "Export file should not be empty");
-        
-        // Verify file contains valid JSON
-        let contents = fs::read_to_string(&export_path).unwrap();
+
+        // Verify JSON structure
+        let contents = fs::read_to_string(&export_path)
+            .expect("Failed to read export file");
         let json: serde_json::Value = serde_json::from_str(&contents)
             .expect("Export file should contain valid JSON");
-        
-        // Verify JSON structure
+
         assert!(json["trip"].is_object(), "Should have trip object");
         assert_eq!(json["trip"]["id"], trip_id, "Trip ID should match");
         assert!(json["trip"]["description"].is_string(), "Trip should have description");
+        assert_eq!(json["trip"]["description"], "Export Test Trip", "Trip description should match");
         assert!(json["trip"]["start_timestamp"].is_string(), "Trip should have start_timestamp");
         assert!(json["trip"]["end_timestamp"].is_string(), "Trip should have end_timestamp");
-        
+
         // Verify arrays exist
         assert!(json["vessel_statuses"].is_array(), "Should have vessel_statuses array");
         assert!(json["environmental_metrics"].is_array(), "Should have environmental_metrics array");
         assert!(json["export_metadata"].is_object(), "Should have export_metadata object");
-        
-        // Vessel statuses should have records if they exist in database
+
+        // Verify vessel statuses have expected structure
         let vessel_statuses = json["vessel_statuses"].as_array().unwrap();
         if !vessel_statuses.is_empty() {
             let first_status = &vessel_statuses[0];
             assert!(first_status["timestamp"].is_string(), "Status should have timestamp");
             assert!(first_status["is_moored"].is_boolean(), "Status should have is_moored");
-            // engine_on is now a number (0=off, 1=on, 2=unknown)
-            assert!(first_status["engine_on"].is_u64() || first_status["engine_on"].is_i64(), "Status should have engine_on as number");
+            assert!(first_status["engine_on"].is_u64() || first_status["engine_on"].is_i64(),
+                "Status should have engine_on as number");
         }
-        
+
         // Clean up
-        fs::remove_file(&export_path).expect("Should be able to delete test file");
+        fs::remove_file(&export_path)
+            .expect("Should be able to delete test file");
     }
 }

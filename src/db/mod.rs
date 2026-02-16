@@ -5,6 +5,13 @@ pub mod types;
 pub mod connection;
 pub mod operations;
 
+// Test helpers - only available in test builds
+#[cfg(test)]
+pub mod test_helpers;
+
+#[cfg(test)]
+mod test_examples;
+
 // Re-export main types and the connection manager
 pub use types::{
     VesselDatabase, VesselStatusOperation, TripOperation, HealthCheckManager,

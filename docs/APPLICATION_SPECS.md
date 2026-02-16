@@ -719,7 +719,7 @@ CREATE TABLE vessel_status (
     average_speed_kn DOUBLE NOT NULL,     -- knots
     max_speed_kn DOUBLE NOT NULL,         -- knots
     is_moored BOOLEAN NOT NULL,
-    engine_on BOOLEAN NOT NULL DEFAULT FALSE,
+    engine_on TINYINT(1) NOT NULL DEFAULT 2,
     total_distance_nm DOUBLE NOT NULL DEFAULT 0,  -- nautical miles
     total_time_ms BIGINT NOT NULL DEFAULT 0,      -- milliseconds
     

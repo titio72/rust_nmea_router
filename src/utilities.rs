@@ -58,6 +58,14 @@ pub fn dirty_instant_to_systemtime(instant: Instant) -> SystemTime {
     }
 }
 
+pub fn instant_to_unix_millis(instant: Instant) -> i64 {
+    let systemtime = dirty_instant_to_systemtime(instant);
+    match systemtime.duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_millis() as i64,
+        Err(_) => 0,
+    }
+}
+
 // given two anles in degrees, compute the smallest difference between a and b (i.e., a - b)
 pub fn angle_diff(a: f64, b: f64) -> f64 {
     let mut xx = ((a - b) % 360.0 + 360.0) % 360.0;

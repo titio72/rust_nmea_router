@@ -1,3 +1,9 @@
+// Vessel Monitoring & Status Tracking
+// Core business logic for processing NMEA2000 messages and maintaining vessel state.
+// Unit standards: Speed in knots, distance in nautical miles, positions in decimal degrees.
+// Important: Never call now() in this module except in event handlers. Timestamps are parameters.
+// See: AGENTS.md for conventions and calculation methods (Haversine, angle averaging, etc.)
+//
 use std::time::{Duration, Instant};
 use nmea2k::pgns::{CogSogRapidUpdate, HeadingReference, PositionRapidUpdate};
 use crate::mooring_detection::MooringDetectionQueue;
