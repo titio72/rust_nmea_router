@@ -593,7 +593,7 @@
         <div style="display: flex; align-items: center; gap: 15px;">
             <img id="brandLogo" src="/Itaca_v3.svg" alt="Itaca Logo" style="height: 40px; width: auto;">
             <div>
-                <h2>NMEA Router</h2>
+                <h2 style="margin: 0; color: var(--text-primary);">NMEA Router</h2>
                 <nav class="navigation-links" style="margin-top: 8px;">
                     <a href="/" class="nav-link nav-link-active">Trips</a>
                     <a href="/realtime.html" class="nav-link">Monitor</a>
@@ -601,6 +601,29 @@
                 </nav>
             </div>
         </div>
+        <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">
+            <span id="theme-icon">◐</span> <span id="theme-text">Dark</span>
+        </button>
+    </div>
+
+    <div class="container">
+        <div id="editModal" class="edit-modal">
+            <div class="edit-modal-content">
+                <div class="edit-modal-header">Edit Trip Description</div>
+                <textarea id="editModalInput" class="edit-modal-input"
+                    placeholder="Enter trip description..."></textarea>
+                <div class="edit-modal-buttons">
+                    <button class="edit-modal-cancel" onclick="closeEditModal()">Cancel</button>
+                    <button class="edit-modal-save" onclick="saveEditModal()">Save</button>
+                </div>
+            </div>
+        </div>
+
+        <input type="file" id="importFileInput" accept=".json" style="display: none;"
+            onchange="handleFileImport(event)">
+    </div>
+
+    <div id="settingsSection" class="level-1-container">
         <div style="display: flex; gap: 15px; align-items: center;">
             <div class="tracking-toggle-container" onclick="toggleTracking()">
                 <span>Position Tracking:</span>
@@ -616,26 +639,7 @@
                     <option value="12months">Last 12 Months</option>
                 </select>
             </div>
-            <button class="import-trip-btn" onclick="triggerImportDialog()" title="Import trip">⬆</button>
-            <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">◐ Dark</button>
         </div>
-    </div>
-    <div class="container">
-        <div id="editModal" class="edit-modal">
-            <div class="edit-modal-content">
-                <div class="edit-modal-header">Edit Trip Description</div>
-                <textarea id="editModalInput" class="edit-modal-input"
-                    placeholder="Enter trip description..."></textarea>
-                <div class="edit-modal-buttons">
-                    <button class="edit-modal-cancel" onclick="closeEditModal()">Cancel</button>
-                    <button class="edit-modal-save" onclick="saveEditModal()">Save</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Hidden file input for trip import -->
-        <input type="file" id="importFileInput" accept=".json" style="display: none;"
-            onchange="handleFileImport(event)">
     </div>
 
     <!-- Heatmap Section -->
@@ -676,7 +680,7 @@
 
     <!-- Trips Section -->
     <div id="tripsSection" class="level-1-container">
-        <h2>Trips</h2>
+        <div class="trip-header"><h2>Trips</h2><button class="import-trip-btn" onclick="triggerImportDialog()" title="Import trip">⬆</button></div>
         <div id="content">
             <div class="loading">Loading trips...</div>
         </div>
@@ -685,6 +689,11 @@
     <script>
         // Track if heatmap has been loaded
         let heatmapLoaded = false;
+
+                // Load theme preference and statistics
+        window.addEventListener('DOMContentLoaded', () => {
+            initializeTheme();
+        });
 
         // Trips functions
         async function loadTrips() {
