@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignalK Stream Test - NMEA2000 Router</title>
+    <link rel="stylesheet" href="shared.css">
+    <script src="shared-theme.js"></script>
+    <style>
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-connected {
+            background-color: #4CAF50;
+            box-shadow: 0 0 8px #4CAF50;
+        }
+        .status-disconnected {
+            background-color: #f44336;
+        }
+        .status-connecting {
+            background-color: #ff9800;
+            animation: pulse 1s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .connection-info {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+        }
+        .connection-status {
+            display: flex;
+            align-items: center;
+            font-weight: 500;
+        }
+        .stats {
+            margin-left: auto;
+            display: flex;
+            gap: 20px;
+            font-size: 0.9em;
+            color: var(--text-secondary);
+        }
+        .stats-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .stats-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: var(--text-color);
+        }
+        .stats-label {
+            font-size: 0.85em;
+        }
+        .cards-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 15px;
+            max-height: 800px;
+            overflow-y: auto;
+        }
+        .path-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            transition: all 0.3s ease;
+        }
+        .path-card:hover {
+            border-color: var(--primary-color);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        .path-card.stale {
+            opacity: 0.6;
+            border-color: #ff9800;
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .path-name {
+            font-weight: 600;
+            color: var(--primary-color);
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            word-break: break-word;
+            flex: 1;
+        }
+        .card-timestamp {
+            color: var(--text-secondary);
+            font-size: 0.8em;
+            white-space: nowrap;
+            margin-left: 10px;
+        }
+        .card-footer {
+            display: flex;
+            gap: 15px;
+            align-items: flex-start;
+        }
+        .card-source {
+            color: var(--text-secondary);
+            font-size: 0.75em;
+            white-space: nowrap;
+        }
+        .card-values {
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+            color: var(--text-color);
+            word-break: break-word;
+            flex: 1;
+        }
+        .value-item {
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            border-radius: 0;
+            display: inline;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.95em;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: var(--primary-color);
+            color: white;
+        }
+        .btn-primary:hover {
+            opacity: 0.9;
+        }
+        .btn-secondary {
+            background: var(--secondary-color);
+            color: white;
+        }
+        .btn-secondary:hover {
+            opacity: 0.9;
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="header-bar">
+        <div style="display: flex; align-items: center;">
+            <img id="brandLogo" src="/Itaca_v3.svg" alt="Logo" style="height: 40px; margin-right: 15px;">
+            <div>
+                <h2 style="margin: 0;">NMEA2000 Router</h2>
+                <p style="margin: 5px 0 0 0; font-size: 0.9em; color: var(--text-secondary);">SignalK Stream Test</p>
+            </div>
+        </div>
+        <button class="theme-toggle" id="themeBtn" onclick="baseToggleTheme()">
+            <span id="theme-icon">◐</span> <span id="theme-text">Dark</span>
+        </button>
+    </div>
+
+    <div class="level-1-container">
+        <div class="connection-info">
+            <div class="connection-status">
+                <span id="statusIndicator" class="status-indicator status-disconnected"></span>
+                <span id="statusText">Disconnected</span>
+            </div>
+            <div class="stats">
+                <div class="stats-item">
+                    <div class="stats-value" id="messageCount">0</div>
+                    <div class="stats-label">Messages</div>
+                </div>
+                <div class="stats-item">
+                    <div class="stats-value" id="updateCount">0</div>
+                    <div class="stats-label">Updates</div>
+                </div>
+                <div class="stats-item">
+                    <div class="stats-value" id="pathCount">0</div>
+                    <div class="stats-label">Paths</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="connectBtn" class="btn btn-primary">Connect</button>
+            <button id="disconnectBtn" class="btn btn-secondary" disabled>Disconnect</button>
+            <button id="clearBtn" class="btn btn-secondary">Clear</button>
+        </div>
+
+        <div class="cards-grid" id="cardsGrid">
+            <div style="color: var(--text-secondary); text-align: center; padding: 20px; grid-column: 1 / -1;">
+                Click "Connect" to start receiving SignalK delta messages...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let messageCount = 0;
+        let updateCount = 0;
+        
+        // Map of path -> {timestamp, source, values: [...]}
+        let pathsData = new Map();
+        
+        // Map of path -> last update timestamp (for staleness detection)
+        let pathsLastUpdate = new Map();
+        
+        const STALE_TIMEOUT = 30000; // 30 seconds
+        const CLEANUP_INTERVAL = 5000; // Check every 5 seconds
+
+        // Initialize theme
+        initializeTheme();
+
+        // DOM elements
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const cardsGrid = document.getElementById('cardsGrid');
+        const statusIndicator = document.getElementById('statusIndicator');
+        const statusText = document.getElementById('statusText');
+        const messageCountEl = document.getElementById('messageCount');
+        const updateCountEl = document.getElementById('updateCount');
+        const pathCountEl = document.getElementById('pathCount');
+
+        // Event listeners
+        connectBtn.addEventListener('click', connect);
+        disconnectBtn.addEventListener('click', disconnect);
+        clearBtn.addEventListener('click', clearMessages);
+
+        // Start cleanup interval
+        let cleanupInterval = setInterval(cleanupStaleCards, CLEANUP_INTERVAL);
+
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/signalk/v1/stream`;
+            
+            updateStatus('connecting', 'Connecting...');
+            connectBtn.disabled = true;
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                updateStatus('connected', 'Connected');
+                disconnectBtn.disabled = false;
+                addSystemMessage('Connected to SignalK stream', 'success');
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    
+                    // Check if this is a hello message (has name, version, self, roles)
+                    if (message.name && message.version && message.self && message.roles) {
+                        handleHello(message);
+                    } else {
+                        handleDelta(message);
+                    }
+                } catch (e) {
+                    console.error('Error parsing message:', e);
+                    addSystemMessage('Error parsing message', 'error');
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                addSystemMessage('WebSocket error occurred', 'error');
+            };
+            
+            ws.onclose = () => {
+                updateStatus('disconnected', 'Disconnected');
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                addSystemMessage('Disconnected from SignalK stream');
+            };
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+
+        function clearMessages() {
+            pathsData.clear();
+            pathsLastUpdate.clear();
+            messageCount = 0;
+            updateCount = 0;
+            renderCards();
+            updateStats();
+        }
+
+        function updateStatus(status, text) {
+            statusIndicator.className = `status-indicator status-${status}`;
+            statusText.textContent = text;
+        }
+
+        function handleDelta(delta) {
+            messageCount++;
+            
+            // Process updates
+            if (delta.updates) {
+                delta.updates.forEach(update => {
+                    const source = update.$source || 'unknown';
+                    const timestamp = update.$timestamp || new Date().toISOString();
+                    
+                    if (update.values) {
+                        update.values.forEach(v => {
+                            if (v.path) {
+                                updateCount++;
+                                
+                                // Store/update path data
+                                pathsData.set(v.path, {
+                                    timestamp: timestamp,
+                                    source: source,
+                                    value: v.value
+                                });
+                                
+                                // Update last modified time
+                                pathsLastUpdate.set(v.path, Date.now());
+                            }
+                        });
+                    }
+                });
+            }
+            
+            updateStats();
+            renderCards();
+        }
+
+        function handleHello(hello) {
+            addSystemMessage(`Connected to ${hello.name} v${hello.version}`, 'success');
+            console.log('SignalK Server Hello:', hello);
+        }
+
+        function addSystemMessage(text, type = 'info') {
+            // Create a temporary message card for system notifications
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'path-card';
+            messageDiv.dataset.type = 'system';
+            messageDiv.dataset.createdAt = Date.now();
+            
+            if (type === 'error') {
+                messageDiv.style.borderLeftColor = '#f44336';
+            } else if (type === 'success') {
+                messageDiv.style.borderLeftColor = '#4CAF50';
+            } else {
+                messageDiv.style.borderLeftColor = '#2196F3';
+            }
+            messageDiv.style.borderLeft = `3px solid ${type === 'error' ? '#f44336' : type === 'success' ? '#4CAF50' : '#2196F3'}`;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.textContent = text;
+            if (type === 'error') {
+                contentDiv.style.color = '#f44336';
+            } else if (type === 'success') {
+                contentDiv.style.color = '#4CAF50';
+            } else {
+                contentDiv.style.color = 'var(--text-secondary)';
+            }
+            
+            messageDiv.appendChild(contentDiv);
+            cardsGrid.insertBefore(messageDiv, cardsGrid.firstChild);
+        }
+
+        function renderCards() {
+            // If no data yet, show placeholder
+            if (pathsData.size === 0) {
+                if (cardsGrid.children.length === 0 || 
+                    (cardsGrid.children.length === 1 && cardsGrid.children[0].style.gridColumn === '1 / -1')) {
+                    // Already showing placeholder
+                    return;
+                }
+                cardsGrid.innerHTML = '<div style="color: var(--text-secondary); text-align: center; padding: 20px; grid-column: 1 / -1;">No data received yet...</div>';
+                return;
+            }
+            
+            // Clear grid if it had only the placeholder
+            if (cardsGrid.children.length === 1 && cardsGrid.children[0].style.gridColumn === '1 / -1') {
+                cardsGrid.innerHTML = '';
+            }
+            
+            // Get sorted paths
+            const sortedPaths = Array.from(pathsData.keys()).sort();
+            
+            // Update or create cards in sorted order
+            sortedPaths.forEach(path => {
+                const data = pathsData.get(path);
+                const lastUpdate = pathsLastUpdate.get(path);
+                const isStale = Date.now() - lastUpdate > STALE_TIMEOUT;
+                
+                // Find existing card or create new one
+                let card = document.querySelector(`[data-path="${CSS.escape(path)}"]`);
+                
+                if (!card) {
+                    card = document.createElement('div');
+                    card.className = 'path-card';
+                    card.dataset.path = path;
+                }
+                
+                // Update card content
+                const timeStr = new Date(data.timestamp).toLocaleTimeString();
+                
+                const cardInnerHTML = `
+                    <div class="card-header">
+                        <div class="path-name">${escapeHtml(path)}</div>
+                        <div class="card-timestamp">${timeStr}</div>
+                    </div>
+                    <div class="card-footer">
+                        <div class="card-source">Source: <strong>${escapeHtml(data.source)}</strong></div>
+                        <div class="card-values"><div class="value-item">${escapeHtml(JSON.stringify(data.value, null, 2))}</div></div>
+                    </div>
+                `;
+                
+                card.innerHTML = cardInnerHTML;
+                
+                // Mark stale
+                if (isStale) {
+                    card.classList.add('stale');
+                } else {
+                    card.classList.remove('stale');
+                }
+                
+                // Append card (moves it to end if it already exists, maintaining sort order)
+                cardsGrid.appendChild(card);
+            });
+            
+            // Remove cards for paths that no longer exist
+            Array.from(cardsGrid.querySelectorAll('.path-card')).forEach(card => {
+                if (card.dataset.path && !pathsData.has(card.dataset.path)) {
+                    card.remove();
+                }
+            });
+        }
+
+        function cleanupStaleCards() {
+            const now = Date.now();
+            const staleCards = [];
+            
+            pathsLastUpdate.forEach((lastUpdate, path) => {
+                if (now - lastUpdate > STALE_TIMEOUT) {
+                    staleCards.push(path);
+                }
+            });
+            
+            // Remove stale paths
+            staleCards.forEach(path => {
+                pathsData.delete(path);
+                pathsLastUpdate.delete(path);
+                
+                const card = document.querySelector(`[data-path="${CSS.escape(path)}"]`);
+                if (card) {
+                    card.remove();
+                }
+            });
+            
+            // Remove old system messages (5 second timeout)
+            Array.from(cardsGrid.querySelectorAll('[data-type="system"]')).forEach(card => {
+                const createdAt = parseInt(card.dataset.createdAt);
+                if (now - createdAt > 5000) {
+                    card.remove();
+                }
+            });
+            
+            // If grid is now empty, show placeholder
+            if (pathsData.size === 0 && cardsGrid.children.length === 0) {
+                cardsGrid.innerHTML = '<div style="color: var(--text-secondary); text-align: center; padding: 20px; grid-column: 1 / -1;">No data received yet...</div>';
+            }
+        }
+
+        function updateStats() {
+            messageCountEl.textContent = messageCount;
+            updateCountEl.textContent = updateCount;
+            pathCountEl.textContent = pathsData.size;
+        }
+
+        // Helper function to escape HTML
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return String(text).replace(/[&<>"']/g, m => map[m]);
+        }
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            clearInterval(cleanupInterval);
+            if (ws) {
+                ws.close();
+            }
+        });
+    </script>
+</body>
+</html>

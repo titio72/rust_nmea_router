@@ -22,6 +22,16 @@
     "port": 8080,
     "google_maps_api_key": "your_google_maps_api_key_here"
   },
+  "udp": {
+    "enabled": false,
+    "address": "192.168.1.255:10110"
+  },
+  "signalk": {
+    "enabled": false,
+    "rate_limit_ms": 100,
+    "vessel_uuid": "e8bf264e-0321-46e5-8dfb-c1394ff974f8",
+    "vessel_name": "Itaca"
+  },
   "database": {
     "connection": {
       "host": "localhost",

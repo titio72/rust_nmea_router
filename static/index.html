@@ -633,6 +633,10 @@
                 <span>Metrics Tracking:</span>
                 <div class="toggle-switch" id="metricsToggle"></div>
             </div>
+            <div class="tracking-toggle-container" onclick="toggleSignalk()">
+                <span>SignalK Broadcasting:</span>
+                <div class="toggle-switch" id="signalkToggle"></div>
+            </div>
             <div class="trips-filter">
                 <label for="yearFilter">Filter:</label>
                 <select id="yearFilter" onchange="onFilterChange()">
@@ -1181,6 +1185,56 @@
             } catch (error) {
                 console.error('Error toggling metrics:', error);
                 alert('Failed to update metrics status. Check console for details.');
+            }
+        }
+
+        // Initialize SignalK broadcasting status
+        async function initializeSignalk() {
+            try {
+                const response = await fetch('/api/signalk/status');
+                if (!response.ok) {
+                    throw new Error('Failed to load signalk status');
+                }
+                const result = await response.json();
+                const toggle = document.getElementById('signalkToggle');
+                if (result.data && result.data.enabled) {
+                    toggle.classList.add('active');
+                }
+            } catch (error) {
+                console.error('Error loading signalk status:', error);
+            }
+        }
+        initializeSignalk();
+
+        // Toggle SignalK broadcasting
+        async function toggleSignalk() {
+            const toggle = document.getElementById('signalkToggle');
+            const newStatus = !toggle.classList.contains('active');
+
+            try {
+                const response = await fetch('/api/signalk/status', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ enabled: newStatus })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to update signalk status');
+                }
+
+                const result = await response.json();
+                if (result.status === 'ok' && result.data) {
+                    if (result.data.enabled) {
+                        toggle.classList.add('active');
+                    } else {
+                        toggle.classList.remove('active');
+                    }
+                }
+            } catch (error) {
+                console.error('Error toggling signalk:', error);
+                alert('Failed to update signalk status. Check console for details.');
             }
         }
 

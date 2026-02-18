@@ -19,6 +19,7 @@ mod frame_filter;
 mod web;
 mod udp_broadcaster;
 mod broadcast_monitor;
+mod signalk_broadcaster;
 pub mod utilities;
 
 use vessel_monitor::VesselMonitor;
@@ -31,6 +32,7 @@ use frame_filter::should_process_n2k_message;
 use frame_filter::should_process_frame_by_id;
 use udp_broadcaster::UdpBroadcaster;
 use broadcast_monitor::BroadcastMonitor;
+use signalk_broadcaster::SignalKBroadcaster;
 // use crate::application_state::ApplicationState; // Removed: module does not exist
 // Import from nmea2k crate
 use nmea2k::{CanBus, Identifier, MessageHandler, N2kStreamReader};
@@ -241,6 +243,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     // Create broadcast monitor for realtime WebSocket data
     let mut broadcast_monitor = BroadcastMonitor::new();
+    
+    // Create SignalK broadcaster (if enabled)
+    let mut signalk_broadcaster = if config.signalk.enabled {
+        info!("SignalK broadcaster enabled with {}ms rate limit", config.signalk.rate_limit_ms);
+        Some(SignalKBroadcaster::new(config.signalk.rate_limit_ms, config.signalk.vessel_uuid.clone()))
+    } else {
+        None
+    };
 
     // Read CAN frames in a loop
     loop {
@@ -274,6 +284,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                     
                     // Broadcast realtime data via WebSocket (independent of database/tracking flags)
                     broadcast_monitor.handle_message(&n2k_frame, now);
+                    
+                    // Broadcast SignalK delta messages (if enabled)
+                    if signalk_broadcaster.is_some() && is_signalk_enabled(&vessel_db) {
+                        if let Some(ref mut sk_broadcaster) = signalk_broadcaster {
+                            sk_broadcaster.handle_message(&n2k_frame, now);
+                        }
+                    }
                     
                     let sync_status_and_skew = time_monitor.time_sync_status();
                     metrics.gnss_time_skew = sync_status_and_skew.skew;
@@ -369,5 +386,14 @@ fn is_vessel_tracking_enabled(vessel_db: &Option<VesselDatabase>) -> bool {
         false // Default to disabled if no database
     };
     tracking_enabled
+}
+
+fn is_signalk_enabled(vessel_db: &Option<VesselDatabase>) -> bool {
+    let signalk_enabled = if let Some(ref db) = *vessel_db {
+        db.get_system_status("signalk_enabled").unwrap_or(false)
+    } else {
+        false // Default to disabled if no database
+    };
+    signalk_enabled
 }
 

@@ -17,6 +17,7 @@ This project is a learning and production-grade effort, inspired by https://gith
   - Engine Data (127488)
   - System Time (126992)
 - **REST API & Web Interface**: JSON endpoints for trips, track data, environmental metrics, and speed distribution analysis, plus responsive web dashboard with interactive charts and Google Maps integration
+- **SignalK v1.7.0 Broadcaster**: Real-time WebSocket streaming of vessel data in SignalK delta format with SI units (m/s, radians, Kelvin, Pa) for position, speed, heading, wind, temperature, humidity, and pressure
 - **Adaptive Database Persistence**:
   - Moored vessels: 5-minute intervals
   - Underway vessels: 30-second intervals
@@ -459,6 +460,139 @@ The response contains:
 - `labels`: Speed range buckets in knots (0.5 knot increments)
 - `sailing`: Percentage of time spent sailing in each speed range
 - `motoring`: Percentage of time spent motoring in each speed range
+
+## SignalK WebSocket Streaming
+
+The application includes a SignalK v1.7.0 broadcaster that streams real-time vessel data in SignalK delta format over WebSocket connections.
+
+### What is SignalK?
+
+SignalK is a modern, open-source data format for marine systems that provides a standardized way to exchange sensor and navigation data. It uses JSON for data representation and WebSocket for real-time streaming.
+
+### Configuration
+
+Enable SignalK broadcasting in your `config.json`:
+
+```json
+{
+  "signalk": {
+    "enabled": true,
+    "rate_limit_ms": 100
+  }
+}
+```
+
+- `enabled`: Enable or disable the SignalK broadcaster (default: `false`)
+- `rate_limit_ms`: Minimum milliseconds between updates for each SignalK path (default: `100` = 10Hz)
+
+### WebSocket Endpoint
+
+Once enabled and the application is running, connect to:
+
+```
+ws://localhost:8080/signalk/v1/stream
+```
+
+Or from another device on the same network:
+
+```
+ws://<your-server-ip>:8080/signalk/v1/stream
+```
+
+### Testing the Stream
+
+**Visual Test Page:**
+
+The application includes a built-in test page for viewing the SignalK stream:
+
+```
+http://localhost:8080/signalk-test.html
+```
+
+Features:
+- Live connection status indicator
+- Real-time message display with timestamps
+- Message and update counters
+- Path-based filtering (filter by specific SignalK paths)
+- Auto-scroll with newest messages at top
+- Theme support (dark/light mode)
+- JSON formatting for easy reading
+
+**Command-Line Testing:**
+
+Use `wscat` or any WebSocket client to connect:
+
+```bash
+wscat -c ws://localhost:8080/signalk/v1/stream
+```
+
+### Supported Data Paths
+
+The broadcaster converts NMEA2000 messages to SignalK paths with SI units:
+
+| NMEA2000 PGN | SignalK Path | Units | Description |
+|--------------|--------------|-------|-------------|
+| 129025 | navigation.position | degrees | Latitude/Longitude |
+| 129026 | navigation.speedOverGround | m/s | Speed over ground |
+| 129026 | navigation.courseOverGroundTrue | radians | Course over ground (true) |
+| 127250 | navigation.headingTrue | radians | Vessel heading (true) |
+| 130306 | environment.wind.speedOverGround | m/s | True wind speed |
+| 130306 | environment.wind.angleTrueGround | radians | True wind angle |
+| 130306 | environment.wind.speedApparent | m/s | Apparent wind speed |
+| 130306 | environment.wind.angleApparent | radians | Apparent wind angle |
+| 130312 | environment.water.temperature | Kelvin | Water temperature |
+| 130312 | environment.outside.temperature | Kelvin | Air/cabin temperature |
+| 130313 | environment.outside.relativeHumidity | ratio (0-1) | Relative humidity |
+| 130314 | environment.outside.pressure | Pascals | Atmospheric pressure |
+| 126992 | navigation.datetime | ISO 8601 | GPS date/time |
+
+### Message Format
+
+SignalK delta messages follow the v1.7.0 specification:
+
+```json
+{
+  "context": "vessels.self",
+  "updates": [{
+    "source": {
+      "label": "N2K-22",
+      "type": "NMEA2000",
+      "src": "22",
+      "pgn": 129026
+    },
+    "timestamp": "2026-02-17T12:00:00.000Z",
+    "values": [
+      {
+        "path": "navigation.speedOverGround",
+        "value": 2.572
+      },
+      {
+        "path": "navigation.courseOverGroundTrue",
+        "value": 0.7854
+      }
+    ]
+  }]
+}
+```
+
+### Features
+
+- **SI Units**: All values in standard international units (m/s, radians, Kelvin, Pascals)
+- **Rate Limiting**: Independent per-path throttling to prevent overwhelming clients
+- **True Wind Calculation**: Automatic conversion from apparent wind using vessel speed
+- **Source Metadata**: Each update includes NMEA2000 source address and PGN
+- **RFC 3339 Timestamps**: Millisecond-precision ISO 8601 timestamps
+- **Multi-Client Support**: Broadcast to multiple WebSocket clients simultaneously
+
+### Integration
+
+The SignalK stream integrates with:
+- **SignalK Server**: Connect as a data provider
+- **OpenPlotter**: Direct WebSocket connection
+- **Navionics**: Via SignalK plugin
+- **Custom Applications**: Any WebSocket client supporting SignalK v1.7.0
+
+For detailed path mappings, unit conversions, and examples, see [docs/SIGNALK_MAPPING.md](docs/SIGNALK_MAPPING.md).
 
 ### Future Enhancements
 

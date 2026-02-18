@@ -21,6 +21,8 @@ pub struct Config {
     pub web: WebConfig,
     #[serde(default)]
     pub udp: UdpConfig,
+    #[serde(default)]
+    pub signalk: SignalKConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +78,49 @@ impl Default for UdpConfig {
         Self {
             enabled: false,
             address: "192.168.1.255:10110".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalKConfig {
+    /// Enable or disable SignalK broadcasting
+    #[serde(default = "default_signalk_enabled")]
+    pub enabled: bool,
+    /// Rate limit in milliseconds for each SignalK path
+    #[serde(default = "default_signalk_rate_limit_ms")]
+    pub rate_limit_ms: u64,
+    /// Vessel UUID for SignalK (defaults to hardcoded value if not specified)
+    #[serde(default = "default_vessel_uuid")]
+    pub vessel_uuid: String,
+    /// Vessel name for SignalK (defaults to "Itaca" if not specified)
+    #[serde(default = "default_vessel_name")]
+    pub vessel_name: String,
+}
+
+fn default_signalk_enabled() -> bool {
+    false
+}
+
+fn default_signalk_rate_limit_ms() -> u64 {
+    100  // 10Hz default
+}
+
+fn default_vessel_uuid() -> String {
+    "e8bf264e-0321-46e5-8dfb-c1394ff974f8".to_string()
+}
+
+fn default_vessel_name() -> String {
+    "Itaca".to_string()
+}
+
+impl Default for SignalKConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            rate_limit_ms: 100,
+            vessel_uuid: "e8bf264e-0321-46e5-8dfb-c1394ff974f8".to_string(),
+            vessel_name: "Itaca".to_string(),
         }
     }
 }
@@ -443,6 +488,7 @@ impl Config {
             logging: LogConfig::default(),
             web: WebConfig::default(),
             udp: UdpConfig::default(),
+            signalk: SignalKConfig::default(),
         }
     }
 }

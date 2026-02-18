@@ -14,12 +14,14 @@ use std::{backtrace::Backtrace, sync::Arc};
 use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData, SpeedDistributionData, WindStatisticsData, TripLegsData, TrackAnalytics, HeatmapData};
 use crate::config::Config;
 use crate::web::websocket::BroadcastChannels;
+use crate::web::broadcast_manager::SignalKBroadcastChannels;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<VesselDatabase>,
     pub config: Arc<Config>,
     pub broadcast: Arc<BroadcastChannels>,
+    pub signalk_broadcast: Arc<SignalKBroadcastChannels>,
 }
 
 #[derive(Debug, Serialize)]
@@ -129,6 +131,16 @@ pub struct MetricsStatusRequest {
 
 #[derive(Debug, Serialize)]
 pub struct MetricsStatusResponse {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SignalKStatusRequest {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SignalKStatusResponse {
     pub enabled: bool,
 }
 
@@ -604,6 +616,39 @@ pub async fn set_metrics_status(
     Ok(Json(ApiResponse::ok(response)))
 }
 
+pub async fn get_signalk_status(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<SignalKStatusResponse>>, StatusCode> {
+    info!("GET /api/signalk/status called");
+    
+    // Get signalk status from database
+    let enabled = state.db.get_system_status("signalk_enabled")
+        .unwrap_or(false);
+    
+    let response = SignalKStatusResponse { enabled };
+    Ok(Json(ApiResponse::ok(response)))
+}
+
+pub async fn set_signalk_status(
+    State(state): State<AppState>,
+    Json(request): Json<SignalKStatusRequest>,
+) -> Result<Json<ApiResponse<SignalKStatusResponse>>, StatusCode> {
+    info!(?request, "POST /api/signalk/status called");
+    
+    // Save signalk status to database
+    if let Err(e) = state.db.set_system_status("signalk_enabled", request.enabled) {
+        error!(error = %e, "Failed to set signalk status");
+        return Ok(Json(ApiResponse::error(e.to_string())));
+    }
+    
+    let response = SignalKStatusResponse {
+        enabled: request.enabled,
+    };
+    
+    info!("SignalK status updated to: {}", request.enabled);
+    Ok(Json(ApiResponse::ok(response)))
+}
+
 pub fn create_api_router(state: AppState) -> Router {
     Router::new()
         .route("/trip_description", post(update_trip_description))
@@ -627,6 +672,8 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/tracking/status", post(set_tracking_status))
         .route("/metrics/status", get(get_metrics_status))
         .route("/metrics/status", post(set_metrics_status))
+        .route("/signalk/status", get(get_signalk_status))
+        .route("/signalk/status", post(set_signalk_status))
         .route("/ws/realtime", get(super::websocket::websocket_handler))
         .with_state(state)
 }
@@ -655,10 +702,12 @@ mod tests {
         let mut config = crate::config::Config::default();
         config.web.google_maps_api_key = Some("your_google_maps_api_key_here".to_string());
         let broadcast = Arc::new(BroadcastChannels::new());
+        let signalk_broadcast = Arc::new(SignalKBroadcastChannels::new());
         let state = AppState {
             db: Arc::new(db),
             config: Arc::new(config),
             broadcast,
+            signalk_broadcast,
         };
         create_api_router(state)
     }

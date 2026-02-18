@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    routing::get_service,
+    routing::{get, get_service},
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use crate::db::VesselDatabase;
 use crate::config::Config;
 use crate::utilities::cleanup_old_exports;
 use super::api::{AppState, create_api_router};
-use super::broadcast_manager::get_broadcast_channels;
+use super::broadcast_manager::{get_broadcast_channels, get_signalk_channels};
 
 pub async fn start_web_server(
     db: Arc<VesselDatabase>,
@@ -21,8 +21,9 @@ pub async fn start_web_server(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get the global broadcast channels (automatically initialized on first call)
     let broadcast = get_broadcast_channels();
+    let signalk_broadcast = get_signalk_channels();
     
-    let state = AppState { db, config, broadcast };
+    let state = AppState { db, config, broadcast, signalk_broadcast };
 
     // Spawn cleanup task to remove old exports every 24 hours
     tokio::spawn(async {
@@ -30,11 +31,12 @@ pub async fn start_web_server(
     });
 
     // Create API router
-    let api_router = create_api_router(state);
+    let api_router = create_api_router(state.clone());
 
     // Create main app router with static file serving
     let app = Router::new()
         .nest("/api", api_router)
+        .route("/signalk/v1/stream", get(super::signalk::signalk_stream).with_state(state.clone()))
         .nest_service("/", get_service(ServeDir::new("static")).handle_error(|error| async move {
             (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
