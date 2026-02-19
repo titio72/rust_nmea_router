@@ -369,7 +369,7 @@ Enable SignalK broadcasting in `config.json`:
 The application includes a built-in test page for viewing the SignalK stream in real-time:
 
 ```
-http://localhost:8080/signalk-test.html
+http://localhost:8080/signalk-browser.html
 ```
 
 **Features:**

@@ -55,3 +55,46 @@ function baseToggleTheme() {
     updateBrandLogo(isDark);
     return isDark;
 }
+
+/**
+ * Create the common navigation header for all pages
+ * @param {string} currentPage - The current page identifier ('trips', 'monitor', 'stats', 'signalk-browser')
+ * @param {boolean} includeRealtimeStatus - Optional: include real-time connection status indicator (for monitor page)
+ */
+function createHeaderBar(currentPage) {
+    const navItems = [
+        { href: '/', label: 'Trips', page: 'trips' },
+        { href: '/realtime.html', label: 'Monitor', page: 'monitor' },
+        { href: '/yearly-stats.html', label: 'Stats', page: 'stats' },
+        { href: '/signalk-browser.html', label: 'SignalK Browser', page: 'signalk-browser' }
+    ];
+
+    let headerHTML = `
+        <div class="header-bar">
+            <div style="display: flex; align-items: center; gap: 15px;">
+                <img id="brandLogo" src="/Itaca_v3.svg" alt="Logo" style="height: 40px; margin-right: 15px;">
+                <div>
+                    <h2 style="margin: 0; color: var(--text-primary);">NMEA Router</h2>
+                    <nav class="navigation-links" style="margin-top: 8px;">`;
+    
+    navItems.forEach(item => {
+        const isActive = item.page === currentPage ? ' nav-link-active' : '';
+        headerHTML += `<a href="${item.href}" class="nav-link${isActive}">${item.label}</a>`;
+    });
+
+    headerHTML += `
+                    </nav>
+                </div>
+            </div>`;
+
+
+    headerHTML += `
+        <button class="theme-toggle" id="themeBtn" onclick="baseToggleTheme()">
+            <span id="theme-icon">◐</span> <span id="theme-text">Dark</span>
+        </button>`;
+
+    headerHTML += `
+        </div>`;
+
+    return headerHTML;
+}

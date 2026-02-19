@@ -23,6 +23,8 @@
     --heatmap-4: #1e8449;
     --heatmap-5: #0b5345;
     --btn-hover: rgba(127, 255, 0, 0.8);
+    --primary-color: #2980b9;
+    --secondary-color: #95a5a6;
 }
 
 body.dark-theme {
@@ -48,6 +50,8 @@ body.dark-theme {
     --heatmap-4: #4d9a25;
     --heatmap-5: #5dff11;
     --btn-hover: rgba(255, 255, 0, 0.2);
+    --primary-color: #3498db;
+    --secondary-color: #bdc3c7;
 }
 
 body {

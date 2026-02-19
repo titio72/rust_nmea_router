@@ -506,7 +506,7 @@ ws://<your-server-ip>:8080/signalk/v1/stream
 The application includes a built-in test page for viewing the SignalK stream:
 
 ```
-http://localhost:8080/signalk-test.html
+http://localhost:8080/signalk-browser.html
 ```
 
 Features:

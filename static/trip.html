@@ -274,23 +274,15 @@
     </style>
 </head>
 <body>
-    <div class="header-bar">
-        <div style="display: flex; align-items: center; gap: 15px;">
-            <img id="brandLogo" src="/Itaca_v3.svg" alt="Itaca Logo" style="height: 40px; width: auto;">
-            <div>
-                <h2 style="margin: 0; color: var(--text-primary);">NMEA Router</h2>
-                <a href="index.html" class="back-link">&larr; Back to Trip Dashboard</a>
-            </div>
-        </div>
-        <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">
-            <span id="theme-icon">◐</span> <span id="theme-text">Dark</span>
-        </button>
+    <div id="headerContainer"></div>
+    <div id="tripContainer" class="level-1-container">
+        <div id="legSelectorContainer"></div>
+        <div id="tripDetails"></div>
     </div>
-        <div id="tripContainer" class="level-1-container">
-            <div id="legSelectorContainer"></div>
-            <div id="tripDetails"></div>
-        </div>
     <script>
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('trips');
+        initializeTheme();
+
         // Load Google Maps API key dynamically
         async function loadGoogleMapsAPI() {
             try {

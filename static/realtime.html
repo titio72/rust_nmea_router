@@ -105,6 +105,19 @@
             padding: 40px 20px;
         }
 
+        .realtime-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .realtime-header h2 {
+            margin: 0;
+            flex: 1;
+        }
+
         .sync-status {
             display: inline-block;
             padding: 4px 10px;
@@ -219,30 +232,17 @@
 </head>
 
 <body>
-    <div class="header-bar">
-        <div style="display: flex; align-items: center; gap: 15px;">
-            <img id="brandLogo" src="/Itaca_v3.svg" alt="Itaca Logo" style="height: 40px; width: auto;">
-            <div>
-                <h2 style="margin: 0; color: var(--text-primary);">NMEA Router</h2>
-                <nav class="navigation-links" style="margin-top: 8px;">
-                    <a href="/" class="nav-link">Trips</a>
-                    <a href="/realtime.html" class="nav-link nav-link-active">Monitor</a>
-                    <a href="/yearly-stats.html" class="nav-link">Stats</a>
-                </nav>
-            </div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 15px;">
+    <div id="headerContainer"></div>
+
+    <div class="level-1-container">
+        <div class="realtime-header">
+            <h2>Realtime Data</h2>
             <div class="status-indicator">
                 <div class="status-dot" id="connectionStatus"></div>
                 <span id="statusText">Connecting...</span>
             </div>
-            <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">
-                <span id="theme-icon">◐</span> <span id="theme-text">Dark</span>
-            </button>
         </div>
-    </div>
-
-    <div class="level-1-container">
+        
         <div class="cards-grid">
             <!-- GNSS & Time Information Card -->
             <div class="data-card">
@@ -367,6 +367,10 @@
     </div>
 
     <script>
+        // Initialize header and theme
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('monitor');
+        initializeTheme();
+        
         let ws = null;
         let lastUpdate = {
             gnss: null,

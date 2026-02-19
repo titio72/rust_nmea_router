@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SignalK Stream Test - NMEA2000 Router</title>
+    <title>SignalK Stream Browser - NMEA Router</title>
+    <link rel="icon" type="image/png" href="/nmeasail.png">
     <link rel="stylesheet" href="shared.css">
     <script src="shared-theme.js"></script>
     <style>
@@ -145,40 +146,93 @@
             transition: all 0.2s;
         }
         .btn-primary {
-            background: var(--primary-color);
+            background: #0066cc;
             color: white;
+            border: 1px solid #0052a3;
         }
         .btn-primary:hover {
-            opacity: 0.9;
+            background: #0052a3;
         }
         .btn-secondary {
-            background: var(--secondary-color);
+            background: #666666;
             color: white;
+            border: 1px solid #555555;
         }
         .btn-secondary:hover {
-            opacity: 0.9;
+            background: #555555;
+        }
+        body.dark-theme .btn-primary {
+            background: #3498db;
+            border: 1px solid #2980b9;
+        }
+        body.dark-theme .btn-primary:hover {
+            background: #2980b9;
+        }
+        body.dark-theme .btn-secondary {
+            background: #95a5a6;
+            border: 1px solid #7f8c8d;
+        }
+        body.dark-theme .btn-secondary:hover {
+            background: #7f8c8d;
         }
         .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .signalk-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .signalk-header h2 {
+            margin: 0;
+            flex: 1;
+        }
+        .signalk-controls {
+            display: flex;
+            gap: 10px;
+        }
+        .signalk-btn {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 16px;
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 36px;
+            height: 36px;
+        }
+
+        .signalk-btn:hover {
+            background: var(--btn-hover);
+        }
+
+        .signalk-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
         }
     </style>
 </head>
 <body>
-    <div class="header-bar">
-        <div style="display: flex; align-items: center;">
-            <img id="brandLogo" src="/Itaca_v3.svg" alt="Logo" style="height: 40px; margin-right: 15px;">
-            <div>
-                <h2 style="margin: 0;">NMEA2000 Router</h2>
-                <p style="margin: 5px 0 0 0; font-size: 0.9em; color: var(--text-secondary);">SignalK Stream Test</p>
-            </div>
-        </div>
-        <button class="theme-toggle" id="themeBtn" onclick="baseToggleTheme()">
-            <span id="theme-icon">◐</span> <span id="theme-text">Dark</span>
-        </button>
-    </div>
+    <div id="headerContainer"></div>
 
     <div class="level-1-container">
+        <div class="signalk-header">
+            <h2>SignalK Stream Test</h2>
+            <div class="signalk-controls">
+                <button id="connectBtn" class="signalk-btn" title="Connect">🗸</button>
+                <button id="disconnectBtn" class="signalk-btn" disabled title="Disconnect">🗴</button>
+                <button id="clearBtn" class="signalk-btn" title="Clear">🗑</button>
+            </div>
+        </div>
+        
         <div class="connection-info">
             <div class="connection-status">
                 <span id="statusIndicator" class="status-indicator status-disconnected"></span>
@@ -200,12 +254,6 @@
             </div>
         </div>
 
-        <div class="controls">
-            <button id="connectBtn" class="btn btn-primary">Connect</button>
-            <button id="disconnectBtn" class="btn btn-secondary" disabled>Disconnect</button>
-            <button id="clearBtn" class="btn btn-secondary">Clear</button>
-        </div>
-
         <div class="cards-grid" id="cardsGrid">
             <div style="color: var(--text-secondary); text-align: center; padding: 20px; grid-column: 1 / -1;">
                 Click "Connect" to start receiving SignalK delta messages...
@@ -214,6 +262,10 @@
     </div>
 
     <script>
+        // Initialize header and theme
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('signalk-browser');
+        initializeTheme();
+        
         let ws = null;
         let messageCount = 0;
         let updateCount = 0;
