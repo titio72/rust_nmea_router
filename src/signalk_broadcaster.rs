@@ -23,6 +23,12 @@ pub struct SignalKBroadcaster {
     /// Cached SOG in m/s for true wind calculations
     last_sog_ms: Option<f64>,
     
+    /// Cached time sync status string ("synced" or "not_synced")
+    last_time_sync_status: Option<String>,
+    
+    /// Cached time skew in milliseconds
+    last_time_skew_ms: Option<i64>,
+    
     /// Rate limiting interval in milliseconds
     rate_limit_ms: u64,
     
@@ -39,6 +45,7 @@ pub struct SignalKBroadcaster {
     last_humidity_broadcast: Option<Instant>,
     last_pressure_broadcast: Option<Instant>,
     last_datetime_broadcast: Option<Instant>,
+    last_timesync_broadcast: Option<Instant>,
 }
 
 impl SignalKBroadcaster {
@@ -46,6 +53,8 @@ impl SignalKBroadcaster {
         Self {
             vessel_uuid,
             last_sog_ms: None,
+            last_time_sync_status: None,
+            last_time_skew_ms: None,
             rate_limit_ms,
             last_position_broadcast: None,
             last_sog_broadcast: None,
@@ -59,7 +68,15 @@ impl SignalKBroadcaster {
             last_humidity_broadcast: None,
             last_pressure_broadcast: None,
             last_datetime_broadcast: None,
+            last_timesync_broadcast: None,
         }
+    }
+    
+    /// Update the cached time sync status and skew
+    /// This should be called from the main loop with the latest values from TimeMonitor
+    pub fn update_time_sync_status(&mut self, status: String, skew_ms: i64) {
+        self.last_time_sync_status = Some(status);
+        self.last_time_skew_ms = Some(skew_ms);
     }
     
     /// Check if enough time has passed to broadcast this path
@@ -294,9 +311,9 @@ impl MessageHandler for SignalKBroadcaster {
             },
             
             // System Time - PGN 126992
-            // SignalK: navigation.datetime (ISO 8601 string)
+            // SignalK: navigation.datetime (ISO 8601 string) + time sync status
             N2kMessage::NMEASystemTime(system_time) => {
-                if self.should_broadcast(self.last_datetime_broadcast, now) {
+                if self.should_broadcast(self.last_datetime_broadcast, now) || self.should_broadcast(self.last_timesync_broadcast, now) {
                     // Convert NMEA datetime to ISO 8601
                     let gnss_secs = system_time.date_time.to_unix_timestamp();
                     let gnss_millis = system_time.date_time.milliseconds();
@@ -306,13 +323,32 @@ impl MessageHandler for SignalKBroadcaster {
                     
                     let iso_timestamp = format!("{}.{:03}Z", datetime.format("%Y-%m-%dT%H:%M:%S"), gnss_millis);
                     
-                    let values = vec![SignalKValue {
+                    let mut values = vec![SignalKValue {
                         path: "navigation.datetime".to_string(),
                         value: json!(iso_timestamp),
                     }];
                     
+                    // Include time sync status if available (set via update_time_sync_status)
+                    if let Some(ref status) = self.last_time_sync_status {
+                        values.push(SignalKValue {
+                            path: "vessel.timeSyncStatus".to_string(),
+                            value: json!(status),
+                        });
+                    }
+                    if let Some(skew) = self.last_time_skew_ms {
+                        values.push(SignalKValue {
+                            path: "vessel.timeSkewMs".to_string(),
+                            value: json!(skew),
+                        });
+                    }
+                    
                     self.send_delta(source, timestamp, values);
-                    self.last_datetime_broadcast = Some(now);
+                    if self.should_broadcast(self.last_datetime_broadcast, now) {
+                        self.last_datetime_broadcast = Some(now);
+                    }
+                    if self.should_broadcast(self.last_timesync_broadcast, now) {
+                        self.last_timesync_broadcast = Some(now);
+                    }
                 }
             },
             

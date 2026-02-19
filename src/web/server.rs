@@ -12,18 +12,17 @@ use crate::db::VesselDatabase;
 use crate::config::Config;
 use crate::utilities::cleanup_old_exports;
 use super::api::{AppState, create_api_router};
-use super::broadcast_manager::{get_broadcast_channels, get_signalk_channels};
+use super::broadcast_manager::get_signalk_channels;
 
 pub async fn start_web_server(
     db: Arc<VesselDatabase>,
     config: Arc<Config>,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Get the global broadcast channels (automatically initialized on first call)
-    let broadcast = get_broadcast_channels();
+    // Get the global SignalK broadcast channels
     let signalk_broadcast = get_signalk_channels();
     
-    let state = AppState { db, config, broadcast, signalk_broadcast };
+    let state = AppState { db, config, signalk_broadcast };
 
     // Spawn cleanup task to remove old exports every 24 hours
     tokio::spawn(async {

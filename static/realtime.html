@@ -384,9 +384,9 @@
 
         function connectWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/api/ws/realtime`;
+            const wsUrl = `${protocol}//${window.location.host}/signalk/v1/stream`;
 
-            console.log('Connecting to WebSocket:', wsUrl);
+            console.log('Connecting to SignalK WebSocket:', wsUrl);
             ws = new WebSocket(wsUrl);
 
             ws.onopen = function (event) {
@@ -397,33 +397,22 @@
             ws.onmessage = function (event) {
                 try {
                     const message = JSON.parse(event.data);
-                    console.log('Received message:', message.message_type, message.data);
-
-                    switch (message.message_type) {
-                        case 'Position':
-                            updatePositionData(message.data);
-                            break;
-                        case 'CourseSpeed':
-                            updateCourseSpeedData(message.data);
-                            break;
-                        case 'Heading':
-                            updateHeadingData(message.data);
-                            break;
-                        case 'Wind':
-                            updateWindData(message.data);
-                            break;
-                        case 'Temperature':
-                            updateTemperatureData(message.data);
-                            break;
-                        case 'Humidity':
-                            updateHumidityData(message.data);
-                            break;
-                        case 'Pressure':
-                            updatePressureData(message.data);
-                            break;
-                        case 'SystemTime':
-                            updateTimeData(message.data);
-                            break;
+                    
+                    // Skip hello message (has 'name', 'version', 'self' fields)
+                    if (message.name) {
+                        console.log('Received SignalK hello:', message.name);
+                        return;
+                    }
+                    
+                    // Process delta messages (have 'context' and 'updates')
+                    if (message.context && message.updates) {
+                        console.log('Received SignalK delta with', message.updates[0]?.values?.length || 0, 'values');
+                        
+                        for (const update of message.updates) {
+                            for (const value of update.values) {
+                                updateValueByPath(value.path, value.value, update.timestamp);
+                            }
+                        }
                     }
                 } catch (error) {
                     console.error('Error parsing message:', error);
@@ -464,116 +453,145 @@
             return parseFloat(value).toFixed(decimals);
         }
 
-        function updateGnssTime(timestamp) {
-            if (timestamp !== null && timestamp !== undefined) {
-                const date = new Date(timestamp);
-                document.getElementById('gnssTime').textContent = date.toISOString();
+        // Route SignalK paths to UI elements with unit conversions
+        function updateValueByPath(path, value, timestamp) {
+            if (value === null || value === undefined) return;
+            
+            try {
+                switch (path) {
+                    // Navigation - Position
+                    case 'navigation.position':
+                        if (value.latitude !== undefined) {
+                            document.getElementById('latitude').textContent = formatValue(value.latitude, 5) + '°';
+                        }
+                        if (value.longitude !== undefined) {
+                            document.getElementById('longitude').textContent = formatValue(value.longitude, 5) + '°';
+                        }
+                        lastUpdate.gnss = new Date();
+                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        break;
+                    
+                    // Navigation - Speed Over Ground (m/s to knots)
+                    case 'navigation.speedOverGround':
+                        const sog_kn = value / 0.514444;
+                        document.getElementById('sog').textContent = formatValue(sog_kn, 1) + 'kn';
+                        lastUpdate.gnss = new Date();
+                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        break;
+                    
+                    // Navigation - Course Over Ground (radians to degrees)
+                    case 'navigation.courseOverGroundTrue':
+                        const cog_deg = (value * 180 / Math.PI) % 360;
+                        document.getElementById('cog').textContent = formatValue(cog_deg, 1) + '°';
+                        lastUpdate.gnss = new Date();
+                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        break;
+                    
+                    // Navigation - Heading True (radians to degrees)
+                    case 'navigation.headingTrue':
+                        const heading_deg = (value * 180 / Math.PI) % 360;
+                        document.getElementById('heading').textContent = formatValue(heading_deg, 1) + '°';
+                        lastUpdate.gnss = new Date();
+                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        break;
+                    
+                    // Navigation - GNSS DateTime
+                    case 'navigation.datetime':
+                        document.getElementById('gnssTime').textContent = value;
+                        lastUpdate.gnss = new Date();
+                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        break;
+                    
+                    // Wind - True Wind Speed (m/s to knots)
+                    case 'environment.wind.speedOverGround':
+                        const tws_kn = value / 0.514444;
+                        document.getElementById('tws').textContent = formatValue(tws_kn, 1) + 'kn';
+                        lastUpdate.wind = new Date();
+                        updateLastUpdateTime('windLastUpdate', lastUpdate.wind);
+                        break;
+                    
+                    // Wind - True Wind Angle (radians to degrees)
+                    case 'environment.wind.angleTrueGround':
+                        const twa_deg = (value * 180 / Math.PI) % 360;
+                        document.getElementById('twa').textContent = formatValue(twa_deg, 1) + '°';
+                        updateWindArrow(twa_deg);
+                        lastUpdate.wind = new Date();
+                        updateLastUpdateTime('windLastUpdate', lastUpdate.wind);
+                        break;
+                    
+                    // Wind - Apparent Wind Speed (m/s to knots)
+                    case 'environment.wind.speedApparent':
+                        const aws_kn = value / 0.514444;
+                        document.getElementById('aws').textContent = formatValue(aws_kn, 1) + 'kn';
+                        lastUpdate.wind = new Date();
+                        updateLastUpdateTime('windLastUpdate', lastUpdate.wind);
+                        break;
+                    
+                    // Wind - Apparent Wind Angle (radians to degrees)
+                    case 'environment.wind.angleApparent':
+                        const awa_deg = (value * 180 / Math.PI) % 360;
+                        document.getElementById('awa').textContent = formatValue(awa_deg, 1) + '°';
+                        lastUpdate.wind = new Date();
+                        updateLastUpdateTime('windLastUpdate', lastUpdate.wind);
+                        break;
+                    
+                    // Temperature - Water (Kelvin to Celsius)
+                    case 'environment.water.temperature':
+                        const water_temp_c = value - 273.15;
+                        document.getElementById('seaTemp').textContent = formatValue(water_temp_c, 1) + '°C';
+                        lastUpdate.env = new Date();
+                        updateLastUpdateTime('envLastUpdate', lastUpdate.env);
+                        break;
+                    
+                    // Temperature - Outside/Cabin (Kelvin to Celsius)
+                    case 'environment.outside.temperature':
+                        const cabin_temp_c = value - 273.15;
+                        document.getElementById('cabinTemp').textContent = formatValue(cabin_temp_c, 1) + '°C';
+                        lastUpdate.env = new Date();
+                        updateLastUpdateTime('envLastUpdate', lastUpdate.env);
+                        break;
+                    
+                    // Humidity (ratio 0-1 to percentage 0-100)
+                    case 'environment.outside.relativeHumidity':
+                        const humidity_pct = value * 100;
+                        document.getElementById('humidity').textContent = formatValue(humidity_pct, 1) + '%';
+                        lastUpdate.env = new Date();
+                        updateLastUpdateTime('envLastUpdate', lastUpdate.env);
+                        break;
+                    
+                    // Pressure (Pa to hPa)
+                    case 'environment.outside.pressure':
+                        const pressure_hpa = value / 100;
+                        document.getElementById('pressure').textContent = formatValue(pressure_hpa, 1) + 'hPa';
+                        lastUpdate.env = new Date();
+                        updateLastUpdateTime('envLastUpdate', lastUpdate.env);
+                        break;
+                    
+                    // Time Sync Status (custom non-standard SignalK path)
+                    case 'vessel.timeSyncStatus':
+                        const syncBadge = document.getElementById('timeSyncStatus');
+                        syncBadge.textContent = value.toUpperCase();
+                        syncBadge.classList.remove('synced', 'not_synced');
+                        syncBadge.classList.add(value === 'synced' ? 'synced' : 'not_synced');
+                        lastUpdate.gnss = new Date();
+                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        break;
+                    
+                    // Time Skew (milliseconds, custom non-standard SignalK path)
+                    case 'vessel.timeSkewMs':
+                        document.getElementById('timeSkew').textContent = formatValue(value, 0) + 'ms';
+                        lastUpdate.gnss = new Date();
+                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        break;
+                }
+            } catch (error) {
+                console.error('Error updating value for path', path, ':', error);
             }
-        }
-
-        function updatePositionData(data) {
-            if (data.latitude !== undefined) {
-                document.getElementById('latitude').textContent = formatValue(data.latitude, 5) + '°';
-            }
-            if (data.longitude !== undefined) {
-                document.getElementById('longitude').textContent = formatValue(data.longitude, 5) + '°';
-            }
-            updateGnssTime(data.timestamp);
-            lastUpdate.gnss = new Date();
-            updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
-        }
-
-        function updateCourseSpeedData(data) {
-            if (data.cog_deg !== undefined) {
-                document.getElementById('cog').textContent = formatValue(data.cog_deg, 1) + '°';
-            }
-            if (data.sog_kn !== undefined) {
-                document.getElementById('sog').textContent = formatValue(data.sog_kn, 1) + 'kn';
-            }
-            updateGnssTime(data.timestamp);
-            lastUpdate.gnss = new Date();
-            updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
-        }
-
-        function updateHeadingData(data) {
-            if (data.heading_deg !== undefined) {
-                document.getElementById('heading').textContent = formatValue(data.heading_deg, 1) + '°';
-            }
-            updateGnssTime(data.timestamp);
-            lastUpdate.gnss = new Date();
-            updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
-        }
-
-        function updateTimeData(data) {
-            if (data.time_sync_status !== undefined) {
-                const syncBadge = document.getElementById('timeSyncStatus');
-                syncBadge.textContent = data.time_sync_status.toUpperCase();
-                syncBadge.classList.remove('synced', 'not_synced');
-                syncBadge.classList.add(data.time_sync_status === 'synced' ? 'synced' : 'not_synced');
-            }
-            if (data.time_skew_ms !== undefined) {
-                document.getElementById('timeSkew').textContent = formatValue(data.time_skew_ms, 0) + 'ms';
-            }
-            updateGnssTime(data.timestamp);
-            lastUpdate.gnss = new Date();
-            updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
-        }
-
-        function updateWindData(data) {
-            if (data.true_wind_speed_kn !== undefined && data.true_wind_speed_kn !== null) {
-                document.getElementById('tws').textContent = formatValue(data.true_wind_speed_kn, 1) + 'kn';
-            }
-            if (data.true_wind_angle_deg !== undefined && data.true_wind_angle_deg !== null) {
-                document.getElementById('twa').textContent = formatValue(data.true_wind_angle_deg, 1) + '°';
-                updateWindArrow(data.true_wind_angle_deg);
-            }
-            if (data.apparent_wind_speed_kn !== undefined && data.apparent_wind_speed_kn !== null) {
-                document.getElementById('aws').textContent = formatValue(data.apparent_wind_speed_kn, 1) + 'kn';
-            }
-            if (data.apparent_wind_angle_deg !== undefined && data.apparent_wind_angle_deg !== null) {
-                document.getElementById('awa').textContent = formatValue(data.apparent_wind_angle_deg, 1) + '°';
-            }
-            lastUpdate.wind = new Date();
-            updateLastUpdateTime('windLastUpdate', lastUpdate.wind);
         }
 
         function updateWindArrow(angle) {
             const arrow = document.getElementById('windArrow');
             arrow.style.transform = `rotate(${angle}deg)`;
-        }
-
-        function updateTemperatureData(data) {
-            if (data.instance === 0) {
-                // Water temperature
-                document.getElementById('seaTemp').textContent = formatValue(data.temperature_c, 1) + '°C';
-            } else if (data.instance === 1) {
-                // Cabin temperature
-                document.getElementById('cabinTemp').textContent = formatValue(data.temperature_c, 1) + '°C';
-            }
-            lastUpdate.env = new Date();
-            updateLastUpdateTime('envLastUpdate', lastUpdate.env);
-        }
-
-        function updateHumidityData(data) {
-            if (data.humidity_percent !== undefined) {
-                document.getElementById('humidity').textContent = formatValue(data.humidity_percent, 1) + '%';
-            }
-            lastUpdate.env = new Date();
-            updateLastUpdateTime('envLastUpdate', lastUpdate.env);
-        }
-
-        function updatePressureData(data) {
-            if (data.pressure_pa !== undefined) {
-                // Convert Pa to hPa (hectopascals)
-                const hpa = data.pressure_pa / 100;
-                document.getElementById('pressure').textContent = formatValue(hpa, 1) + 'hPa';
-            }
-            lastUpdate.env = new Date();
-            updateLastUpdateTime('envLastUpdate', lastUpdate.env);
-        }
-
-        function updateEnvironmentalData(data) {
-            // Deprecated - kept for compatibility
         }
 
         function updateLastUpdateTime(elementId, timestamp) {

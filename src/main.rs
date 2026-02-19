@@ -18,7 +18,6 @@ mod app_metrics;
 mod frame_filter;
 mod web;
 mod udp_broadcaster;
-mod broadcast_monitor;
 mod signalk_broadcaster;
 pub mod utilities;
 
@@ -31,7 +30,6 @@ use app_metrics::{AppMetrics, MetricsLogger};
 use frame_filter::should_process_n2k_message;
 use frame_filter::should_process_frame_by_id;
 use udp_broadcaster::UdpBroadcaster;
-use broadcast_monitor::BroadcastMonitor;
 use signalk_broadcaster::SignalKBroadcaster;
 // use crate::application_state::ApplicationState; // Removed: module does not exist
 // Import from nmea2k crate
@@ -241,9 +239,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Database health check manager
     let mut db_health_check = HealthCheckManager::new(Duration::from_secs(60));
     
-    // Create broadcast monitor for realtime WebSocket data
-    let mut broadcast_monitor = BroadcastMonitor::new();
-    
     // Create SignalK broadcaster (if enabled)
     let mut signalk_broadcaster = if config.signalk.enabled {
         info!("SignalK broadcaster enabled with {}ms rate limit", config.signalk.rate_limit_ms);
@@ -283,7 +278,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     udp_broadcaster.handle_message(&n2k_frame, now);
                     
                     // Broadcast realtime data via WebSocket (independent of database/tracking flags)
-                    broadcast_monitor.handle_message(&n2k_frame, now);
+
                     
                     // Broadcast SignalK delta messages (if enabled)
                     if signalk_broadcaster.is_some() && is_signalk_enabled(&vessel_db) {
@@ -296,14 +291,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                     metrics.gnss_time_skew = sync_status_and_skew.skew;
                     metrics.gnss_time_skew_status = sync_status_and_skew.status;
                     
-                    // Update broadcast monitor with latest time sync status
-                    broadcast_monitor.update_time_sync_status(
-                        match sync_status_and_skew.status {
-                            TimeSyncStatus::Synchronized => "synced".to_string(),
-                            _ => "not_synced".to_string(),
-                        },
-                        sync_status_and_skew.skew,
-                    );
+                    let status_str = match sync_status_and_skew.status {
+                        TimeSyncStatus::Synchronized => "synced".to_string(),
+                        _ => "not_synced".to_string(),
+                    };
+                    
+                    // Update SignalK broadcaster with latest time sync status
+                    if let Some(ref mut sk_broadcaster) = signalk_broadcaster {
+                        sk_broadcaster.update_time_sync_status(
+                            status_str,
+                            sync_status_and_skew.skew,
+                        );
+                    }
                     
                     if sync_status_and_skew.status == TimeSyncStatus::Synchronized {
                         if is_vessel_tracking_enabled(&vessel_db) {
