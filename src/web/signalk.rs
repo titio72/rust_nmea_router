@@ -13,7 +13,7 @@ use tracing::{debug, warn, error};
 use serde_json;
 
 use super::api::AppState;
-use super::signalk_messages::{SignalKHello, SignalKDelta, SignalKUpdate, SignalKValue, vessel_context, vessel_urn, instant_to_rfc3339};
+use super::signalk_messages::{SignalKHello, SignalKDelta, SignalKUpdate, SignalKValue, vessel_context, vessel_urn};
 use std::time::Instant;
 
 /// SignalK WebSocket handler for /signalk/v1/stream
@@ -49,7 +49,7 @@ async fn handle_signalk_socket(
     }
     
     // Send initialization delta messages with vessel info
-    let timestamp = instant_to_rfc3339(Instant::now());
+    let timestamp = crate::utilities::instant_to_rfc3339(Instant::now());
     let init_delta = SignalKDelta {
         context: vessel_context(&config.signalk.vessel_uuid),
         updates: vec![SignalKUpdate {

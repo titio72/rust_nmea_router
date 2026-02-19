@@ -66,6 +66,39 @@ pub fn instant_to_unix_millis(instant: Instant) -> i64 {
     }
 }
 
+/// Convert Instant to RFC 3339 timestamp string
+pub fn instant_to_rfc3339(instant: Instant) -> String {
+    // Get system time corresponding to the instant
+    let now_instant = Instant::now();
+    let now_system = SystemTime::now();
+    
+    // Calculate the system time for the given instant
+    let duration_since_now = if instant > now_instant {
+        instant.duration_since(now_instant)
+    } else {
+        std::time::Duration::ZERO
+    };
+    
+    let system_time = if instant > now_instant {
+        now_system + duration_since_now
+    } else {
+        let duration_before_now = now_instant.duration_since(instant);
+        now_system - duration_before_now
+    };
+    
+    // Convert to RFC 3339 format
+    let duration = system_time.duration_since(UNIX_EPOCH).unwrap_or_default();
+    let secs = duration.as_secs();
+    let nanos = duration.subsec_nanos();
+    let millis = nanos / 1_000_000;
+    
+    // Format as RFC 3339 with millisecond precision
+    let datetime = chrono::DateTime::from_timestamp(secs as i64, nanos)
+        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+    
+    format!("{}.{:03}Z", datetime.format("%Y-%m-%dT%H:%M:%S"), millis)
+}
+
 // given two anles in degrees, compute the smallest difference between a and b (i.e., a - b)
 pub fn angle_diff(a: f64, b: f64) -> f64 {
     let mut xx = ((a - b) % 360.0 + 360.0) % 360.0;
@@ -328,6 +361,19 @@ impl<> TimedQueue<f64>  {
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
+    
+
+    #[test]
+    fn test_instant_to_rfc3339() {
+        let instant = Instant::now();
+        let timestamp = instant_to_rfc3339(instant);
+        
+        // Should be in format: 2026-02-17T12:00:00.000Z
+        assert!(timestamp.ends_with('Z'));
+        assert!(timestamp.contains('T'));
+        assert!(timestamp.contains('-'));
+        assert!(timestamp.contains(':'));
+    }
     
     #[test]
     fn test_true_wind_zero_boat_speed() {

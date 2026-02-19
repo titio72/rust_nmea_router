@@ -7,7 +7,7 @@ use nmea2k::{MessageHandler, N2kFrame};
 use nmea2k::pgns::{N2kMessage, HeadingReference};
 use crate::web::signalk_messages::{
     SignalKDelta, SignalKUpdate, SignalKValue, SignalKSource,
-    instant_to_rfc3339, vessel_context
+    vessel_context
 };
 use crate::web::get_signalk_channels;
 use crate::utilities::calculate_true_wind;
@@ -33,8 +33,10 @@ pub struct SignalKBroadcaster {
     rate_limit_ms: u64,
     
     // Rate limiting: track last broadcast time for each SignalK path
+    last_depth_broadcast: Option<Instant>,
     last_position_broadcast: Option<Instant>,
     last_sog_broadcast: Option<Instant>,
+    last_stw_broadcast: Option<Instant>,
     last_cog_broadcast: Option<Instant>,
     last_heading_broadcast: Option<Instant>,
     last_wind_speed_true_broadcast: Option<Instant>,
@@ -56,8 +58,10 @@ impl SignalKBroadcaster {
             last_time_sync_status: None,
             last_time_skew_ms: None,
             rate_limit_ms,
+            last_depth_broadcast: None,
             last_position_broadcast: None,
             last_sog_broadcast: None,
+            last_stw_broadcast: None,
             last_cog_broadcast: None,
             last_heading_broadcast: None,
             last_wind_speed_true_broadcast: None,
@@ -109,7 +113,7 @@ impl SignalKBroadcaster {
 
 impl MessageHandler for SignalKBroadcaster {
     fn handle_message(&mut self, frame: &N2kFrame, now: std::time::Instant) {
-        let timestamp = instant_to_rfc3339(now);
+        let timestamp = crate::utilities::instant_to_rfc3339(now);
         let source = SignalKSource::nmea2000(frame.identifier.source(), frame.identifier.pgn());
         
         match &frame.message {
@@ -166,10 +170,19 @@ impl MessageHandler for SignalKBroadcaster {
             N2kMessage::VesselHeading(heading) => {
                 // Only process magnetic heading and convert to true
                 if heading.reference == HeadingReference::Magnetic {
-                    if let Some(variation) = heading.variation {
-                        let heading_true = heading.heading + variation;
+                    if self.should_broadcast(self.last_heading_broadcast, now) {
+                        // Heading is stored in radians in the struct (already SI)
+                        let values = vec![SignalKValue {
+                            path: "navigation.headingMagnetic".to_string(),
+                            value: json!(heading.heading),
+                        }];
                         
-                        if self.should_broadcast(self.last_heading_broadcast, now) {
+                        self.send_delta(source.clone(), timestamp.clone(), values);
+                        self.last_heading_broadcast = Some(now);
+
+                        if let Some(variation) = heading.variation {
+                            let heading_true = heading.heading + variation;
+                            
                             let values = vec![SignalKValue {
                                 path: "navigation.headingTrue".to_string(),
                                 value: json!(heading_true),
@@ -348,10 +361,36 @@ impl MessageHandler for SignalKBroadcaster {
                     }
                     if self.should_broadcast(self.last_timesync_broadcast, now) {
                         self.last_timesync_broadcast = Some(now);
+
                     }
                 }
             },
             
+            N2kMessage::WaterDepth(depth) => {
+                // PGN 128267 - Water Depth below transducer
+                // SignalK: environment.depth.belowTransducer (meters)
+                if self.should_broadcast(self.last_depth_broadcast, now) {
+                    let values = vec![SignalKValue {
+                        path: "environment.depth.belowTransducer".to_string(),
+                        value: json!(depth.depth),
+                    }];
+                    self.send_delta(source.clone(), timestamp.clone(), values);
+                    self.last_depth_broadcast = Some(now);
+                }
+            },
+
+            N2kMessage::SpeedWaterReferenced(speed) => {
+                // PGN 128259 - Speed Water Referenced
+                // SignalK: navigation.speedThroughWater (m/s)
+                if self.should_broadcast(self.last_stw_broadcast, now) {
+                    let values = vec![SignalKValue {
+                        path: "navigation.speedThroughWater".to_string(),
+                        value: json!(speed.speed),
+                    }];
+                    self.send_delta(source.clone(), timestamp.clone(), values);
+                    self.last_stw_broadcast = Some(now);
+                }
+            },
             // All other messages - ignore
             _ => {}
         }

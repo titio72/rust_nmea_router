@@ -8,6 +8,7 @@
     <link rel="icon" type="image/png" href="/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
     <script src="/shared-theme.js"></script>
+    <script src="/dial-component.js"></script>
     <style>
         .status-indicator {
             display: flex;
@@ -90,6 +91,7 @@
             font-weight: 600;
             text-align: right;
             font-size: 16px;
+            align-self: flex-end;
         }
 
         .data-unit {
@@ -137,87 +139,16 @@
             color: #e74c3c;
         }
 
-        .wind-rose {
+        .dial-container {
             display: flex;
             justify-content: center;
-            margin: 15px 0;
-            font-size: 12px;
-            color: var(--text-secondary);
+            margin: 20px 0;
         }
 
-        .wind-direction-indicator {
-            width: 100px;
-            height: 100px;
-            position: relative;
-            margin: 0 auto;
-        }
-
-        .wind-direction-circle {
-            width: 100%;
-            height: 100%;
-            border: 2px solid var(--border-color);
-            border-radius: 50%;
-            position: relative;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .wind-arrow {
-            width: 2px;
-            height: 40px;
-            background: var(--sailing-color);
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            margin-left: -1px;
-            margin-top: -40px;
-            transform-origin: center 40px;
-            transition: transform 0.3s ease;
-        }
-
-        .wind-center {
-            width: 8px;
-            height: 8px;
-            background: var(--sailing-color);
-            border-radius: 50%;
-            z-index: 2;
-        }
-
-        .compass-point {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            font-weight: bold;
-            color: var(--text-secondary);
-        }
-
-        .compass-point.n {
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
-            padding-top: 4px;
-        }
-
-        .compass-point.s {
-            display: flex;
-            justify-content: center;
-            align-items: flex-end;
-            padding-bottom: 4px;
-        }
-
-        .compass-point.e {
-            display: flex;
-            justify-content: flex-end;
-            align-items: center;
-            padding-right: 4px;
-        }
-
-        .compass-point.w {
-            display: flex;
-            justify-content: flex-start;
-            align-items: center;
-            padding-left: 4px;
+        my-wind-dial,
+        my-dial {
+            width: 250px;
+            height: 250px;
         }
 
         .last-update {
@@ -225,7 +156,6 @@
             color: var(--text-secondary);
             margin-top: 15px;
             padding-top: 12px;
-            border-top: 1px solid var(--border-color);
             text-align: center;
         }
     </style>
@@ -269,29 +199,44 @@
                 </div>
 
                 <div class="data-row">
-                    <span class="data-label">Heading</span>
-                    <span class="data-value" id="heading">--<span class="data-unit">°</span></span>
+                    <span class="data-label">GNSS Time</span>
+                    <span class="data-value" id="gnssTime"
+                        style="font-family: monospace; font-size: 13px;">--</span>
                 </div>
 
-                <div style="border-top: 2px solid var(--border-color); margin-top: 15px; padding-top: 15px;">
-                    <div class="data-row">
-                        <span class="data-label">GNSS Time</span>
-                        <span class="data-value" id="gnssTime"
-                            style="font-family: monospace; font-size: 13px;">--</span>
-                    </div>
+                <div class="data-row">
+                    <span class="data-label">Time Sync Status</span>
+                    <span class="sync-status" id="timeSyncStatus">--</span>
+                </div>
 
-                    <div class="data-row">
-                        <span class="data-label">Time Sync Status</span>
-                        <span class="sync-status" id="timeSyncStatus">--</span>
-                    </div>
-
-                    <div class="data-row">
-                        <span class="data-label">Time Skew</span>
-                        <span class="data-value" id="timeSkew">--<span class="data-unit">ms</span></span>
-                    </div>
+                <div class="data-row">
+                    <span class="data-label">Time Skew</span>
+                    <span class="data-value" id="timeSkew">--<span class="data-unit">ms</span></span>
                 </div>
 
                 <div class="last-update" id="gnssLastUpdate">No data received</div>
+            </div>
+
+            <!-- Basic nav card -->
+            <div class="data-card">
+                <div class="card-title">Navigation Data</div>
+
+                <div class="data-row">
+                    <span class="data-label">Heading</span>
+                    <span class="data-value" id="heading">--<span class="data-unit">°</span></span>
+                    <span class="data-value" id="stw">--<span class="data-unit">kn</span></span>
+                </div>
+
+                <div class="data-row">
+                    <span class="data-label">Depth</span>
+                    <span class="data-value" id="depth">--<span class="data-unit">m</span></span>
+                </div>
+
+                <div class="dial-container">
+                    <my-compass-rose id="headingDial" angle="0"></my-compass-rose>
+                </div>
+
+                <div class="last-update" id="navLastUpdate">No data received</div>
             </div>
 
             <!-- Wind Data Card -->
@@ -299,34 +244,19 @@
                 <div class="card-title">Wind Data</div>
 
                 <div class="data-row">
-                    <span class="data-label">True Wind Speed</span>
-                    <span class="data-value" id="tws">--<span class="data-unit">kn</span></span>
+                    <span class="data-label" style="width: 125px;">True Wind</span>
+                    <span class="data-value" style="width: 75px;" id="tws">--<span class="data-unit">kn</span></span>
+                    <span class="data-value" style="width: 75px;" id="twa">--<span class="data-unit">°</span></span>
                 </div>
 
                 <div class="data-row">
-                    <span class="data-label">True Wind Angle</span>
-                    <span class="data-value" id="twa">--<span class="data-unit">°</span></span>
+                    <span class="data-label" style="width: 125px;">Apparent Wind</span>
+                    <span class="data-value" style="width: 75px;" id="aws">--<span class="data-unit">kn</span></span>
+                    <span class="data-value" style="width: 75px;" id="awa">--<span class="data-unit">°</span></span>
                 </div>
 
-                <div class="data-row">
-                    <span class="data-label">Apparent Wind Speed</span>
-                    <span class="data-value" id="aws">--<span class="data-unit">kn</span></span>
-                </div>
-
-                <div class="data-row">
-                    <span class="data-label">Apparent Wind Angle</span>
-                    <span class="data-value" id="awa">--<span class="data-unit">°</span></span>
-                </div>
-
-                <div class="wind-direction-indicator">
-                    <div class="wind-direction-circle">
-                        <div class="compass-point n"><strong>0</strong></div>
-                        <div class="compass-point s"><strong>180</strong></div>
-                        <div class="compass-point e"><strong>90 S</strong></div>
-                        <div class="compass-point w"><strong>90 P</strong></div>
-                        <div class="wind-arrow" id="windArrow"></div>
-                        <div class="wind-center"></div>
-                    </div>
+                <div class="dial-container">
+                    <my-wind-dial id="windDial" angle_true="0" angle_app="0"></my-wind-dial>
                 </div>
 
                 <div class="last-update" id="windLastUpdate">No data received</div>
@@ -356,11 +286,6 @@
                     <span class="data-value" id="pressure">--<span class="data-unit">hPa</span></span>
                 </div>
 
-                <div class="data-row">
-                    <span class="data-label">Water Depth</span>
-                    <span class="data-value" id="depth">--<span class="data-unit">m</span></span>
-                </div>
-
                 <div class="last-update" id="envLastUpdate">No data received</div>
             </div>
         </div>
@@ -378,8 +303,17 @@
             env: null
         };
 
+        // Track heading and wind angles for dial updates
+        let currentHeading = 0;
+        let currentTWA = 0;
+
         function toggleTheme() {
-            baseToggleTheme();    
+            baseToggleTheme();
+            // Refresh dial components for theme-aware colors
+            const windDial = document.getElementById('windDial');
+            if (windDial && typeof windDial.refreshTheme === 'function') {
+                windDial.refreshTheme();
+            }
         }
 
         function connectWebSocket() {

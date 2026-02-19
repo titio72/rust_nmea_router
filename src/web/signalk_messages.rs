@@ -3,7 +3,7 @@
 //
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{time::{Instant, SystemTime, UNIX_EPOCH}};
+use std::{time::{Instant}};
 
 /// Get the full SignalK vessel context path
 pub fn vessel_context(vessel_uuid: &str) -> String {
@@ -39,7 +39,7 @@ impl SignalKHello {
     /// Create a new hello message with current timestamp
     pub fn new(vessel_uuid: &str) -> Self {
         
-        let timestamp = instant_to_rfc3339(Instant::now());
+        let timestamp = crate::utilities::instant_to_rfc3339(Instant::now());
         
         SignalKHello {
             name: "nmea-router-signalk-server".to_string(),
@@ -118,69 +118,5 @@ impl SignalKSource {
             pgn,
             device_instance: 0,
         }
-    }
-}
-
-/// Convert Instant to RFC 3339 timestamp string
-pub fn instant_to_rfc3339(instant: Instant) -> String {
-    // Get system time corresponding to the instant
-    let now_instant = Instant::now();
-    let now_system = SystemTime::now();
-    
-    // Calculate the system time for the given instant
-    let duration_since_now = if instant > now_instant {
-        instant.duration_since(now_instant)
-    } else {
-        std::time::Duration::ZERO
-    };
-    
-    let system_time = if instant > now_instant {
-        now_system + duration_since_now
-    } else {
-        let duration_before_now = now_instant.duration_since(instant);
-        now_system - duration_before_now
-    };
-    
-    // Convert to RFC 3339 format
-    let duration = system_time.duration_since(UNIX_EPOCH).unwrap_or_default();
-    let secs = duration.as_secs();
-    let nanos = duration.subsec_nanos();
-    let millis = nanos / 1_000_000;
-    
-    // Format as RFC 3339 with millisecond precision
-    let datetime = chrono::DateTime::from_timestamp(secs as i64, nanos)
-        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
-    
-    format!("{}.{:03}Z", datetime.format("%Y-%m-%dT%H:%M:%S"), millis)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_instant_to_rfc3339() {
-        let instant = Instant::now();
-        let timestamp = instant_to_rfc3339(instant);
-        
-        // Should be in format: 2026-02-17T12:00:00.000Z
-        assert!(timestamp.ends_with('Z'));
-        assert!(timestamp.contains('T'));
-        assert!(timestamp.contains('-'));
-        assert!(timestamp.contains(':'));
-    }
-
-    #[test]
-    fn test_percent_to_ratio() {
-        assert_eq!(percent_to_ratio(0.0), 0.0);
-        assert_eq!(percent_to_ratio(50.0), 0.5);
-        assert_eq!(percent_to_ratio(100.0), 1.0);
-    }
-
-    #[test]
-    fn test_celsius_to_kelvin() {
-        assert_eq!(celsius_to_kelvin(0.0), 273.15);
-        assert_eq!(celsius_to_kelvin(100.0), 373.15);
-        assert_eq!(celsius_to_kelvin(-273.15), 0.0);
     }
 }

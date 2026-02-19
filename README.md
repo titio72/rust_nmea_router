@@ -594,9 +594,106 @@ The SignalK stream integrates with:
 
 For detailed path mappings, unit conversions, and examples, see [docs/SIGNALK_MAPPING.md](docs/SIGNALK_MAPPING.md).
 
+## NMEA0183 UDP Broadcasting
+
+The application broadcasts NMEA2000 data as standard NMEA0183 sentences over UDP, enabling integration with chart plotters, marine instrumentation, and other legacy NMEA0183-compatible devices.
+
+### What is NMEA0183?
+
+NMEA0183 is the industry-standard marine data format used by GPS receivers, chart plotters, fish finders, and other marine electronics. UDP broadcasting allows multi-device reception on the local network.
+
+### Configuration
+
+Enable UDP broadcasting in your `config.json`:
+
+```json
+{
+  "udp": {
+    "enabled": true,
+    "address": "192.168.1.255:10110"
+  }
+}
+```
+
+- `enabled`: Enable or disable UDP broadcasting (default: `false`)
+- `address`: Broadcast destination (use `255.255.255.255:10110` for network-wide broadcast, or specific multicast/address)
+
+### Rate Limiting
+
+To prevent overwhelming receiving devices, the broadcaster enforces a **1 message per second per topic** rate limit. Each NMEA0183 sentence type (RMC, GGA, MWV, etc.) has its own 1-second throttle.
+
+### Emitted Sentence Types
+
+| Sentence | PGN Source | Content | Rate |
+|----------|------------|---------|------|
+| **RMC** | 129029 | Position, Speed over Ground, Course over Ground, Date/Time | 1/s |
+| **GGA** | 129029 | Position, Altitude, Fix Quality, Satellite Count, HDOP | 1/s |
+| **ZDA** | 126992 | Date and Time (UTC) | 1/s |
+| **MWV** | 130306 | Wind Speed (knots) and Angle (degrees); Apparent (R) or True (T) | 1/s per type |
+| **HDT** | 127250 | True Heading (degrees) | 1/s |
+| **HDM** | 127250 | Magnetic Heading (degrees) | 1/s |
+| **ROT** | 127251 | Rate of Turn (degrees/minute) | 1/s |
+| **XDR** | 127257 | Attitude: Yaw, Pitch, Roll (degrees) | 1/s |
+| **XDR** | 130312 | Temperature (water, air, cabin) in Celsius | 1/s per instance |
+| **XDR** | 130313 | Humidity (percent) | 1/s per instance |
+| **XDR** | 130314 | Barometric Pressure (bar) | 1/s per instance |
+| **RPM** | 127488 | Engine RPM | 1/s per engine |
+| **VHW** | 128259 | Water Speed (knots) | 1/s |
+| **DPT** | 128267 | Water Depth (meters) and Offset | 1/s |
+
+### Data Aggregation
+
+**RMC & GGA Sentences**: These sentences combine data from multiple sources:
+- **Position** (129025): Latitude/Longitude in DDMM.MMMM format
+- **COG/SOG** (129026): Course over ground (degrees), Speed over ground (knots)
+- **System Time** (126992): UTC date/time
+- **GNSS Data** (129029): Altitude, fix quality, satellite count, HDOP (triggers RMC and GGA emission)
+
+State is buffered across messages and emitted when GnssPositionData arrives, ensuring consistent position, speed, course, and time across both sentences.
+
+### Conversion Details
+
+- **Units**: Knots for speed, degrees for angles, meters for depth/altitude, Celsius for temperature, percent for humidity, bar for pressure
+- **Wind**: Apparent wind converted from PGN 130306 reference fields; true wind when reference indicates true wind
+- **Heading**: Magnetic headings sent as HDM; true headings sent as HDT
+- **Talker ID**: All sentences use `II` (Integrated Instrumentation) talker ID for multi-device aggregation
+
+### Example Usage
+
+**Chart Plotter Integration:**
+Most chart plotters can accept NMEA0183 input via UDP. Configure with:
+- Destination: Broadcast address of the router (e.g., `192.168.1.100:10110`)
+- Protocol: UDP
+- Sentence filters: Select desired sentence types (RMC, GGA, MWV, etc.)
+
+**Custom Software:**
+Receive UDP packets and parse NMEA0183 sentences:
+
+```bash
+# On Linux/Mac
+nc -ul 10110  # Listen and display raw NMEA0183 sentences
+```
+
+**Example sentences:**
+```
+$IIRMC,120000.00,A,5223.3876,N,01324.2288,E,5.2,45.0,T,,,140226
+$IIGGA,120000.00,5223.3876,N,01324.2288,E,1,12,1.5,100.0,M,,M,,
+$IIMWV,45.0,R,,5.2,N
+$IIHDT,45.0,T
+```
+
 ### Future Enhancements
 
-Planned features for the web interface:
+Planned features for UDP broadcasting:
+- Optional NMEA0183 checksum attachment (`*XX` format)
+- GST sentences (GNSS Positional Error)
+- Multiple transducer support for XDR sentences
+- Configurable rate limits per sentence type
+
+### Future Enhancements for Web Interface
+
+Planned features:
+
 - Trip comparison tools
 - Export functionality (CSV, GPX)
 - Additional environmental metric charts (temperature, pressure, humidity)
