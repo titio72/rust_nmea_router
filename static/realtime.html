@@ -393,6 +393,20 @@
             
             try {
                 switch (path) {
+                    // Navigation - Speed Through Water (m/s to knots)
+                    case 'navigation.speedThroughWater':
+                        const stw_kn = value / 0.514444;
+                        document.getElementById('stw').textContent = formatValue(stw_kn, 1) + 'kn';
+                        lastUpdate.nav = new Date();
+                        updateLastUpdateTime('navLastUpdate', lastUpdate.nav);
+                        break;
+                    
+                    case 'environment.depth.belowTransducer':
+                        document.getElementById('depth').textContent = formatValue(value, 1) + 'm';
+                        lastUpdate.nav = new Date();
+                        updateLastUpdateTime('navLastUpdate', lastUpdate.nav);
+                        break;
+
                     // Navigation - Position
                     case 'navigation.position':
                         if (value.latitude !== undefined) {
@@ -424,7 +438,13 @@
                     // Navigation - Heading True (radians to degrees)
                     case 'navigation.headingTrue':
                         const heading_deg = (value * 180 / Math.PI) % 360;
+                        currentHeading = heading_deg;
                         document.getElementById('heading').textContent = formatValue(heading_deg, 1) + '°';
+                        // Update heading dial with new absolute wind direction
+                        const headingDial = document.getElementById('headingDial');
+                        if (headingDial) {
+                            headingDial.setAttribute('angle', heading_deg);
+                        }
                         lastUpdate.gnss = new Date();
                         updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
                         break;
@@ -447,8 +467,13 @@
                     // Wind - True Wind Angle (radians to degrees)
                     case 'environment.wind.angleTrueGround':
                         const twa_deg = (value * 180 / Math.PI) % 360;
+                        currentTWA = twa_deg;
                         document.getElementById('twa').textContent = formatValue(twa_deg, 1) + '°';
-                        updateWindArrow(twa_deg);
+                        // Update wind dial with true wind angle
+                        const windDial = document.getElementById('windDial');
+                        if (windDial) {
+                            windDial.setAttribute('angle_true', twa_deg);
+                        }
                         lastUpdate.wind = new Date();
                         updateLastUpdateTime('windLastUpdate', lastUpdate.wind);
                         break;
@@ -465,6 +490,11 @@
                     case 'environment.wind.angleApparent':
                         const awa_deg = (value * 180 / Math.PI) % 360;
                         document.getElementById('awa').textContent = formatValue(awa_deg, 1) + '°';
+                        // Update wind dial with apparent wind angle
+                        const windDial2 = document.getElementById('windDial');
+                        if (windDial2) {
+                            windDial2.setAttribute('angle_app', awa_deg);
+                        }
                         lastUpdate.wind = new Date();
                         updateLastUpdateTime('windLastUpdate', lastUpdate.wind);
                         break;
@@ -521,11 +551,6 @@
             } catch (error) {
                 console.error('Error updating value for path', path, ':', error);
             }
-        }
-
-        function updateWindArrow(angle) {
-            const arrow = document.getElementById('windArrow');
-            arrow.style.transform = `rotate(${angle}deg)`;
         }
 
         function updateLastUpdateTime(elementId, timestamp) {
