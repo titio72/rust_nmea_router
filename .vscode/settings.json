@@ -1,0 +1,7 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "pkill": true,
+        "cargo test": true,
+        "awk": true
+    }
+}
