@@ -281,7 +281,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
                     
                     // Broadcast SignalK delta messages (if enabled)
-                    if signalk_broadcaster.is_some() && is_signalk_enabled(&vessel_db) {
+                    if is_signalk_enabled(&vessel_db) {
                         if let Some(ref mut sk_broadcaster) = signalk_broadcaster {
                             sk_broadcaster.handle_message(&n2k_frame, now);
                         }
@@ -395,4 +395,6 @@ fn is_signalk_enabled(vessel_db: &Option<VesselDatabase>) -> bool {
     };
     signalk_enabled
 }
+
+
 

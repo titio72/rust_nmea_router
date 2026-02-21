@@ -107,6 +107,8 @@ impl SignalKBroadcaster {
             }],
         };
         
+        // Silently ignore send errors - these occur when there are no subscribers,
+        // which is normal during operation when no clients are connected
         let _ = channels.send(delta);
     }
 }
