@@ -232,6 +232,11 @@
                     <span class="data-value" id="depth">--<span class="data-unit">m</span></span>
                 </div>
 
+                <div class="data-row">
+                    <span class="data-label">Mooring Status</span>
+                    <span class="sync-status" id="mooringStatus">--</span>
+                </div>
+
                 <div class="dial-container">
                     <my-compass-rose id="headingDial" angle="0"></my-compass-rose>
                 </div>
@@ -546,6 +551,16 @@
                         document.getElementById('timeSkew').textContent = formatValue(value, 0) + 'ms';
                         lastUpdate.gnss = new Date();
                         updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        break;
+
+                    // Mooring Status (1 = moored, 0 = underway; custom non-standard SignalK path)
+                    case 'vessel.mooringStatus':
+                        const mooringBadge = document.getElementById('mooringStatus');
+                        mooringBadge.textContent = value === 1 ? 'MOORED' : 'UNDERWAY';
+                        mooringBadge.classList.remove('synced', 'not_synced');
+                        mooringBadge.classList.add(value === 1 ? 'not_synced' : 'synced');
+                        lastUpdate.nav = new Date();
+                        updateLastUpdateTime('navLastUpdate', lastUpdate.nav);
                         break;
                 }
             } catch (error) {

@@ -20,6 +20,18 @@ pub enum WindReference {
     TrueWater,
 }
 
+impl fmt::Display for WindReference {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", match self {
+            WindReference::TrueGroundNorth => "True (ground, North ref.)",
+            WindReference::Magnetic => "Magnetic",
+            WindReference::Apparent => "Apparent",
+            WindReference::TrueBoat => "True (boat referenced)",
+            WindReference::TrueWater => "True (water referenced)",
+        })
+    }
+}
+
 impl WindData {
 
     pub fn new_apparent(speed: f64, angle: f64) -> Self {
@@ -61,11 +73,10 @@ impl fmt::Display for WindData {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "      Wind Speed: {:.2} m/s ({:.2} knots) | Angle: {:.2}° | Ref: {:?}",
+            "      Wind Speed: {:.2} m/s ({:.2} knots) | Angle: {:.2}° | Ref: {}",
             self.speed,
             self.speed * 1.94384,
             self.angle.to_degrees(),
             self.reference
-        )
-    }
+        )    }
 }

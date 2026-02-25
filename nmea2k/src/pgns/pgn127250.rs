@@ -20,6 +20,17 @@ pub enum HeadingReference {
     Null,
 }
 
+impl fmt::Display for HeadingReference {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", match self {
+            HeadingReference::True => "True",
+            HeadingReference::Magnetic => "Magnetic",
+            HeadingReference::Error => "Error",
+            HeadingReference::Null => "Null",
+        })
+    }
+}
+
 impl VesselHeading {
 
     pub fn new(heading: f64, reference: HeadingReference) -> Self {
@@ -55,7 +66,7 @@ impl VesselHeading {
 
 impl fmt::Display for VesselHeading {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "      Heading: {:.2}° ({:?})", self.heading.to_degrees(), self.reference)?;
+        write!(f, "      Heading: {:.2}° ({})", self.heading.to_degrees(), self.reference)?;
         if let Some(dev) = self.deviation {
             write!(f, " | Deviation: {:.2}°", dev.to_degrees())?;
         }

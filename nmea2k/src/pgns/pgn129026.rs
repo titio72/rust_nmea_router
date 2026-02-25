@@ -41,6 +41,10 @@ impl CogSogRapidUpdate {
         })
     }
 
+    pub fn get_cog_reference_description(&self) -> &'static str {
+        if self.cog_reference { "True North" } else { "Magnetic" }
+    }
+
     pub fn sog_knots(&self) -> f64 {
         self.sog * 1.94384
     }

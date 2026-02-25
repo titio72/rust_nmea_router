@@ -2,12 +2,22 @@
   "folders": [
     {
       "path": "."
+    },
+    {
+      "path": "nmea2k",
+      "name": "nmea2k"
     }
   ],
   "settings": {
     // Rust & Cargo
     "rust-analyzer.check.command": "clippy",
     "rust-analyzer.checkOnSave.command": "clippy",
+    "rust-analyzer.cargoRunner": "cargo",
+    "rust-analyzer.lens.enable": true,
+    "rust-analyzer.lens.references": true,
+    "rust-analyzer.lens.implementations": true,
+    "rust-analyzer.lens.run": true,
+    "rust-analyzer.lens.debug": true,
     "[rust]": {
       "editor.formatOnSave": true,
       "editor.defaultFormatter": "rust-lang.rust-analyzer"

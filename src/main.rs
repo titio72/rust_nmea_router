@@ -307,16 +307,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                     if sync_status_and_skew.status == TimeSyncStatus::Synchronized {
                         if is_vessel_tracking_enabled(&vessel_db) {
                             vessel_monitor.handle_message(&n2k_frame, now);
-                            if let Some(vessel_status) = vessel_monitor.generate_status(now) && vessel_status.is_valid() {
-                                match vessel_status_handler.handle_vessel_status(&vessel_db, vessel_status.clone()) {
-                                    Ok(true) => metrics.vessel_reports += 1,
-                                    Ok(false) => {},
-                                    Err(e) => {
-                                        warn!("Database error during vessel status write: {}", e);
+                            if is_signalk_enabled(&vessel_db) {
+                                broadcast_mooring_status(
+                                    vessel_monitor.is_moored(now),
+                                    &config.signalk.vessel_uuid, 
+                                    now);
+                            }
+                            if let Some(vessel_status) = vessel_monitor.generate_status(now) {
+                                if vessel_status.is_valid() {
+                                    match vessel_status_handler.handle_vessel_status(&vessel_db, vessel_status.clone()) {
+                                        Ok(true) => {
+                                            metrics.vessel_reports += 1;
+                                        },
+                                        Ok(false) => {},
+                                        Err(e) => {
+                                            warn!("Database error during vessel status write: {}", e);
+                                        }
                                     }
                                 }
                             }
                         }
+
 
                         if is_metrics_enabled(&vessel_db) {
                             env_monitor.handle_message(&n2k_frame, now);
@@ -394,6 +405,32 @@ fn is_signalk_enabled(vessel_db: &Option<VesselDatabase>) -> bool {
         false // Default to disabled if no database
     };
     signalk_enabled
+}
+
+/// Broadcast the current mooring status via the SignalK WebSocket channel.
+/// Called after each successful vessel status DB write.
+fn broadcast_mooring_status(
+    vessel_moored_status: bool,
+    vessel_uuid: &str,
+    now: std::time::Instant,
+) {
+    use crate::web::signalk_messages::{SignalKDelta, SignalKUpdate, SignalKValue, vessel_context};
+    let channels = crate::web::get_signalk_channels();
+    let timestamp = crate::utilities::instant_to_rfc3339(now);
+    let mooring_value: u8 = if vessel_moored_status { 1 } else { 0 };
+    let delta = SignalKDelta {
+        context: vessel_context(vessel_uuid),
+        updates: vec![SignalKUpdate {
+            source: None,
+            timestamp,
+            values: vec![SignalKValue {
+                path: "vessel.mooringStatus".to_string(),
+                value: serde_json::json!(mooring_value),
+            }],
+            source_ref: "router.vesselStatus".to_string(),
+        }],
+    };
+    let _ = channels.send(delta);
 }
 
 

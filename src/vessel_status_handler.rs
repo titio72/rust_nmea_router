@@ -105,38 +105,39 @@ impl VesselStatusHandler {
             status.is_moored);
     
         // Write to database if connected, time to persist, and time is synchronized
-        if let Some(ref db) = *vessel_db && status.is_valid() {
+        if let Some(ref db) = *vessel_db {
+            if status.is_valid() {
+                let status_operation = self.generate_vessel_status_operation(&status);
+                self.state.set_last_persisted_status(&status_operation);
 
-            let status_operation = self.generate_vessel_status_operation(&status);
-            self.state.set_last_persisted_status(&status_operation);
-
-            // Determine trip operation (create, update, or none)
-            let trip_operation = Self::determine_trip_operation(&mut self.state.current_trip, &status, status_operation.total_distance_nm, status_operation.total_time_ms);
+                // Determine trip operation (create, update, or none)
+                let trip_operation = Self::determine_trip_operation(&mut self.state.current_trip, &status, status_operation.total_distance_nm, status_operation.total_time_ms);
                                 
-            // Perform atomic insert of vessel status and trip operation
-            match db.insert_status_and_trip(&status_operation, &trip_operation) {
-                Ok(new_trip_id) => {
-                    debug!("Vessel status written to database: latitude={:.6}, longitude={:.6}, is_moored={}", status_operation.position.latitude, status_operation.position.longitude, status_operation.is_moored);
-                    
-                    // Update trip ID if we created a new trip
-                    if let Some(trip_id) = new_trip_id {
-                        if let Some(ref mut trip) = self.state.current_trip {
-                            trip.id = Some(trip_id);
-                            info!("Created new trip: {} (ID: {})", trip.description, trip_id);
+                // Perform atomic insert of vessel status and trip operation
+                match db.insert_status_and_trip(&status_operation, &trip_operation) {
+                    Ok(new_trip_id) => {
+                        debug!("Vessel status written to database: latitude={:.6}, longitude={:.6}, is_moored={}", status_operation.position.latitude, status_operation.position.longitude, status_operation.is_moored);
+                        
+                        // Update trip ID if we created a new trip
+                        if let Some(trip_id) = new_trip_id {
+                            if let Some(ref mut trip) = self.state.current_trip {
+                                trip.id = Some(trip_id);
+                                info!("Created new trip: {} (ID: {})", trip.description, trip_id);
+                            }
+                        } else if let Some(ref trip) = self.state.current_trip {
+                            debug!("Updated trip: {} (ID: {}), total_distance={:.3}nm, total_time={}ms", 
+                                trip.description, trip.id.unwrap_or(0), trip.total_distance(), trip.total_time());
                         }
-                    } else if let Some(ref trip) = self.state.current_trip {
-                        debug!("Updated trip: {} (ID: {}), total_distance={:.3}nm, total_time={}ms", 
-                            trip.description, trip.id.unwrap_or(0), trip.total_distance(), trip.total_time());
+                        
+                        // Note: Realtime data is now broadcast directly from NMEA message processing in main loop,
+                        // not from the aggregated vessel status handler, to ensure complete data is sent
+                        
+                        return Ok(true);
                     }
-                    
-                    // Note: Realtime data is now broadcast directly from NMEA message processing in main loop,
-                    // not from the aggregated vessel status handler, to ensure complete data is sent
-                    
-                    return Ok(true);
-                }
-                Err(e) => {
-                    warn!("Error writing vessel status to database: {}", e);
-                    return Err(e);
+                    Err(e) => {
+                        warn!("Error writing vessel status to database: {}", e);
+                        return Err(e);
+                    }
                 }
             }
         }

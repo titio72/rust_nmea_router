@@ -47,6 +47,35 @@ pub enum GnssMethod {
     RtkFloat,
 }
 
+impl fmt::Display for GnssType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", match self {
+            GnssType::Gps => "GPS",
+            GnssType::Glonass => "GLONASS",
+            GnssType::GpsGlonass => "Combined GPS/GLONASS",
+            GnssType::GpsSbasWaas => "GPS+SBAS/WAAS",
+            GnssType::GpsSbasWaasDglonass => "GPS+SBAS/WAAS+DGLONASS",
+            GnssType::Chayka => "Chayka",
+            GnssType::Integrated => "Integrated navigation system",
+            GnssType::Surveyed => "Surveyed",
+            GnssType::Galileo => "Galileo",
+        })
+    }
+}
+
+impl fmt::Display for GnssMethod {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", match self {
+            GnssMethod::NoGnss => "No GNSS",
+            GnssMethod::GnssFix => "GNSS fix",
+            GnssMethod::DGnss => "DGNSS fix",
+            GnssMethod::PreciseGnss => "Precise GNSS",
+            GnssMethod::RtkFixed => "RTK fixed integer",
+            GnssMethod::RtkFloat => "RTK float",
+        })
+    }
+}
+
 impl GnssPositionData {
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 43 {
@@ -100,6 +129,6 @@ impl GnssPositionData {
 
 impl fmt::Display for GnssPositionData {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "      Position: {:.6}°, {:.6}° Satellites: {} Type: {:?} Method: {:?} HDOP: {:.2} PDOP: {:.2}", self.latitude, self.longitude, self.num_svs, self.gnss_type, self.method, self.hdop, self.pdop)
+        write!(f, "      Position: {:.6}°, {:.6}° Satellites: {} Type: {} Method: {} HDOP: {:.2} PDOP: {:.2}", self.latitude, self.longitude, self.num_svs, self.gnss_type, self.method, self.hdop, self.pdop)
     }
 }

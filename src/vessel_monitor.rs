@@ -248,7 +248,7 @@ impl VesselMonitor {
         now.duration_since(self.last_event_time) >= period && self.positions.len() >= MIN_SAMPLES_FOR_VALIDATION
     }
 
-    fn is_moored(&self, now: Instant) -> bool {
+    pub fn is_moored(&self, now: Instant) -> bool {
         //self.positions.is_stationary(MOORING_DETECTION_WINDOW, MOORING_ACCURACY, MOORING_THRESHOLD_METERS, now)
         self.vmg_for_mooring.is_stationary(now)
     }

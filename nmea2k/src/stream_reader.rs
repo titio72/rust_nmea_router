@@ -55,8 +55,27 @@ impl FastPacketBuffer {
         }
     }
     
-    fn add_frame(&mut self, frame_data: Vec<u8>) {
-        self.frames.push(frame_data);
+    fn add_frame(&mut self, frame_index: usize, frame_data: &[u8]) {
+        // Explicit extraction of payload bytes:
+        // Frame 0: bytes [2..8] = 6 bytes of payload
+        // Frames 1+: bytes [1..8] = 7 bytes of payload
+        let payload = if frame_index == 0 {
+            // First frame: skip 2 bytes of header (sequence + length)
+            if frame_data.len() >= 2 {
+                frame_data[2..].to_vec()
+            } else {
+                frame_data.to_vec()
+            }
+        } else {
+            // Subsequent frames: skip 1 byte of header (sequence + frame counter)
+            if frame_data.len() >= 1 {
+                frame_data[1..].to_vec()
+            } else {
+                frame_data.to_vec()
+            }
+        };
+        
+        self.frames.push(payload);
     }
     
     fn is_complete(&self) -> bool {
@@ -138,7 +157,7 @@ impl N2kStreamReader {
             // First frame - start new buffer
             if let Some(total_len) = fast_packet.total_len() {
                 let mut buffer = FastPacketBuffer::new(total_len as usize);
-                buffer.add_frame(fast_packet.data().to_vec());
+                buffer.add_frame(0, &packet_data);
                 
                 if buffer.is_complete() {
                     // Single-frame fast packet
@@ -156,7 +175,8 @@ impl N2kStreamReader {
             }
         } else if let Some(buffer) = self.fast_packet_buffers.get_mut(&key) {
             // Subsequent frame - add to existing buffer
-            buffer.add_frame(fast_packet.data().to_vec());
+            let frame_index = buffer.frames.len();
+            buffer.add_frame(frame_index, &packet_data);
             
             if buffer.is_complete() {
                 let complete_data = buffer.get_complete_data();
@@ -178,7 +198,7 @@ impl N2kStreamReader {
         matches!(
             pgn,
             126996 | 127233 | 127237 | 127489 | 127493 | 127505 | 128275 | 129029
-                | 129038 | 129039 | 129540 | 129794 | 129809 | 129810
+                | 129038 | 129039 | 129040 | 129041 | 129540 | 129793 | 129794 | 129809 | 129810
         )
     }
 }

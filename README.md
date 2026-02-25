@@ -16,6 +16,10 @@ This project is a learning and production-grade effort, inspired by https://gith
   - Depth & Water Speed (128267, 128259)
   - Engine Data (127488)
   - System Time (126992)
+  - AIS Position Reports (129038, 129039, 129040)
+  - AIS Aid-to-Navigation (129041)
+  - AIS Static Data (129794, 129809, 129810)
+  - AIS UTC & Date Report (129793)
 - **REST API & Web Interface**: JSON endpoints for trips, track data, environmental metrics, and speed distribution analysis, plus responsive web dashboard with interactive charts and Google Maps integration
 - **SignalK v1.7.0 Broadcaster**: Real-time WebSocket streaming of vessel data in SignalK delta format with SI units (m/s, radians, Kelvin, Pa) for position, speed, heading, wind, temperature, humidity, and pressure
 - **Adaptive Database Persistence**:
@@ -35,6 +39,7 @@ This project is a learning and production-grade effort, inspired by https://gith
 - **Mooring Detection**: Automatically detects when vessel is moored based on position history
 - **Comprehensive Unit Tests**: 80+ tests covering core functionality, wind calculations, configuration validation, and safe deserialization
 - **Advanced Wind Data Handling**: Calculates and persists true wind speed/angle, with robust rolling window averaging and test coverage
+- **AIS Target Tracking**: Decodes and broadcasts AIS position reports, static data, and navigation information via SignalK with live web dashboard for monitoring nearby vessels and navigation aids
 
 ## Requirements
 
@@ -593,6 +598,151 @@ The SignalK stream integrates with:
 - **Custom Applications**: Any WebSocket client supporting SignalK v1.7.0
 
 For detailed path mappings, unit conversions, and examples, see [docs/SIGNALK_MAPPING.md](docs/SIGNALK_MAPPING.md).
+
+## AIS Target Tracking
+
+The application decodes Automatic Identification System (AIS) messages from the NMEA2000 bus and broadcasts them via SignalK, enabling real-time monitoring of nearby vessels, navigation aids, and mobile units.
+
+### What is AIS?
+
+AIS is a maritime mobile messaging system intended for identifying and locating vessels. It broadcasts position, course, speed, and static vessel information, allowing mariners to track nearby traffic and aid-to-navigation markers.
+
+### Supported AIS PGNs
+
+The application decodes the following AIS message types:
+
+| PGN | Message Type | Content |
+|-----|--------------|---------|
+| 129038 | Class A Position Report | Position, speed, course, heading, navigation status for Class A vessels |
+| 129039 | Class B Position Report | Position, speed, course, heading for Class B (smaller) vessels |
+| 129040 | Class B Extended Position Report | Class B position + vessel dimensions and name |
+| 129041 | Aid-to-Navigation Report | Fixed navigation aids: buoys, beacons, lights, landmarks |
+| 129793 | UTC Date Report | UTC time and date synchronization for AIS targets |
+| 129794 | Class A Static Data | IMO number, call sign, vessel name, type, dimensions, ETA, destination |
+| 129809 | Class B Static Data Part A | Vessel name and sequence information |
+| 129810 | Class B Static Data Part B | Vessel type, call sign, dimensions, mothership ID |
+
+### AIS Web Dashboard
+
+Access the live AIS targets page:
+
+```
+http://localhost:8080/ais.html
+```
+
+**Features:**
+- **Live Target Table**: Real-time list of detected AIS targets with:
+  - MMSI (Maritime Mobile Service Identity)
+  - Vessel name, call sign, and type
+  - Position (latitude/longitude)
+  - Speed over ground (knots)
+  - Course over ground (degrees)
+  - Heading (degrees, where available)
+  - Navigation status (e.g., underway, at anchor, moored)
+  - Last update timestamp
+- **Search & Filter**: Filter targets by MMSI, name, or call sign
+- **Sortable Columns**: Click column headers to sort by any field
+- **Stale Detection**:
+  - Grayed out: Targets not updated for 30+ minutes
+  - Hidden: Targets not updated for 60+ minutes
+  - Automatic removal prevents clutter from lost signals
+- **Connection Status**: Indicator showing WebSocket connection status to SignalK stream
+- **Theme Support**: Dark and light mode themes
+
+### SignalK Integration for AIS
+
+AIS targets are broadcast via SignalK using unique, per-target contexts rather than the shared `vessels.self` context:
+
+**Context Format:**
+```
+vessels.urn:mrn:imo:mmsi:<MMSI>
+```
+
+Example: A vessel with MMSI 123456789 uses context `vessels.urn:mrn:imo:mmsi:123456789`.
+
+**Supported SignalK Paths for AIS Targets:**
+
+| PGN | SignalK Path | Units | Description |
+|-----|--------------|-------|-------------|
+| 129038, 129039, 129040 | navigation.position | degrees | Target position (latitude/longitude) |
+| 129038, 129039, 129040 | navigation.speedOverGround | m/s | Vessel speed over ground |
+| 129038, 129039, 129040 | navigation.courseOverGroundTrue | radians | Course over ground (true) |
+| 129038, 129039, 129040 | navigation.headingTrue | radians | Vessel heading (true) |
+| 129038 | navigation.state | string | Navigation status (e.g., "UnderWayEngine", "AtAnchor") |
+| 129040, 129039 | design.length | meters | Vessel length |
+| 129040, 129039 | design.beam | meters | Vessel beam (width) |
+| 129041 | navigation.atonType | string | Aid-to-navigation type |
+| 129794 | name | string | Vessel name |
+| 129794, 129809, 129810 | communication.callsignVhf | string | VHF call sign |
+| 129794, 129810 | design.aisShipType | string | IEC 61162-1 ship type |
+| 129794 | design.draft | meters | Vessel draft |
+| 129794 | navigation.destination | string | Destination port |
+| All | sensors.ais.class | string | AIS class: "A", "B", or "AtoN" |
+
+### AIS Message Format
+
+SignalK delta messages for AIS targets follow the v1.7.0 specification with custom `vessels.urn:mrn:imo:mmsi:<MMSI>` context:
+
+**Example: Class A Position Report (PGN 129038):**
+```json
+{
+  "context": "vessels.urn:mrn:imo:mmsi:123456789",
+  "updates": [{
+    "source": {
+      "label": "N2K-205",
+      "type": "NMEA2000",
+      "src": "205",
+      "pgn": 129038
+    },
+    "timestamp": "2026-02-17T12:00:00.000Z",
+    "values": [
+      { "path": "navigation.position", "value": { "latitude": 43.630127, "longitude": 10.293377 } },
+      { "path": "navigation.speedOverGround", "value": 5.144 },
+      { "path": "navigation.courseOverGroundTrue", "value": 0.7854 },
+      { "path": "navigation.headingTrue", "value": 0.8727 },
+      { "path": "navigation.state", "value": "UnderWayEngine" },
+      { "path": "sensors.ais.class", "value": "A" }
+    ]
+  }]
+}
+```
+
+**Example: Aid-to-Navigation Report (PGN 129041):**
+```json
+{
+  "context": "vessels.urn:mrn:imo:mmsi:993700001",
+  "updates": [{
+    "source": {
+      "label": "N2K-205",
+      "type": "NMEA2000",
+      "src": "205",
+      "pgn": 129041
+    },
+    "timestamp": "2026-02-17T12:00:00.000Z",
+    "values": [
+      { "path": "navigation.position", "value": { "latitude": 43.625000, "longitude": 10.295000 } },
+      { "path": "navigation.atonType", "value": "Light" },
+      { "path": "name", "value": "North Buoy #1" },
+      { "path": "sensors.ais.class", "value": "AtoN" }
+    ]
+  }]
+}
+```
+
+### Integration Points
+
+- **WebSocket Clients**: Connect to `ws://localhost:8080/signalk/v1/stream` to receive AIS deltas
+- **SignalK Server**: The application can act as a SignalK data provider for AIS targets
+- **OpenPlotter**: Direct WebSocket integration for vessel monitoring
+- **Custom Applications**: Any WebSocket client supporting SignalK v1.7.0 can consume AIS data
+
+### Technical Details
+
+- **No Database Storage**: AIS data is decoded and broadcast in real-time only (not persisted)
+- **Per-Target Context**: Each AIS target uses a unique SignalK context, enabling multi-target tracking
+- **Rate Limiting**: AIS messages respect the global SignalK rate limit (default 100ms per update)
+- **Automatic Unit Conversion**: All values converted to SI units (m/s, radians, meters)
+- **Source Tracking**: Each AIS update includes the NMEA2000 source address for multi-transponder scenarios
 
 ## NMEA0183 UDP Broadcasting
 

@@ -29,6 +29,15 @@ impl Humidity {
         }
     }
 
+    pub fn get_source_description(&self) -> &'static str {
+        match self.source {
+            0 => "Inside",
+            1 => "Outside",
+            2 => "User",
+            _ => "Unknown",
+        }
+    }
+
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 6 {
             return None;

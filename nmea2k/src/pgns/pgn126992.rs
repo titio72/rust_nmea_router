@@ -27,6 +27,18 @@ impl NMEASystemTime {
         }
     }
     
+    pub fn get_source_description(&self) -> &'static str {
+        match self.source {
+            0 => "GPS",
+            1 => "GLONASS",
+            2 => "Radio station",
+            3 => "Local cesium clock",
+            4 => "Local rubidium clock",
+            5 => "Local crystal clock",
+            _ => "Unknown",
+        }
+    }
+
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 8 {
             return None;

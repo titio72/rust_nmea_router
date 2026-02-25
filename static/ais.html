@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIS Targets - NMEA Router</title>
+    <link rel="icon" type="image/png" href="/nmeasail.png">
+    <link rel="stylesheet" href="/shared.css">
+    <script src="/shared-theme.js"></script>
+    <style>
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+
+        .search-box {
+            flex: 1;
+            max-width: 300px;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+
+        .search-box input::placeholder {
+            color: var(--text-secondary);
+        }
+
+        .target-count {
+            font-size: 14px;
+            color: var(--text-secondary);
+            padding: 8px 16px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        thead {
+            background: var(--bg-tertiary);
+            border-bottom: 2px solid var(--sailing-color);
+        }
+
+        th {
+            padding: 12px;
+            text-align: left;
+            font-weight: bold;
+            color: var(--text-bold);
+            font-size: 13px;
+            user-select: none;
+            cursor: pointer;
+        }
+
+        th:hover {
+            background: var(--border-color);
+        }
+
+        tbody tr {
+            border-bottom: 1px solid var(--border-color);
+            transition: background-color 0.2s;
+        }
+
+        tbody tr:hover {
+            background: var(--bg-tertiary);
+        }
+
+        tbody tr.stale {
+            opacity: 0.5;
+            background: var(--bg-tertiary);
+        }
+
+        tbody tr.very-stale {
+            display: none;
+        }
+
+        td {
+            padding: 12px;
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+
+        .mmsi {
+            font-weight: bold;
+            font-family: monospace;
+        }
+
+        .ais-class {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+            background: var(--sailing-color);
+            color: white;
+        }
+
+        .ais-class.b {
+            background: #3498db;
+        }
+
+        .ais-class.aton {
+            background: #e67e22;
+        }
+
+        .updated-time {
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #e74c3c;
+        }
+
+        .status-dot.connected {
+            background: #27ae60;
+        }
+    </style>
+</head>
+<body>
+    <div class="header-bar">
+        <div style="display: flex; align-items: center; gap: 10px; margin: 0 auto 20px auto; max-width: 1500px;">
+            <img id="brandLogo" src="/nmeasail-dark.png" alt="Logo" style="height: 40px; cursor: pointer;">
+            <h1 style="margin: 0; flex: 1;">AIS Targets</h1>
+            <div class="connection-status" id="connectionStatus">
+                <div class="status-dot"></div>
+                <span>Disconnected</span>
+            </div>
+            <button id="themeBtn" class="theme-toggle">
+                <span id="theme-icon">◐</span>
+                <span id="theme-text">Dark</span>
+            </button>
+        </div>
+        <nav style="text-align: center; max-width: 1500px; margin: 0 auto;">
+            <a href="/" style="margin-right: 20px;">Home</a>
+            <a href="/realtime.html" style="margin-right: 20px;">Real-Time</a>
+            <a href="/trip.html" style="margin-right: 20px;">Trips</a>
+            <a href="/ais.html" style="font-weight: bold;">AIS</a>
+        </nav>
+    </div>
+
+    <div class="level-1-container">
+        <div class="controls">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="Search by MMSI, name, or callsign...">
+            </div>
+            <div class="target-count">
+                <span id="targetCount">0</span> targets
+            </div>
+            <div class="target-count" id="positionStatus" style="background: var(--border-color); color: var(--text-secondary);">
+                📍 No vessel position
+            </div>
+        </div>
+
+        <div id="tableContainer">
+            <table>
+                <thead>
+                    <tr>
+                        <th data-sort="distance">Distance (nm)</th>
+                        <th data-sort="mmsi">MMSI</th>
+                        <th data-sort="name">Name</th>
+                        <th data-sort="class">Class</th>
+                        <th data-sort="lat">Latitude</th>
+                        <th data-sort="lon">Longitude</th>
+                        <th data-sort="sog">SOG (kn)</th>
+                        <th data-sort="cog">COG (°)</th>
+                        <th data-sort="heading">Heading (°)</th>
+                        <th data-sort="status">Status</th>
+                        <th data-sort="updated">Last Updated</th>
+                    </tr>
+                </thead>
+                <tbody id="aisTable">
+                    <tr class="no-data">
+                        <td colspan="11">Waiting for AIS targets...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const targets = new Map();
+        let vesselLat = null;  // Current vessel position
+        let vesselLon = null;  // Current vessel position
+        let sortBy = 'distance';  // Default sort by distance
+        let sortAsc = true;
+        let filteredTargets = [];
+
+        // Haversine formula to calculate distance between two points
+        // Returns distance in nautical miles
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371; // Earth radius in kilometers
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            const distKm = R * c;
+            return distKm / 1.852; // Convert km to nautical miles
+        }
+
+        // AIS target entry structure
+        class AisTarget {
+            constructor(mmsi) {
+                this.mmsi = mmsi;
+                this.name = '';
+                this.callsign = '';
+                this.type = '';
+                this.aiClass = '';
+                this.latitude = null;
+                this.longitude = null;
+                this.sog = null;
+                this.cog = null;
+                this.heading = null;
+                this.navStatus = '';
+                this.updated = Date.now();
+            }
+
+            getDistance() {
+                if (vesselLat === null || vesselLon === null || this.latitude === null || this.longitude === null) {
+                    return null;
+                }
+                return calculateDistance(vesselLat, vesselLon, this.latitude, this.longitude);
+            }
+
+            updateField(path, value) {
+                this.updated = Date.now();
+                
+                if (path === 'name') this.name = value || '';
+                else if (path === 'communication.callsignVhf') this.callsign = value || '';
+                else if (path === 'design.aisShipType') this.type = value || '';
+                else if (path === 'sensors.ais.class') this.aiClass = value || '';
+                else if (path === 'navigation.position') {
+                    if (value && value.latitude !== undefined) this.latitude = value.latitude;
+                    if (value && value.longitude !== undefined) this.longitude = value.longitude;
+                }
+                else if (path === 'navigation.speedOverGround' && value !== undefined) {
+                    this.sog = value * 1.94384; // m/s to knots
+                }
+                else if (path === 'navigation.courseOverGroundTrue' && value !== undefined) {
+                    this.cog = value * 180 / Math.PI; // radians to degrees
+                }
+                else if (path === 'navigation.headingTrue' && value !== undefined) {
+                    this.heading = value * 180 / Math.PI; // radians to degrees
+                }
+                else if (path === 'navigation.state') this.navStatus = value || '';
+            }
+
+            isStale() {
+                const ageMs = Date.now() - this.updated;
+                return ageMs > 60000; // 60 minutes
+            }
+
+            isVeryStale() {
+                const ageMs = Date.now() - this.updated;
+                return ageMs > 3600000; // 60 minutes
+            }
+
+            getMinsAgo() {
+                const ageMs = Date.now() - this.updated;
+                const minutes = Math.floor(ageMs / 60000);
+                if (minutes < 1) return 'now';
+                if (minutes === 1) return '1 min ago';
+                return `${minutes} min ago`;
+            }
+        }
+
+        // WebSocket connection
+        let ws = null;
+        let reconnectTimer = null;
+
+        function connectWebSocket() {
+            try {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                ws = new WebSocket(`${protocol}//${window.location.host}/signalk/v1/stream`);
+
+                ws.onopen = () => {
+                    console.log('Connected to SignalK stream');
+                    updateConnectionStatus(true);
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.updates) {
+                            data.updates.forEach(update => {
+                                const context = data.context;
+                                
+                                // Capture vessel's own position for distance calculation
+                                // Context format: "vessels.urn:mrn:signalk:uuid:<uuid>"
+                                if (context && context.startsWith('vessels.urn:mrn:signalk:uuid:')) {
+                                    if (update.values) {
+                                        update.values.forEach(val => {
+                                            if (val.path === 'navigation.position' && val.value) {
+                                                vesselLat = val.value.latitude;
+                                                vesselLon = val.value.longitude;
+                                            }
+                                        });
+                                    }
+                                }
+                                
+                                // Extract MMSI from context: "vessels.urn:mrn:imo:mmsi:123456789"
+                                const mmsiMatch = context.match(/mmsi:(\d+)$/);
+                                if (mmsiMatch) {
+                                    const mmsi = parseInt(mmsiMatch[1]);
+                                    if (!targets.has(mmsi)) {
+                                        targets.set(mmsi, new AisTarget(mmsi));
+                                    }
+                                    
+                                    const target = targets.get(mmsi);
+                                    if (update.values) {
+                                        update.values.forEach(val => {
+                                            target.updateField(val.path, val.value);
+                                        });
+                                    }
+                                }
+                            });
+                            
+                            renderTable();
+                        }
+                    } catch (e) {
+                        console.error('Error processing message:', e);
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    updateConnectionStatus(false);
+                };
+
+                ws.onclose = () => {
+                    console.log('WebSocket closed');
+                    updateConnectionStatus(false);
+                    
+                    // Attempt to reconnect after 5 seconds
+                    reconnectTimer = setTimeout(() => {
+                        connectWebSocket();
+                    }, 5000);
+                };
+            } catch (e) {
+                console.error('Failed to connect:', e);
+                updateConnectionStatus(false);
+            }
+        }
+
+        function updateConnectionStatus(connected) {
+            const status = document.getElementById('connectionStatus');
+            const dot = status.querySelector('.status-dot');
+            const text = status.querySelector('span');
+            
+            if (connected) {
+                dot.classList.add('connected');
+                text.textContent = 'Connected';
+            } else {
+                dot.classList.remove('connected');
+                text.textContent = 'Disconnected';
+            }
+        }
+
+        function formatNumberHtml(value, decimals = 2) {
+            if (value === null || value === undefined) return '-';
+            return value.toFixed(decimals);
+        }
+
+        function renderTable() {
+            // Update position status
+            const posStatus = document.getElementById('positionStatus');
+            if (vesselLat !== null && vesselLon !== null) {
+                posStatus.textContent = `📍 Position: ${vesselLat.toFixed(4)}°, ${vesselLon.toFixed(4)}°`;
+                posStatus.style.background = 'rgba(100, 200, 100, 0.2)';
+            } else {
+                posStatus.textContent = '📍 No vessel position';
+                posStatus.style.background = 'var(--border-color)';
+            }
+            
+            // Filter targets
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            filteredTargets = Array.from(targets.values()).filter(t => {
+                const searchStr = `${t.mmsi} ${t.name} ${t.callsign}`.toLowerCase();
+                return searchStr.includes(searchTerm);
+            });
+
+            // Sort
+            filteredTargets.sort((a, b) => {
+                let aVal, bVal;
+                
+                switch (sortBy) {
+                    case 'distance': 
+                        aVal = a.getDistance() ?? Infinity; 
+                        bVal = b.getDistance() ?? Infinity; 
+                        break;
+                    case 'mmsi': aVal = a.mmsi; bVal = b.mmsi; break;
+                    case 'name': aVal = a.name || a.mmsi; bVal = b.name || b.mmsi; break;
+                    case 'class': aVal = a.aiClass; bVal = b.aiClass; break;
+                    case 'lat': aVal = a.latitude || 0; bVal = b.latitude || 0; break;
+                    case 'lon': aVal = a.longitude || 0; bVal = b.longitude || 0; break;
+                    case 'sog': aVal = a.sog || 0; bVal = b.sog || 0; break;
+                    case 'cog': aVal = a.cog || 0; bVal = b.cog || 0; break;
+                    case 'heading': aVal = a.heading || 0; bVal = b.heading || 0; break;
+                    case 'status': aVal = a.navStatus; bVal = b.navStatus; break;
+                    case 'updated': aVal = a.updated; bVal = b.updated; break;
+                    default: aVal = a.getDistance() ?? Infinity; bVal = b.getDistance() ?? Infinity;
+                }
+                
+                if (aVal < bVal) return sortAsc ? -1 : 1;
+                if (aVal > bVal) return sortAsc ? 1 : -1;
+                return 0;
+            });
+
+            // Render
+            const tableBody = document.getElementById('aisTable');
+            if (filteredTargets.length === 0) {
+                tableBody.innerHTML = '<tr class="no-data"><td colspan="11">No AIS targets</td></tr>';
+            } else {
+                tableBody.innerHTML = filteredTargets.map(t => {
+                    const rowClass = t.isVeryStale() ? 'very-stale' : (t.isStale() ? 'stale' : '');
+                    const classLabel = t.aiClass ? t.aiClass.toLowerCase() : 'unknown';
+                    const classHtml = `<span class="ais-class ${classLabel === 'a' ? '' : classLabel}">${t.aiClass}</span>`;
+                    const distance = t.getDistance();
+                    const distanceHtml = distance !== null ? distance.toFixed(1) : '-';
+                    
+                    return `
+                        <tr class="${rowClass}">
+                            <td>${distanceHtml}</td>
+                            <td class="mmsi">${t.mmsi}</td>
+                            <td>${t.name || '-'}</td>
+                            <td>${classHtml}</td>
+                            <td>${formatNumberHtml(t.latitude, 4)}</td>
+                            <td>${formatNumberHtml(t.longitude, 4)}</td>
+                            <td>${formatNumberHtml(t.sog, 1)}</td>
+                            <td>${formatNumberHtml(t.cog, 0)}</td>
+                            <td>${formatNumberHtml(t.heading, 0)}</td>
+                            <td>${t.navStatus || '-'}</td>
+                            <td class="updated-time">${t.getMinsAgo()}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+
+            document.getElementById('targetCount').textContent = filteredTargets.length;
+        }
+
+        // Event listeners
+        document.getElementById('searchInput').addEventListener('input', renderTable);
+
+        document.querySelectorAll('th[data-sort]').forEach(th => {
+            th.addEventListener('click', () => {
+                const newSort = th.dataset.sort;
+                if (sortBy === newSort) {
+                    sortAsc = !sortAsc;
+                } else {
+                    sortBy = newSort;
+                    sortAsc = true;
+                }
+                renderTable();
+            });
+        });
+
+        // Initialize
+        initializeTheme();
+        connectWebSocket();
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            if (ws) ws.close();
+        });
+    </script>
+</body>
+</html>

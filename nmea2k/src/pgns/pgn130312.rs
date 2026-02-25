@@ -29,6 +29,22 @@ impl Temperature {
         }
     }
 
+    pub fn get_source_description(&self) -> &'static str {
+        match self.source {
+            0 => "Sea",
+            1 => "Outside",
+            2 => "Inside",
+            3 => "Engine room",
+            4 => "Main cabin",
+            5 => "Live well",
+            6 => "Bait well",
+            7 => "Refrigeration",
+            8 => "Heating system",
+            9 => "Dew point",
+            _ => "Unknown",
+        }
+    }
+
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 6 {
             return None;

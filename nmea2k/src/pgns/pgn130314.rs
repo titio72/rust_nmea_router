@@ -26,6 +26,17 @@ impl ActualPressure {
         }
     }
 
+    pub fn get_source_description(&self) -> &'static str {
+        match self.source {
+            0 => "Atmospheric",
+            1 => "Water",
+            2 => "Steam",
+            3 => "Compressed air",
+            4 => "Hydraulic",
+            _ => "Unknown",
+        }
+    }
+
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 6 {
             return None;

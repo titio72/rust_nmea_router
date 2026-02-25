@@ -111,6 +111,28 @@ impl SignalKBroadcaster {
         // which is normal during operation when no clients are connected
         let _ = channels.send(delta);
     }
+
+    /// Send a delta message with a custom context (for AIS targets)
+    /// AIS targets use context: "vessels.urn:mrn:imo:mmsi:<MMSI>"
+    fn send_ais_delta(&self, mmsi: u32, source: SignalKSource, timestamp: String, values: Vec<SignalKValue>) {
+        let channels = get_signalk_channels();
+        
+        let source_ref = format!("{}.{}", &source.label, &source.src);
+        let ais_context = format!("vessels.urn:mrn:imo:mmsi:{}", mmsi);
+        
+        let delta = SignalKDelta {
+            context: ais_context,
+            updates: vec![SignalKUpdate {
+                source: Some(source),
+                timestamp,
+                values,
+                source_ref,
+            }],
+        };
+        
+        // Silently ignore send errors
+        let _ = channels.send(delta);
+    }
 }
 
 impl MessageHandler for SignalKBroadcaster {
@@ -393,6 +415,230 @@ impl MessageHandler for SignalKBroadcaster {
                     self.last_stw_broadcast = Some(now);
                 }
             },
+
+            N2kMessage::AisClassAPositionReport(ais) => {
+                let values = vec![
+                    SignalKValue {
+                        path: "navigation.position".to_string(),
+                        value: json!({
+                            "latitude": ais.get_latitude_degrees(),
+                            "longitude": ais.get_longitude_degrees(),
+                        }),
+                    },
+                    SignalKValue {
+                        path: "navigation.speedOverGround".to_string(),
+                        value: json!(ais.get_sog_ms()),
+                    },
+                    SignalKValue {
+                        path: "navigation.courseOverGroundTrue".to_string(),
+                        value: json!(ais.get_cog_radians()),
+                    },
+                    SignalKValue {
+                        path: "navigation.headingTrue".to_string(),
+                        value: json!(ais.get_heading_radians()),
+                    },
+                    SignalKValue {
+                        path: "navigation.state".to_string(),
+                        value: json!(ais.nav_status.to_string()),
+                    },
+                    SignalKValue {
+                        path: "sensors.ais.class".to_string(),
+                        value: json!("A"),
+                    },
+                ];
+                
+                self.send_ais_delta(ais.mmsi, source, timestamp, values);
+            },
+
+            N2kMessage::AisClassBPositionReport(ais) => {
+                let values = vec![
+                    SignalKValue {
+                        path: "navigation.position".to_string(),
+                        value: json!({
+                            "latitude": ais.get_latitude_degrees(),
+                            "longitude": ais.get_longitude_degrees(),
+                        }),
+                    },
+                    SignalKValue {
+                        path: "navigation.speedOverGround".to_string(),
+                        value: json!(ais.get_sog_ms()),
+                    },
+                    SignalKValue {
+                        path: "navigation.courseOverGroundTrue".to_string(),
+                        value: json!(ais.get_cog_radians()),
+                    },
+                    SignalKValue {
+                        path: "navigation.headingTrue".to_string(),
+                        value: json!(ais.get_heading_radians()),
+                    },
+                    SignalKValue {
+                        path: "sensors.ais.class".to_string(),
+                        value: json!("B"),
+                    },
+                ];
+                
+                self.send_ais_delta(ais.mmsi, source, timestamp, values);
+            },
+
+            N2kMessage::AisClassBExtPositionReport(ais) => {
+                let values = vec![
+                    SignalKValue {
+                        path: "navigation.position".to_string(),
+                        value: json!({
+                            "latitude": ais.get_latitude_degrees(),
+                            "longitude": ais.get_longitude_degrees(),
+                        }),
+                    },
+                    SignalKValue {
+                        path: "navigation.speedOverGround".to_string(),
+                        value: json!(ais.get_sog_ms()),
+                    },
+                    SignalKValue {
+                        path: "navigation.courseOverGroundTrue".to_string(),
+                        value: json!(ais.get_cog_radians()),
+                    },
+                    SignalKValue {
+                        path: "navigation.headingTrue".to_string(),
+                        value: json!(ais.get_heading_radians()),
+                    },
+                    SignalKValue {
+                        path: "design.length".to_string(),
+                        value: json!(ais.get_length_meters()),
+                    },
+                    SignalKValue {
+                        path: "design.beam".to_string(),
+                        value: json!(ais.get_beam_meters()),
+                    },
+                    SignalKValue {
+                        path: "sensors.ais.class".to_string(),
+                        value: json!("B"),
+                    },
+                ];
+                
+                self.send_ais_delta(ais.mmsi, source, timestamp, values);
+            },
+
+            N2kMessage::AisAtonReport(ais) => {
+                let values = vec![
+                    SignalKValue {
+                        path: "navigation.position".to_string(),
+                        value: json!({
+                            "latitude": ais.get_latitude_degrees(),
+                            "longitude": ais.get_longitude_degrees(),
+                        }),
+                    },
+                    SignalKValue {
+                        path: "sensors.ais.class".to_string(),
+                        value: json!("AtoN"),
+                    },
+                    SignalKValue {
+                        path: "navigation.atonType".to_string(),
+                        value: json!(ais.aton_type.to_string()),
+                    },
+                    SignalKValue {
+                        path: "name".to_string(),
+                        value: json!(ais.name.trim()),
+                    },
+                ];
+                
+                self.send_ais_delta(ais.mmsi, source, timestamp, values);
+            },
+
+            N2kMessage::AisUtcDateReport(ais) => {
+                let values = vec![
+                    SignalKValue {
+                        path: "navigation.position".to_string(),
+                        value: json!({
+                            "latitude": ais.get_latitude_degrees(),
+                            "longitude": ais.get_longitude_degrees(),
+                        }),
+                    },
+                ];
+                
+                self.send_ais_delta(ais.mmsi, source, timestamp, values);
+            },
+
+            N2kMessage::AisClassAStaticData(ais) => {
+                let values = vec![
+                    SignalKValue {
+                        path: "name".to_string(),
+                        value: json!(ais.name.trim()),
+                    },
+                    SignalKValue {
+                        path: "communication.callsignVhf".to_string(),
+                        value: json!(ais.callsign.trim()),
+                    },
+                    SignalKValue {
+                        path: "design.aisShipType".to_string(),
+                        value: json!(ais.type_of_ship),
+                    },
+                    SignalKValue {
+                        path: "design.length".to_string(),
+                        value: json!(ais.get_length_meters()),
+                    },
+                    SignalKValue {
+                        path: "design.beam".to_string(),
+                        value: json!(ais.get_beam_meters()),
+                    },
+                    SignalKValue {
+                        path: "design.draft".to_string(),
+                        value: json!(ais.get_draft_meters()),
+                    },
+                    SignalKValue {
+                        path: "navigation.destination".to_string(),
+                        value: json!(ais.destination.trim()),
+                    },
+                    SignalKValue {
+                        path: "sensors.ais.class".to_string(),
+                        value: json!("A"),
+                    },
+                ];
+                
+                self.send_ais_delta(ais.mmsi, source, timestamp, values);
+            },
+
+            N2kMessage::AisClassBStaticDataPartA(ais) => {
+                let values = vec![
+                    SignalKValue {
+                        path: "name".to_string(),
+                        value: json!(ais.name.trim()),
+                    },
+                    SignalKValue {
+                        path: "sensors.ais.class".to_string(),
+                        value: json!("B"),
+                    },
+                ];
+                
+                self.send_ais_delta(ais.mmsi, source, timestamp, values);
+            },
+
+            N2kMessage::AisClassBStaticDataPartB(ais) => {
+                let values = vec![
+                    SignalKValue {
+                        path: "design.aisShipType".to_string(),
+                        value: json!(ais.type_of_ship),
+                    },
+                    SignalKValue {
+                        path: "communication.callsignVhf".to_string(),
+                        value: json!(ais.callsign.trim()),
+                    },
+                    SignalKValue {
+                        path: "design.length".to_string(),
+                        value: json!(ais.get_length_meters()),
+                    },
+                    SignalKValue {
+                        path: "design.beam".to_string(),
+                        value: json!(ais.get_beam_meters()),
+                    },
+                    SignalKValue {
+                        path: "sensors.ais.class".to_string(),
+                        value: json!("B"),
+                    },
+                ];
+                
+                self.send_ais_delta(ais.mmsi, source, timestamp, values);
+            },
+
             // All other messages - ignore
             _ => {}
         }

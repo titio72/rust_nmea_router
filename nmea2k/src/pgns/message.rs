@@ -10,6 +10,14 @@ use super::pgn128267::WaterDepth;
 use super::pgn129025::PositionRapidUpdate;
 use super::pgn129026::CogSogRapidUpdate;
 use super::pgn129029::GnssPositionData;
+use super::pgn129038::AisClassAPositionReport;
+use super::pgn129039::AisClassBPositionReport;
+use super::pgn129040::AisClassBExtPositionReport;
+use super::pgn129041::AisAtonReport;
+use super::pgn129793::AisUtcDateReport;
+use super::pgn129794::AisClassAStaticData;
+use super::pgn129809::AisClassBStaticDataPartA;
+use super::pgn129810::AisClassBStaticDataPartB;
 use super::pgn130306::WindData;
 use super::pgn130312::Temperature;
 use super::pgn130313::Humidity;
@@ -39,6 +47,14 @@ pub enum N2kMessage {
     Temperature(Temperature),
     Humidity(Humidity),
     ActualPressure(ActualPressure),
+    AisClassAPositionReport(AisClassAPositionReport),
+    AisClassBPositionReport(AisClassBPositionReport),
+    AisClassBExtPositionReport(AisClassBExtPositionReport),
+    AisAtonReport(AisAtonReport),
+    AisUtcDateReport(AisUtcDateReport),
+    AisClassAStaticData(AisClassAStaticData),
+    AisClassBStaticDataPartA(AisClassBStaticDataPartA),
+    AisClassBStaticDataPartB(AisClassBStaticDataPartB),
     Unknown(u32, Vec<u8>),
 }
 
@@ -75,6 +91,30 @@ impl N2kMessage {
             129029 => GnssPositionData::from_bytes(data)
                 .map(N2kMessage::GnssPositionData)
                 .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
+            129038 => AisClassAPositionReport::from_bytes(data)
+                .map(N2kMessage::AisClassAPositionReport)
+                .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
+            129039 => AisClassBPositionReport::from_bytes(data)
+                .map(N2kMessage::AisClassBPositionReport)
+                .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
+            129040 => AisClassBExtPositionReport::from_bytes(data)
+                .map(N2kMessage::AisClassBExtPositionReport)
+                .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
+            129041 => AisAtonReport::from_bytes(data)
+                .map(N2kMessage::AisAtonReport)
+                .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
+            129793 => AisUtcDateReport::from_bytes(data)
+                .map(N2kMessage::AisUtcDateReport)
+                .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
+            129794 => AisClassAStaticData::from_bytes(data)
+                .map(N2kMessage::AisClassAStaticData)
+                .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
+            129809 => AisClassBStaticDataPartA::from_bytes(data)
+                .map(N2kMessage::AisClassBStaticDataPartA)
+                .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
+            129810 => AisClassBStaticDataPartB::from_bytes(data)
+                .map(N2kMessage::AisClassBStaticDataPartB)
+                .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
             130306 => WindData::from_bytes(data)
                 .map(N2kMessage::WindData)
                 .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
@@ -109,6 +149,14 @@ impl fmt::Display for N2kMessage {
             N2kMessage::Temperature(msg) => write!(f, "{}", msg),
             N2kMessage::Humidity(msg) => write!(f, "{}", msg),
             N2kMessage::ActualPressure(msg) => write!(f, "{}", msg),
+            N2kMessage::AisClassAPositionReport(msg) => write!(f, "{}", msg),
+            N2kMessage::AisClassBPositionReport(msg) => write!(f, "{}", msg),
+            N2kMessage::AisClassBExtPositionReport(msg) => write!(f, "{}", msg),
+            N2kMessage::AisAtonReport(msg) => write!(f, "{}", msg),
+            N2kMessage::AisUtcDateReport(msg) => write!(f, "{}", msg),
+            N2kMessage::AisClassAStaticData(msg) => write!(f, "{}", msg),
+            N2kMessage::AisClassBStaticDataPartA(msg) => write!(f, "{}", msg),
+            N2kMessage::AisClassBStaticDataPartB(msg) => write!(f, "{}", msg),
             N2kMessage::Unknown(_pgn, data) => {
                 write!(f, "      Raw data: [{}]", format_data_bytes(data))
             }

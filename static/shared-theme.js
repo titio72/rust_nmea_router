@@ -65,6 +65,7 @@ function createHeaderBar(currentPage) {
     const navItems = [
         { href: '/', label: 'Trips', page: 'trips' },
         { href: '/realtime.html', label: 'Monitor', page: 'monitor' },
+        { href: '/ais.html', label: 'AIS', page: 'ais' },
         { href: '/yearly-stats.html', label: 'Stats', page: 'stats' },
         { href: '/signalk-browser.html', label: 'SignalK Browser', page: 'signalk-browser' }
     ];
