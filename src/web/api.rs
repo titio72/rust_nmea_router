@@ -8,8 +8,9 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
-use tracing::{info, error};
-use std::{backtrace::Backtrace, sync::Arc};
+use tracing::{info, error, Span};
+use std::{backtrace::Backtrace, sync::Arc, time::Duration};
+use tower_http::trace::TraceLayer;
 
 use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData, SpeedDistributionData, WindStatisticsData, TripLegsData, TrackAnalytics, HeatmapData};
 use crate::config::Config;
@@ -146,7 +147,6 @@ pub async fn get_trips(
     State(state): State<AppState>,
     Query(params): Query<TripsQuery>,
 ) -> Result<Json<ApiResponse<Vec<TripSummary>>>, StatusCode> {
-    info!(?params, "GET /api/trips called");
     match state.db.fetch_trips(params.year, params.last_months) {
         Ok(trips) => Ok(Json(ApiResponse::ok(trips))),
         Err(e) => {
@@ -160,7 +160,6 @@ pub async fn get_trip(
     State(state): State<AppState>,
     Query(params): Query<TripIdQuery>,
 ) -> Result<Json<ApiResponse<TripSummary>>, StatusCode> {
-    info!(?params, "GET /api/trip called");
     match state.db.fetch_trip(params.id) {
         Ok(res_trip) => {
             if let Some(trip) = res_trip {
@@ -181,7 +180,6 @@ pub async fn get_track(
     State(state): State<AppState>,
     Query(params): Query<TrackQuery>,
 ) -> Result<Json<ApiResponse<Vec<TrackPoint>>>, StatusCode> {
-    info!(?params, "GET /api/track called");
     match state.db.fetch_track(
         params.trip_id,
         params.start.as_deref(),
@@ -203,7 +201,6 @@ pub async fn get_metrics(
     State(state): State<AppState>,
     Query(params): Query<MetricsQuery>,
 ) -> Result<Json<ApiResponse<Vec<WebMetricData>>>, StatusCode> {
-    info!(?params, "GET /api/metrics called");
     match state.db.fetch_metrics(
         &params.metric,
         params.trip_id,
@@ -226,7 +223,6 @@ pub async fn get_speed_distribution(
     State(state): State<AppState>,
     Query(params): Query<TimeRangeQuery>,
 ) -> Result<Json<ApiResponse<SpeedDistributionData>>, StatusCode> {
-    info!(?params, "GET /api/speed_distribution called");
     match state.db.fetch_speed_distribution(
         params.id,
         params.start.as_deref(),
@@ -248,7 +244,6 @@ pub async fn get_wind_statistics(
     State(state): State<AppState>,
     Query(params): Query<TimeRangeQuery>,
 ) -> Result<Json<ApiResponse<WindStatisticsData>>, StatusCode> {
-    info!(?params, "GET /api/wind_statistics called");
     match state.db.fetch_wind_statistics(
         params.id,
         params.start.as_deref(),
@@ -270,7 +265,6 @@ pub async fn get_trip_legs(
     State(state): State<AppState>,
     Query(params): Query<TripIdQuery>,
 ) -> Result<Json<ApiResponse<TripLegsData>>, StatusCode> {
-    info!(?params, "GET /api/trip_legs called");
     match state.db.fetch_trip_legs(params.id) {
         Ok(legs_data) => Ok(Json(ApiResponse::ok(legs_data))),
         Err(e) => {
@@ -288,7 +282,6 @@ pub async fn get_track_analytics(
     State(state): State<AppState>,
     Query(params): Query<TimeRangeRequiredQuery>,
 ) -> Result<Json<ApiResponse<TrackAnalytics>>, StatusCode> {
-    info!(?params, "GET /api/track_analytics called");
     match state.db.fetch_track_analytics(&params.start, &params.end) {
         Ok(analytics) => Ok(Json(ApiResponse::ok(analytics))),
         Err(e) => {
@@ -305,7 +298,6 @@ pub async fn get_track_analytics(
 pub async fn get_monthly_statistics(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<crate::db::MonthlyStatistics>>, StatusCode> {
-    info!("GET /api/monthly_statistics called");
     match state.db.fetch_monthly_statistics() {
         Ok(stats) => Ok(Json(ApiResponse::ok(stats))),
         Err(e) => {
@@ -346,9 +338,6 @@ pub async fn delete_trip(
     State(state): State<AppState>,
     Query(params): Query<TripIdQuery>,
 ) -> Result<Json<ApiResponse<()>>, StatusCode> {
-
-    info!(?params, "DELETE /api/trip called");
-    
     match state.db.delete_trip(params.id) {
         Ok(()) => {
             info!(trip_id = params.id, "Trip deleted successfully");
@@ -369,9 +358,6 @@ pub async fn trim_trip(
     State(state): State<AppState>,
     Query(params): Query<TripIdQuery>,
 ) -> Result<Json<ApiResponse<()>>, StatusCode> {
-
-    info!(?params, "POST /api/trim_trip called");
-    
     match state.db.trim_trip(params.id) {
         Ok(()) => {
             info!(trip_id = params.id, "Trip trimmed successfully");
@@ -392,8 +378,6 @@ pub async fn export_trip(
     State(state): State<AppState>,
     Query(params): Query<ExportTripQuery>,
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
-    info!(?params, "POST /api/export_trip called");
-    
     // Determine the export path
     let export_path = params.path.clone().unwrap_or_else(|| {
         format!("static/exports/trip_{}.json", params.id)
@@ -421,8 +405,6 @@ pub async fn import_trip(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
-    info!("POST /api/import_trip called");
-    
     while let Ok(Some(field)) = multipart.next_field().await {
         let field_name = field.name().unwrap_or("unknown").to_string();
         
@@ -457,8 +439,6 @@ pub async fn import_trip(
 pub async fn list_exports() -> Result<Json<ApiResponse<Vec<ExportFileInfo>>>, StatusCode> {
     use std::fs;
     use std::path::Path;
-    
-    info!("GET /api/list_exports called");
     
     let export_dir = Path::new("static/exports");
     
@@ -527,8 +507,6 @@ pub async fn list_exports() -> Result<Json<ApiResponse<Vec<ExportFileInfo>>>, St
 pub async fn get_google_maps_key(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Option<String>>>, StatusCode> {
-    info!("GET /api/config/google_maps_key called");
-    
     match state.config.web.google_maps_api_key.clone() {
         Some(key) => Ok(Json(ApiResponse::ok(Some(key)))),
         None => Ok(Json(ApiResponse::ok(None))),
@@ -539,7 +517,6 @@ pub async fn get_heatmap(
     State(state): State<AppState>,
     Query(params): Query<HeatmapQuery>,
 ) -> Result<Json<ApiResponse<HeatmapData>>, StatusCode> {
-    info!(?params, "GET /api/heatmap called");
     match state.db.fetch_heatmap(&params.date) {
         Ok(heatmap) => Ok(Json(ApiResponse::ok(heatmap))),
         Err(e) => {
@@ -552,8 +529,6 @@ pub async fn get_heatmap(
 pub async fn get_tracking_status(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<TrackingStatusResponse>>, StatusCode> {
-    info!("GET /api/tracking/status called");
-    
     // Get tracking status from database
     let enabled = state.db.get_system_status("tracking_enabled")
         .unwrap_or(true);
@@ -584,8 +559,6 @@ pub async fn set_tracking_status(
 pub async fn get_metrics_status(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<MetricsStatusResponse>>, StatusCode> {
-    info!("GET /api/metrics/status called");
-    
     // Get metrics status from database
     let enabled = state.db.get_system_status("metrics_enabled")
         .unwrap_or(true);
@@ -617,8 +590,6 @@ pub async fn set_metrics_status(
 pub async fn get_signalk_status(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<SignalKStatusResponse>>, StatusCode> {
-    info!("GET /api/signalk/status called");
-    
     // Get signalk status from database
     let enabled = state.db.get_system_status("signalk_enabled")
         .unwrap_or(false);
@@ -672,6 +643,26 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/metrics/status", post(set_metrics_status))
         .route("/signalk/status", get(get_signalk_status))
         .route("/signalk/status", post(set_signalk_status))
+        .layer(
+            TraceLayer::new_for_http()
+                .on_request(|request: &axum::http::Request<_>, _span: &Span| {
+                    info!(method = %request.method(), uri = %request.uri(), "API call");
+                })
+                .on_response(|response: &axum::http::Response<_>, latency: Duration, _span: &Span| {
+                    let bytes = response
+                        .headers()
+                        .get(axum::http::header::CONTENT_LENGTH)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    info!(
+                        status = %response.status(),
+                        latency_ms = latency.as_millis(),
+                        bytes,
+                        "API response"
+                    );
+                })
+        )
         .with_state(state)
 }
 #[cfg(test)]

@@ -48,12 +48,14 @@ impl VesselHeading {
         if data.len() < 8 {
             return None;
         }
+        let deviation_raw = i16::from_le_bytes([data[3], data[4]]);
+        let variation_raw = i16::from_le_bytes([data[5], data[6]]);
         Some(Self {
             pgn: 127250,
             sid: data[0],
             heading: u16::from_le_bytes([data[1], data[2]]) as f64 * 0.0001,
-            deviation: Some(i16::from_le_bytes([data[3], data[4]]) as f64 * 0.0001),
-            variation: Some(i16::from_le_bytes([data[5], data[6]]) as f64 * 0.0001),
+            deviation: if deviation_raw >= i16::MAX - 1 { None } else { Some(deviation_raw as f64 * 0.0001) },
+            variation: if variation_raw >= i16::MAX - 1 { None } else { Some(variation_raw as f64 * 0.0001) },
             reference: match data[7] & 0x03 {
                 0 => HeadingReference::True,
                 1 => HeadingReference::Magnetic,

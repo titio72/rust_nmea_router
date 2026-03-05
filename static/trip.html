@@ -7,9 +7,46 @@
     <link rel="icon" type="image/png" href="/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
     <script src="/shared-theme.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <!-- Load Chart.js from local, fallback to CDN with error handling -->
+    <script>
+        function loadChartJS() {
+            // Try local Chart.js first
+            fetch('/libs/chart.min.js')
+                .then(r => r.ok ? loadScript('/libs/chart.min.js') : loadChartFromCDN())
+                .then(() => loadDateFnsLibraries())
+                .catch(() => loadChartFromCDN().then(() => loadDateFnsLibraries()));
+        }
+        
+        function loadChartFromCDN() {
+            return loadScript('https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js')
+                .catch(() => {
+                    console.warn('Chart.js unavailable - charts will not display');
+                    window.Chart = null;
+                });
+        }
+        
+        function loadDateFnsLibraries() {
+            // Try to load date-fns and the Chart.js adapter
+            return loadScript('https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js')
+                .then(() => loadScript('https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js'))
+                .catch((err) => {
+                    console.warn('Date-fns adapter unavailable, time-based charts may not work:', err);
+                });
+        }
+        
+        function loadScript(src) {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = src;
+                script.async = true;
+                script.onload = resolve;
+                script.onerror = reject;
+                document.head.appendChild(script);
+            });
+        }
+        
+        loadChartJS();
+    </script>
     <!-- Google Maps API will be loaded dynamically -->
     <style>
         #tripDetails {
@@ -128,19 +165,31 @@
             background: var(--bg-primary);
             border: 1px solid var(--border-color);
             border-radius: 6px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            align-items: center;
         }
         .legendTitle {
             font-weight: bold;
             color: var(--text-bold);
-            margin-bottom: 10px;
             font-size: 14px;
+            flex-basis: 100%;
+            margin-bottom: 0;
         }
         .legendItem {
             display: flex;
             align-items: center;
-            margin-bottom: 8px;
+            margin-bottom: 0;
             font-size: 13px;
             color: var(--text-secondary);
+            white-space: nowrap;
+        }
+        .legendSubItem {
+            flex-basis: 100%;
+            font-size: 12px;
+            color: var(--text-tertiary);
+            margin-left: 0;
         }
         .legendColor {
             width: 16px;
@@ -181,6 +230,29 @@
             border: 1px solid var(--border-color);
             border-radius: 8px;
             padding: 20px;
+        }
+        .chartWithToolbar {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .chartToolbar {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+        .chartToggleBtn {
+            padding: 6px 12px;
+            background-color: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background-color 0.2s ease;
+        }
+        .chartToggleBtn:hover {
+            background-color: var(--bg-hover);
         }
         .loading {
             text-align: center;
@@ -283,29 +355,96 @@
         document.getElementById('headerContainer').innerHTML = createHeaderBar('trips');
         initializeTheme();
 
-        // Load Google Maps API key dynamically
+        let googleMapsLoaded = false;
+
+        // Load Google Maps API key dynamically with graceful fallback
         async function loadGoogleMapsAPI() {
             try {
-                const response = await fetch('/api/config/google_maps_key');
+                // Check if Google Maps is already loaded
+                if (window.google?.maps) {
+                    googleMapsLoaded = true;
+                    return true;
+                }
+
+                const response = await fetch('/api/config/google_maps_key', { timeout: 3000 });
+                
+                if (!response.ok) {
+                    console.warn('Google Maps API key endpoint unreachable');
+                    showMapFallback('Google Maps API key unavailable');
+                    return false;
+                }
+
                 const result = await response.json();
                 
-                if (result.status === 'ok' && result.data) {
-                    // Load Google Maps API with the key
+                if (result.status !== 'ok' || !result.data) {
+                    console.warn('Google Maps API key not configured');
+                    showMapFallback('Google Maps not configured');
+                    return false;
+                }
+
+                // Load Google Maps API with timeout
+                return new Promise((resolve) => {
                     const script = document.createElement('script');
                     script.src = `https://maps.googleapis.com/maps/api/js?key=${result.data}`;
                     script.async = true;
                     script.defer = true;
+                    
+                    const timeout = setTimeout(() => {
+                        console.warn('Google Maps API loading timeout');
+                        showMapFallback('Google Maps loading timeout - map unavailable');
+                        resolve(false);
+                    }, 5000);
+                    
+                    script.onload = () => {
+                        clearTimeout(timeout);
+                        googleMapsLoaded = true;
+                        resolve(true);
+                    };
+                    
+                    script.onerror = () => {
+                        clearTimeout(timeout);
+                        console.warn('Google Maps API failed to load');
+                        showMapFallback('Google Maps failed to load');
+                        resolve(false);
+                    };
+                    
                     document.head.appendChild(script);
-                } else {
-                    console.warn('Google Maps API key not configured');
-                }
+                });
             } catch (error) {
-                console.error('Failed to load Google Maps API key:', error);
+                console.error('Failed to load Google Maps:', error);
+                showMapFallback('Network error loading Google Maps');
+                return false;
             }
         }
 
-        // Load Google Maps API on page load
-        loadGoogleMapsAPI();
+        function showMapFallback(message) {
+            const mapElement = document.getElementById('map');
+            if (mapElement) {
+                mapElement.innerHTML = `
+                    <div style="
+                        display: flex; 
+                        flex-direction: column;
+                        justify-content: center; 
+                        align-items: center; 
+                        height: 100%; 
+                        color: var(--text-secondary);
+                        text-align: center;
+                        gap: 10px;
+                    ">
+                        <div style="font-size: 14px; color: var(--text-secondary);">🗺️</div>
+                        <div>${message}</div>
+                        <div style="font-size: 12px; color: var(--text-tertiary);">Trip data is still available in charts below</div>
+                    </div>
+                `;
+            }
+        }
+
+        // Register Service Worker for offline support and graceful degradation
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js').catch(err => {
+                console.log('Service Worker registration failed (non-critical):', err);
+            });
+        }
 
         // Theme management - override toggleTheme to reload charts when theme changes
         function toggleTheme() {
@@ -343,7 +482,13 @@
         let currentMap = null; // Global reference to the map
         let currentAnalyticsData = null; // Global reference to analytics data
         let currentTrackData = null; // Global reference to track data for segment markers
+        let fullTrackData = null; // Global reference to full trip track data (loaded once)
         let segmentMarkers = []; // Array to store segment start/end markers
+        let headingScaleNormalized = false; // Toggle for heading chart scale (0-360 vs -180 to 180)
+        let windDirectionNormalized = false; // Toggle for wind direction chart scale (0-360 vs -180 to 180)
+        let absoluteWindDirectionNormalized = false; // Toggle for absolute wind direction chart scale (0-360 vs -180 to 180)
+        let currentAbsoluteWindData = null; // Metric data for absolute wind direction (for scale toggling)
+        let currentWindSpeedData = null; // Metric data for wind speed (for chart toggling)
 
         if (!tripId) {
             document.getElementById('tripDetails').innerHTML =
@@ -354,8 +499,18 @@
 
         async function loadTripAndLegs(tripId) {
             try {
-                // Load trip summary
-                const tripResponse = await fetch('/api/trip?id=' + tripId);
+                // Load Google Maps API early (non-blocking)
+                loadGoogleMapsAPI().catch(err => {
+                    console.warn('Google Maps loading failed, continuing without map');
+                });
+
+                // Load trip summary, trip legs, and full track data in parallel
+                const [tripResponse, legsResponse, trackResponse] = await Promise.all([
+                    fetch('/api/trip?id=' + tripId),
+                    fetch('/api/trip_legs?id=' + tripId),
+                    fetch('/api/track?trip_id=' + tripId)
+                ]);
+
                 if (!tripResponse.ok) {
                     throw new Error('HTTP ' + tripResponse.status + ': ' + tripResponse.statusText);
                 }
@@ -365,14 +520,20 @@
                 }
                 currentTrip = tripResult.data;
 
-                // Load trip legs
-                const legsResponse = await fetch('/api/trip_legs?id=' + tripId);
                 if (!legsResponse.ok) {
                     throw new Error('HTTP ' + legsResponse.status + ': ' + legsResponse.statusText);
                 }
                 const legsResult = await legsResponse.json();
                 if (legsResult.status === 'ok' && legsResult.data.legs) {
                     currentLegs = legsResult.data.legs;
+                }
+
+                if (!trackResponse.ok) {
+                    throw new Error('HTTP ' + trackResponse.status + ': ' + trackResponse.statusText);
+                }
+                const trackResult = await trackResponse.json();
+                if (trackResult.status === 'ok' && trackResult.data) {
+                    fullTrackData = trackResult.data;
                 }
 
                 // Display leg selector
@@ -485,29 +646,20 @@
         async function loadTripDetails(tripId, selectedLeg) {
             document.getElementById('tripDetails').innerHTML = '<div class="loading">Loading data...</div>';
             try {
-                // Determine query parameters based on selected leg
-                let trackQuery, speedQuery, windQuery;
+                // Prepare trip data and time range
                 let tripData;
+                let startTime, endTime;
                 
                 if (selectedLeg === null) {
-                    // Use trip ID for entire trip
-                    trackQuery = 'trip_id=' + tripId;
-                    speedQuery = 'id=' + tripId;
-                    windQuery = 'id=' + tripId;
+                    // Entire trip
                     tripData = {
                         ...currentTrip,
                         total_time_ms: (currentTrip.sailing_time_ms || 0) + (currentTrip.motoring_time_ms || 0)
                     };
+                    startTime = currentTrip.start_date;
+                    endTime = currentTrip.end_date;
                 } else {
-                    // Use time range for selected leg
-                    // Convert from ISO format (2026-02-02T05:55:12.895000Z) to MySQL format (2026-02-02 05:55:12)
-                    const startTime = encodeURIComponent(selectedLeg.start_timestamp.split('.')[0].replace('T', ' '));
-                    const endTime = encodeURIComponent(selectedLeg.end_timestamp.split('.')[0].replace('T', ' '));
-                    trackQuery = 'start=' + startTime + '&end=' + endTime;
-                    speedQuery = 'start=' + startTime + '&end=' + endTime;
-                    windQuery = 'start=' + startTime + '&end=' + endTime;
-                    
-                    // Create leg-specific trip data
+                    // Single leg
                     tripData = {
                         id: currentTrip.id,
                         description: (currentTrip.description || 'Trip ' + currentTrip.id) + ' - Leg ' + selectedLeg.leg_number,
@@ -520,102 +672,35 @@
                         motoring_time_ms: selectedLeg.motoring_time_ms,
                         total_time_ms: selectedLeg.sailing_time_ms + selectedLeg.motoring_time_ms
                     };
+                    startTime = selectedLeg.start_timestamp;
+                    endTime = selectedLeg.end_timestamp;
                 }
 
-                // Load track data
-                const trackResponse = await fetch('/api/track?' + trackQuery);
-                if (!trackResponse.ok) {
-                    throw new Error('HTTP ' + trackResponse.status + ': ' + trackResponse.statusText);
-                }
-                const trackResult = await trackResponse.json();
-                if (trackResult.status !== 'ok') {
-                    throw new Error(trackResult.error || 'Failed to load track data');
-                }
-
-                // Load speed distribution data
-                const speedDistResponse = await fetch('/api/speed_distribution?' + speedQuery);
-                if (!speedDistResponse.ok) {
-                    throw new Error('HTTP ' + speedDistResponse.status + ': ' + speedDistResponse.statusText);
-                }
-                const speedDistResult = await speedDistResponse.json();
-                if (speedDistResult.status !== 'ok') {
-                    throw new Error(speedDistResult.error || 'Failed to load speed distribution data');
+                // Use fullTrackData directly (no fetch needed)
+                let trackData = fullTrackData;
+                
+                // Filter track data to the selected leg if needed
+                if (selectedLeg !== null) {
+                    const legStartMs = new Date(startTime).getTime();
+                    const legEndMs = new Date(endTime).getTime();
+                    trackData = fullTrackData.filter(pt => {
+                        const ptMs = new Date(pt.timestamp).getTime();
+                        return ptMs >= legStartMs && ptMs <= legEndMs;
+                    });
                 }
 
-                // Load wind statistics data
-                const windStatsResponse = await fetch('/api/wind_statistics?' + windQuery);
-                if (!windStatsResponse.ok) {
-                    throw new Error('HTTP ' + windStatsResponse.status + ': ' + windStatsResponse.statusText);
-                }
-                const windStatsResult = await windStatsResponse.json();
-                if (windStatsResult.status !== 'ok') {
-                    throw new Error(windStatsResult.error || 'Failed to load wind statistics data');
-                }
+                // Render basic UI with map and trip info
+                displayTripInfo(tripData, trackData, selectedLeg === null);
 
-                // Load atmospheric pressure data
-                let pressureResult = null;
-                try {
-                    let pressureQuery;
-                    if (selectedLeg === null) {
-                        pressureQuery = 'metric=1&trip_id=' + tripId;
-                    } else if (selectedLeg && selectedLeg.start_timestamp && selectedLeg.end_timestamp) {
-                        const startTime = encodeURIComponent(formatDateForAPI(selectedLeg.start_timestamp));
-                        const endTime = encodeURIComponent(formatDateForAPI(selectedLeg.end_timestamp));
-                        pressureQuery = 'metric=1&start=' + startTime + '&end=' + endTime;
-                    }
-                    
-                    if (pressureQuery) {
-                        const pressureResponse = await fetch('/api/metrics?' + pressureQuery);
-                        if (pressureResponse.ok) {
-                            const result = await pressureResponse.json();
-                            if (result.status === 'ok') {
-                                pressureResult = result.data;
-                            }
-                        }
-                    }
-                } catch (e) {
-                    // Pressure data is optional, continue without it
-                    console.log('Pressure data not available:', e);
-                }
-
-                // Load track analytics data
-                let analyticsResult = null;
-                if (selectedLeg === null) {
-                    // For entire trip, use trip start/end dates
-                    if (currentTrip && currentTrip.start_date && currentTrip.end_date) {
-                        const startTime = encodeURIComponent(formatDateForAPI(currentTrip.start_date));
-                        const endTime = encodeURIComponent(formatDateForAPI(currentTrip.end_date));
-                        const analyticsResponse = await fetch('/api/track_analytics?start=' + startTime + '&end=' + endTime);
-                        if (analyticsResponse.ok) {
-                            const result = await analyticsResponse.json();
-                            if (result.status === 'ok') {
-                                analyticsResult = result.data;
-                            }
-                        }
-                    }
-                } else {
-                    // For leg, use leg timestamps
-                    if (selectedLeg && selectedLeg.start_timestamp && selectedLeg.end_timestamp) {
-                        const startTime = encodeURIComponent(formatDateForAPI(selectedLeg.start_timestamp));
-                        const endTime = encodeURIComponent(formatDateForAPI(selectedLeg.end_timestamp));
-                        const analyticsResponse = await fetch('/api/track_analytics?start=' + startTime + '&end=' + endTime);
-                        if (analyticsResponse.ok) {
-                            const result = await analyticsResponse.json();
-                            if (result.status === 'ok') {
-                                analyticsResult = result.data;
-                            }
-                        }
-                    }
-                }
-
-                displayTripDetails(tripData, trackResult.data, speedDistResult.data, windStatsResult.data, analyticsResult, pressureResult);
+                // Fetch secondary charts in parallel
+                await fetchAndRenderSecondaryCharts(tripData, trackData, startTime, endTime, selectedLeg === null);
             } catch (error) {
                 document.getElementById('tripDetails').innerHTML =
                     '<div class="error">Failed to load trip details: ' + error.message + '</div>';
             }
         }
 
-        function displayTripDetails(trip, trackData, speedDistData, windStatsData, analyticsData, pressureData) {
+        function displayTripInfo(trip, trackData, isFullTrip) {
             // Destroy existing charts
             Object.values(allCharts).forEach(chart => {
                 if (chart && typeof chart.destroy === 'function') {
@@ -690,40 +775,11 @@
                         '<div class="progressBarMotoring" style="width: ' + (100 - sailingPercent).toFixed(1) + '%;">' + ((100 - sailingPercent).toFixed(1) > 5 ? (100 - sailingPercent).toFixed(0) + '%' : '') + '</div>' +
                     '</div>' +
                 '</div>' +
-                (analyticsData ? '<div class="infoItem fullWidth" style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 20px;">' +
-                    '<div class="analyticsTitle">Performance Analytics</div>' +
-                    '<div class="analyticsGrid">' : '') +
-                (analyticsData && analyticsData.max_speed_kn !== null && analyticsData.max_speed_timestamp !== null ? 
-                    '<div class="analyticsCard">' +
-                    '<div class="analyticsCardTitle">Max Speed (Sailing)</div>' +
-                    '<div class="analyticsValue">' + analyticsData.max_speed_kn.toFixed(2) + ' knots</div>' +
-                    '<div class="analyticsDetail">' + formatDateTime(analyticsData.max_speed_timestamp) + '</div>' +
-                    '</div>' : '') +
-                (analyticsData && analyticsData.fastest_1nm ? 
-                    '<div class="analyticsCard fastestSegmentCard" data-segment-type="1nm" onclick="handleSegmentClick(event, \'1nm\')">' +
-                    '<div class="analyticsCardTitle">Fastest 1 NM</div>' +
-                    '<div class="analyticsValue">' + analyticsData.fastest_1nm.average_speed_kn.toFixed(2) + ' knots</div>' +
-                    '<div class="analyticsDetail">Distance: ' + analyticsData.fastest_1nm.distance_nm.toFixed(2) + ' NM</div>' +
-                    '<div class="analyticsDetail">Duration: ' + formatDuration(analyticsData.fastest_1nm.duration_ms) + '</div>' +
-                    '<div class="analyticsDetail">' + formatTime(analyticsData.fastest_1nm.start_timestamp) + ' → ' + formatTime(analyticsData.fastest_1nm.end_timestamp) + '</div>' +
-                    '</div>' : '') +
-                (analyticsData && analyticsData.fastest_5nm ? 
-                    '<div class="analyticsCard fastestSegmentCard" data-segment-type="5nm" onclick="handleSegmentClick(event, \'5nm\')">' +
-                    '<div class="analyticsCardTitle">Fastest 5 NM</div>' +
-                    '<div class="analyticsValue">' + analyticsData.fastest_5nm.average_speed_kn.toFixed(2) + ' knots</div>' +
-                    '<div class="analyticsDetail">Distance: ' + analyticsData.fastest_5nm.distance_nm.toFixed(2) + ' NM</div>' +
-                    '<div class="analyticsDetail">Duration: ' + formatDuration(analyticsData.fastest_5nm.duration_ms) + '</div>' +
-                    '<div class="analyticsDetail">' + formatTime(analyticsData.fastest_5nm.start_timestamp) + ' → ' + formatTime(analyticsData.fastest_5nm.end_timestamp) + '</div>' +
-                    '</div>' : '') +
-                (analyticsData && analyticsData.fastest_10nm ? 
-                    '<div class="analyticsCard fastestSegmentCard" data-segment-type="10nm" onclick="handleSegmentClick(event, \'10nm\')">' +
-                    '<div class="analyticsCardTitle">Fastest 10 NM</div>' +
-                    '<div class="analyticsValue">' + analyticsData.fastest_10nm.average_speed_kn.toFixed(2) + ' knots</div>' +
-                    '<div class="analyticsDetail">Distance: ' + analyticsData.fastest_10nm.distance_nm.toFixed(2) + ' NM</div>' +
-                    '<div class="analyticsDetail">Duration: ' + formatDuration(analyticsData.fastest_10nm.duration_ms) + '</div>' +
-                    '<div class="analyticsDetail">' + formatTime(analyticsData.fastest_10nm.start_timestamp) + ' → ' + formatTime(analyticsData.fastest_10nm.end_timestamp) + '</div>' +
-                    '</div>' : '') +
-                (analyticsData ? '</div></div>' : '') +
+                '<div class="infoItem fullWidth" style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 20px;">' +
+                    '<div class="analyticsTitle" id="analyticsTitle">Performance Analytics</div>' +
+                    '<div class="analyticsGrid" id="analyticsGrid">' +
+                    '</div>' +
+                '</div>' +
             '</div>' +
             '<div class="mapContainer">' +
                 '<div id="map"></div>' +
@@ -741,53 +797,283 @@
                         '<div class="legendColorGradient">●</div>' +
                         '<span>Sailing (Engine Off) - Color by Speed</span>' +
                     '</div>' +
-                    '<div class="legendSubItem">Red = Fast, Yellow = Medium, Blue = Slow</div>' +
                 '</div>' +
             '</div></div>' +
+            
+            '<div class="chartsContainer" id="chartsContainer"></div>';
 
-            '<div class="chartsContainer">' +
-                '<div class="chartWrapper">' +
+            // Initialize the map
+            initializeMap(trackData);
+
+            // Render time series charts only for non-full-trip views
+            if (!isFullTrip) {
+                renderTimeSeriesCharts(trackData);
+            }
+
+            // Save track data globally for segment marker handling
+            currentTrackData = trackData;
+        }
+
+        function renderTimeSeriesCharts(trackData) {
+            // Build HTML for time series charts
+            const chartsHTML = '<div class="chartWrapper">' +
                     '<canvas id="speedChart"></canvas>' +
                 '</div>' +
-                '<div class="chartWrapper">' +
-                    '<canvas id="headingChart"></canvas>' +
+                '<div class="chartWithToolbar">' +
+                    '<div class="chartToolbar">' +
+                        '<button id="headingScaleBtn" class="chartToggleBtn" onclick="toggleHeadingScale()">Switch to −180…180</button>' +
+                    '</div>' +
+                    '<div class="chartWrapper">' +
+                        '<canvas id="headingChart"></canvas>' +
+                    '</div>' +
                 '</div>' +
                 '<div class="chartWrapper">' +
                     '<canvas id="windSpeedChart"></canvas>' +
                 '</div>' +
-                '<div class="chartWrapper">' +
-                    '<canvas id="windDirectionChart"></canvas>' +
-                '</div>' +
-                '<div class="chartWrapper">' +
-                    '<canvas id="absoluteWindDirectionChart"></canvas>' +
-                '</div>' +
-                '<div class="chartWrapper">' +
-                    '<canvas id="atmosphericPressureChart"></canvas>' +
-                '</div>' +
-                '<div class="chartWrapper">' +
-                    '<canvas id="speedDistributionChart"></canvas>' +
-                '</div>' +
-                '<div class="chartWrapper">' +
-                    '<canvas id="windStatisticsChart"></canvas>' +
-                '</div>' +
-            '</div>';
+                '<div class="chartWithToolbar">' +
+                    '<div class="chartToolbar">' +
+                        '<button id="windDirectionScaleBtn" class="chartToggleBtn" onclick="toggleWindDirectionScale()">Switch to −180…180</button>' +
+                    '</div>' +
+                    '<div class="chartWrapper">' +
+                        '<canvas id="windDirectionChart"></canvas>' +
+                    '</div>' +
+                '</div>';
 
-            // Create charts and store references
+            const container = document.getElementById('chartsContainer');
+            if (container) {
+                // Use insertAdjacentHTML to avoid destroying existing DOM elements
+                container.insertAdjacentHTML('beforeend', chartsHTML);
+            }
+
+            // Create time series charts
             allCharts.speed = createSpeedChart(trackData);
-            allCharts.heading = createHeadingChart(trackData);
+            allCharts.heading = createHeadingChart(trackData, headingScaleNormalized);
             allCharts.windSpeed = createWindSpeedChart(trackData);
-            allCharts.windDirection = createWindDirectionChart(trackData);
-            allCharts.absoluteWindDirection = createAbsoluteWindDirectionChart(trackData);
-            allCharts.atmosphericPressure = createAtmosphericPressureChart(pressureData);
-            allCharts.speedDistribution = createSpeedDistributionChart(speedDistData);
-            allCharts.windStatistics = createWindStatisticsChart(windStatsData);
+            allCharts.windDirection = createWindDirectionChart(trackData, windDirectionNormalized);
+        }
 
-            // Save analytics data globally for segment marker handling
-            currentAnalyticsData = analyticsData;
-            currentTrackData = trackData;
+        async function fetchAndRenderSecondaryCharts(trip, trackData, startTime, endTime, isFullTrip) {
+            try {
+                // Build query parameters
+                let speedDistQuery, windStatsQuery, pressureQuery, analyticsQuery, absoluteWindQuery, windSpeedQuery, cabinTempQuery, humidityQuery;
+                
+                if (isFullTrip) {
+                    speedDistQuery = '/api/speed_distribution?id=' + trip.id;
+                    windStatsQuery = '/api/wind_statistics?id=' + trip.id;
+                    pressureQuery = '/api/metrics?metric=1&trip_id=' + trip.id;
+                    absoluteWindQuery = '/api/metrics?metric=6&trip_id=' + trip.id;
+                    windSpeedQuery = '/api/metrics?metric=5&trip_id=' + trip.id;
+                    cabinTempQuery = '/api/metrics?metric=2&trip_id=' + trip.id;
+                    humidityQuery = '/api/metrics?metric=4&trip_id=' + trip.id;
+                    analyticsQuery = '/api/track_analytics?start=' + encodeURIComponent(startTime.split('.')[0].replace('T', ' ')) + 
+                                     '&end=' + encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
+                } else {
+                    const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
+                    const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
+                    speedDistQuery = '/api/speed_distribution?start=' + formattedStart + '&end=' + formattedEnd;
+                    windStatsQuery = '/api/wind_statistics?start=' + formattedStart + '&end=' + formattedEnd;
+                    pressureQuery = '/api/metrics?metric=1&start=' + formattedStart + '&end=' + formattedEnd;
+                    absoluteWindQuery = '/api/metrics?metric=6&start=' + formattedStart + '&end=' + formattedEnd;
+                    windSpeedQuery = '/api/metrics?metric=5&start=' + formattedStart + '&end=' + formattedEnd;
+                    cabinTempQuery = '/api/metrics?metric=2&start=' + formattedStart + '&end=' + formattedEnd;
+                    humidityQuery = '/api/metrics?metric=4&start=' + formattedStart + '&end=' + formattedEnd;
+                    analyticsQuery = '/api/track_analytics?start=' + formattedStart + '&end=' + formattedEnd;
+                }
 
-            // Initialize the map
-            initializeMap(trackData);
+                // Fetch all secondary data in parallel
+                const [speedDistResponse, windStatsResponse, pressureResponse, absoluteWindResponse, windSpeedResponse, cabinTempResponse, humidityResponse, analyticsResponse] = await Promise.all([
+                    fetch(speedDistQuery),
+                    fetch(windStatsQuery),
+                    fetch(pressureQuery),
+                    fetch(absoluteWindQuery),
+                    fetch(windSpeedQuery),
+                    fetch(cabinTempQuery),
+                    fetch(humidityQuery),
+                    fetch(analyticsQuery)
+                ]);
+
+                // Process speed distribution
+                let speedDistData = null;
+                if (speedDistResponse.ok) {
+                    const result = await speedDistResponse.json();
+                    if (result.status === 'ok' && result.data) {
+                        speedDistData = result.data;
+                    }
+                }
+
+                // Process wind statistics
+                let windStatsData = null;
+                if (windStatsResponse.ok) {
+                    const result = await windStatsResponse.json();
+                    if (result.status === 'ok' && result.data) {
+                        windStatsData = result.data;
+                    }
+                }
+
+                // Process pressure data
+                let pressureData = null;
+                if (pressureResponse.ok) {
+                    const result = await pressureResponse.json();
+                    if (result.status === 'ok' && result.data) {
+                        pressureData = result.data;
+                    }
+                }
+
+                // Process absolute wind direction data
+                let absoluteWindData = null;
+                if (absoluteWindResponse.ok) {
+                    const result = await absoluteWindResponse.json();
+                    if (result.status === 'ok' && result.data) {
+                        absoluteWindData = result.data;
+                    }
+                }
+
+                // Process wind speed data
+                let windSpeedData = null;
+                if (windSpeedResponse.ok) {
+                    const result = await windSpeedResponse.json();
+                    if (result.status === 'ok' && result.data) {
+                        windSpeedData = result.data;
+                    }
+                }
+
+                // Process cabin temperature data
+                let cabinTempData = null;
+                if (cabinTempResponse.ok) {
+                    const result = await cabinTempResponse.json();
+                    if (result.status === 'ok' && result.data) {
+                        cabinTempData = result.data;
+                    }
+                }
+
+                // Process humidity data
+                let humidityData = null;
+                if (humidityResponse.ok) {
+                    const result = await humidityResponse.json();
+                    if (result.status === 'ok' && result.data) {
+                        humidityData = result.data;
+                    }
+                }
+
+                // Process analytics
+                let analyticsData = null;
+                if (analyticsResponse.ok) {
+                    const result = await analyticsResponse.json();
+                    if (result.status === 'ok' && result.data) {
+                        analyticsData = result.data;
+                    }
+                }
+
+                // Render analytics cards
+                renderAnalyticsCards(analyticsData);
+
+                // Build charts container HTML for secondary charts
+                const chartsHTML = 
+                    '<div class="chartWrapper">' +
+                        '<canvas id="speedDistributionChart"></canvas>' +
+                    '</div>' +
+                    '<div class="chartWrapper">' +
+                        '<canvas id="windStatisticsChart"></canvas>' +
+                    '</div>' +
+                    '<div class="chartWrapper">' +
+                        '<canvas id="atmosphericPressureChart"></canvas>' +
+                    '</div>' +
+                    '<div class="chartWithToolbar">' +
+                        '<div class="chartToolbar">' +
+                            '<button id="absoluteWindDirectionScaleBtn" class="chartToggleBtn" onclick="toggleAbsoluteWindDirectionScale()">Switch to −180…180</button>' +
+                        '</div>' +
+                        '<div class="chartWrapper">' +
+                            '<canvas id="absoluteWindDirectionChart"></canvas>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="chartWrapper">' +
+                        '<canvas id="cabinTemperatureChart"></canvas>' +
+                    '</div>' +
+                    '<div class="chartWrapper">' +
+                        '<canvas id="humidityChart"></canvas>' +
+                    '</div>';
+
+                const container = document.getElementById('chartsContainer');
+                if (container) {
+                    // Use insertAdjacentHTML to avoid destroying existing Chart.js instances
+                    container.insertAdjacentHTML('beforeend', chartsHTML);
+                }
+
+                // Create secondary charts
+                allCharts.atmosphericPressure = createAtmosphericPressureChart(pressureData);
+                allCharts.absoluteWindDirection = createAbsoluteWindDirectionChartFromMetric(absoluteWindData, windSpeedData, absoluteWindDirectionNormalized);
+                allCharts.cabinTemperature = createCabinTemperatureChart(cabinTempData);
+                allCharts.humidity = createHumidityChart(humidityData);
+                allCharts.speedDistribution = createSpeedDistributionChart(speedDistData);
+                allCharts.windStatistics = createWindStatisticsChart(windStatsData);
+
+                // Save analytics data globally for segment marker handling
+                currentAnalyticsData = analyticsData;
+                // Save absolute wind data globally for scale toggling
+                currentAbsoluteWindData = absoluteWindData;
+                // Save wind speed data globally for chart toggling
+                currentWindSpeedData = windSpeedData;
+
+            } catch (error) {
+                console.error('Failed to fetch secondary charts:', error);
+            }
+        }
+
+        function renderAnalyticsCards(analyticsData) {
+            const analyticsGrid = document.getElementById('analyticsGrid');
+            if (!analyticsGrid) return;
+
+            if (!analyticsData) {
+                analyticsGrid.innerHTML = '<div class="analyticsCard" style="grid-column: 1 / -1; color: var(--text-secondary);">No analytics data available</div>';
+                return;
+            }
+
+            let html = '';
+
+            if (analyticsData.max_speed_kn !== null && analyticsData.max_speed_timestamp !== null) {
+                html += '<div class="analyticsCard">' +
+                    '<div class="analyticsCardTitle">Max Speed (Sailing)</div>' +
+                    '<div class="analyticsValue">' + analyticsData.max_speed_kn.toFixed(2) + ' knots</div>' +
+                    '<div class="analyticsDetail">' + formatDateTime(analyticsData.max_speed_timestamp) + '</div>' +
+                    '</div>';
+            }
+
+            if (analyticsData.fastest_1nm) {
+                html += '<div class="analyticsCard fastestSegmentCard" data-segment-type="1nm" onclick="handleSegmentClick(event, \'1nm\')">' +
+                    '<div class="analyticsCardTitle">Fastest 1 NM</div>' +
+                    '<div class="analyticsValue">' + analyticsData.fastest_1nm.average_speed_kn.toFixed(2) + ' knots</div>' +
+                    '<div class="analyticsDetail">Distance: ' + analyticsData.fastest_1nm.distance_nm.toFixed(2) + ' NM</div>' +
+                    '<div class="analyticsDetail">Duration: ' + formatDuration(analyticsData.fastest_1nm.duration_ms) + '</div>' +
+                    '<div class="analyticsDetail">' + formatTime(analyticsData.fastest_1nm.start_timestamp) + ' → ' + formatTime(analyticsData.fastest_1nm.end_timestamp) + '</div>' +
+                    '</div>';
+            }
+
+            if (analyticsData.fastest_5nm) {
+                html += '<div class="analyticsCard fastestSegmentCard" data-segment-type="5nm" onclick="handleSegmentClick(event, \'5nm\')">' +
+                    '<div class="analyticsCardTitle">Fastest 5 NM</div>' +
+                    '<div class="analyticsValue">' + analyticsData.fastest_5nm.average_speed_kn.toFixed(2) + ' knots</div>' +
+                    '<div class="analyticsDetail">Distance: ' + analyticsData.fastest_5nm.distance_nm.toFixed(2) + ' NM</div>' +
+                    '<div class="analyticsDetail">Duration: ' + formatDuration(analyticsData.fastest_5nm.duration_ms) + '</div>' +
+                    '<div class="analyticsDetail">' + formatTime(analyticsData.fastest_5nm.start_timestamp) + ' → ' + formatTime(analyticsData.fastest_5nm.end_timestamp) + '</div>' +
+                    '</div>';
+            }
+
+            if (analyticsData.fastest_10nm) {
+                html += '<div class="analyticsCard fastestSegmentCard" data-segment-type="10nm" onclick="handleSegmentClick(event, \'10nm\')">' +
+                    '<div class="analyticsCardTitle">Fastest 10 NM</div>' +
+                    '<div class="analyticsValue">' + analyticsData.fastest_10nm.average_speed_kn.toFixed(2) + ' knots</div>' +
+                    '<div class="analyticsDetail">Distance: ' + analyticsData.fastest_10nm.distance_nm.toFixed(2) + ' NM</div>' +
+                    '<div class="analyticsDetail">Duration: ' + formatDuration(analyticsData.fastest_10nm.duration_ms) + '</div>' +
+                    '<div class="analyticsDetail">' + formatTime(analyticsData.fastest_10nm.start_timestamp) + ' → ' + formatTime(analyticsData.fastest_10nm.end_timestamp) + '</div>' +
+                    '</div>';
+            }
+
+            analyticsGrid.innerHTML = html;
+        }
+
+        function displayTripDetails(trip, trackData, speedDistData, windStatsData, analyticsData, pressureData) {
+            // Legacy function - kept for backward compatibility if needed
+            // This function is no longer called in the optimized flow
         }
 
         function handleSegmentClick(event, segmentType) {
@@ -912,6 +1198,69 @@
             });
         }
 
+        function toggleHeadingScale() {
+            // Toggle the normalized scale flag
+            headingScaleNormalized = !headingScaleNormalized;
+
+            // Update the button label
+            const btn = document.getElementById('headingScaleBtn');
+            if (btn) {
+                btn.textContent = headingScaleNormalized ? 'Switch to 0…360' : 'Switch to −180…180';
+            }
+
+            // Destroy the existing heading chart
+            if (allCharts.heading && typeof allCharts.heading.destroy === 'function') {
+                allCharts.heading.destroy();
+            }
+
+            // Recreate the heading chart with the new scale
+            if (currentTrackData) {
+                allCharts.heading = createHeadingChart(currentTrackData, headingScaleNormalized);
+            }
+        }
+
+        function toggleWindDirectionScale() {
+            // Toggle the normalized scale flag
+            windDirectionNormalized = !windDirectionNormalized;
+
+            // Update the button label
+            const btn = document.getElementById('windDirectionScaleBtn');
+            if (btn) {
+                btn.textContent = windDirectionNormalized ? 'Switch to 0…360' : 'Switch to −180…180';
+            }
+
+            // Destroy the existing wind direction chart
+            if (allCharts.windDirection && typeof allCharts.windDirection.destroy === 'function') {
+                allCharts.windDirection.destroy();
+            }
+
+            // Recreate the wind direction chart with the new scale
+            if (currentTrackData) {
+                allCharts.windDirection = createWindDirectionChart(currentTrackData, windDirectionNormalized);
+            }
+        }
+
+        function toggleAbsoluteWindDirectionScale() {
+            // Toggle the normalized scale flag
+            absoluteWindDirectionNormalized = !absoluteWindDirectionNormalized;
+
+            // Update the button label
+            const btn = document.getElementById('absoluteWindDirectionScaleBtn');
+            if (btn) {
+                btn.textContent = absoluteWindDirectionNormalized ? 'Switch to 0…360' : 'Switch to −180…180';
+            }
+
+            // Destroy the existing absolute wind direction chart
+            if (allCharts.absoluteWindDirection && typeof allCharts.absoluteWindDirection.destroy === 'function') {
+                allCharts.absoluteWindDirection.destroy();
+            }
+
+            // Recreate the absolute wind direction chart with the new scale (from metric data)
+            if (currentAbsoluteWindData) {
+                allCharts.absoluteWindDirection = createAbsoluteWindDirectionChartFromMetric(currentAbsoluteWindData, currentWindSpeedData, absoluteWindDirectionNormalized);
+            }
+        }
+
         function createSpeedChart(trackData) {
             const ctx = document.getElementById('speedChart').getContext('2d');
             const colors = getChartColors();
@@ -984,7 +1333,7 @@
             });
         }
 
-        function createHeadingChart(trackData) {
+        function createHeadingChart(trackData, normalized = false) {
             const ctx = document.getElementById('headingChart').getContext('2d');
             const colors = getChartColors();
 
@@ -992,10 +1341,17 @@
             const validData = trackData.filter(point => point.average_heading_deg !== null && point.average_heading_deg !== undefined);
 
             // Convert data to time-scale format with proper Date objects
-            const chartData = validData.map(point => ({
-                x: new Date(point.timestamp),
-                y: point.average_heading_deg
-            }));
+            // Transform heading to -180 to 180 scale if normalized
+            const chartData = validData.map(point => {
+                let heading = point.average_heading_deg;
+                if (normalized && heading > 180) {
+                    heading = heading - 360;
+                }
+                return {
+                    x: new Date(point.timestamp),
+                    y: heading
+                };
+            });
 
             return new Chart(ctx, {
                 type: 'line',
@@ -1015,8 +1371,8 @@
                     maintainAspectRatio: false,
                     scales: {
                         y: {
-                            min: 0,
-                            max: 360,
+                            min: normalized ? -180 : 0,
+                            max: normalized ? 180 : 360,
                             title: {
                                 display: true,
                                 text: 'Heading (degrees)',
@@ -1026,8 +1382,16 @@
                                 color: colors.text,
                                 stepSize: 45,
                                 callback: function(value) {
-                                    const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
-                                    return directions[Math.round(value / 45) % 8] + ' (' + value + '°)';
+                                    if (normalized) {
+                                        // For normalized scale: -180..180 where 0=N, ±180=S
+                                        const normalizedValue = (value + 360) % 360;
+                                        const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
+                                        return directions[Math.round(normalizedValue / 45) % 8] + ' (' + value + '°)';
+                                    } else {
+                                        // For standard scale: 0..360
+                                        const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
+                                        return directions[Math.round(value / 45) % 8] + ' (' + value + '°)';
+                                    }
                                 }
                             },
                             grid: { color: colors.grid }
@@ -1130,7 +1494,7 @@
                         },
                         title: {
                             display: true,
-                            text: 'True Wind',
+                            text: 'True Wind Speed (TWS)',
                             color: colors.text
                         }
                     }
@@ -1138,14 +1502,22 @@
             });
         }
 
-        function createWindDirectionChart(trackData) {
+        function createWindDirectionChart(trackData, normalized = false) {
             const ctx = document.getElementById('windDirectionChart').getContext('2d');
+            const colors = getChartColors();
 
             // Filter out data points where wind direction is not available
             const validData = trackData.filter(point => point.average_wind_angle_deg !== null && point.average_wind_angle_deg !== undefined);
 
             const labels = validData.map(point => formatTime(point.timestamp));
-            const windDirections = validData.map(point => point.average_wind_angle_deg);
+            // Transform wind direction to -180 to 180 scale if normalized
+            const windDirections = validData.map(point => {
+                let direction = point.average_wind_angle_deg;
+                if (normalized && direction > 180) {
+                    direction = direction - 360;
+                }
+                return direction;
+            });
 
             return new Chart(ctx, {
                 type: 'line',
@@ -1166,74 +1538,8 @@
                     maintainAspectRatio: false,
                     scales: {
                         y: {
-                            min: 0,
-                            max: 360,
-                            title: {
-                                display: true,
-                                text: 'Wind Direction (degrees)'
-                            },
-                            ticks: {
-                                stepSize: 30
-                            }
-                        },
-                        x: {
-                            title: {
-                                display: true,
-                                text: 'Time'
-                            }
-                        }
-                    },
-                    plugins: {
-                        legend: {
-                            display: false
-                        },
-                        title: {
-                            display: true,
-                            text: 'True Wind'
-                        }
-                    }
-                }
-            });
-        }
-
-        function createAbsoluteWindDirectionChart(trackData) {
-            const ctx = document.getElementById('absoluteWindDirectionChart').getContext('2d');
-            const colors = getChartColors();
-
-            // Filter out data points where both wind direction and heading are available
-            const validData = trackData.filter(point => 
-                point.average_wind_angle_deg !== null && 
-                point.average_wind_angle_deg !== undefined &&
-                point.average_heading_deg !== null && 
-                point.average_heading_deg !== undefined
-            );
-
-            const labels = validData.map(point => formatTime(point.timestamp));
-            const absoluteWindDirections = validData.map(point => 
-                (point.average_wind_angle_deg + point.average_heading_deg) % 360
-            );
-
-            return new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Absolute Wind Direction (degrees)',
-                        data: absoluteWindDirections,
-                        borderColor: '#9b59b6',
-                        backgroundColor: 'rgba(155, 89, 182, 0.1)',
-                        fill: true,
-                        tension: 0.1,
-                        pointRadius: 0,
-                        pointHoverRadius: 5
-                    }]
-                },
-                options: {
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: {
-                            min: 0,
-                            max: 360,
+                            min: normalized ? -180 : 0,
+                            max: normalized ? 180 : 360,
                             title: {
                                 display: true,
                                 text: 'Wind Direction (degrees)',
@@ -1243,8 +1549,16 @@
                                 stepSize: 30,
                                 color: colors.text,
                                 callback: function(value) {
-                                    const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
-                                    return directions[Math.round(value / 45) % 8] + ' (' + value + '°)';
+                                    if (normalized) {
+                                        // For normalized scale: -180..180 where 0=N, ±180=S
+                                        const normalizedValue = (value + 360) % 360;
+                                        const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
+                                        return directions[Math.round(normalizedValue / 45) % 8] + ' (' + value + '°)';
+                                    } else {
+                                        // For standard scale: 0..360
+                                        const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
+                                        return directions[Math.round(value / 45) % 8] + ' (' + value + '°)';
+                                    }
                                 }
                             },
                             grid: { color: colors.grid }
@@ -1266,7 +1580,7 @@
                         },
                         title: {
                             display: true,
-                            text: 'Absolute Wind Direction',
+                            text: 'True Wind Direction (TWD)',
                             color: colors.text
                         }
                     }
@@ -1351,6 +1665,149 @@
                         title: {
                             display: true,
                             text: 'Atmospheric Pressure',
+                            color: colors.text
+                        }
+                    }
+                }
+            });
+        }
+
+        function createAbsoluteWindDirectionChartFromMetric(metricData, windSpeedData, normalized = false) {
+            const ctx = document.getElementById('absoluteWindDirectionChart').getContext('2d');
+            const colors = getChartColors();
+
+            if (!metricData || metricData.length === 0) {
+                // Return a chart with a message if no data is available
+                return new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: []
+                    },
+                    options: {
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: 'Absolute Wind Direction (No Data Available)',
+                                color: colors.text
+                            }
+                        }
+                    }
+                });
+            }
+
+            const labels = metricData.map(point => formatTime(point.timestamp));
+            // Transform absolute wind direction to -180 to 180 scale if normalized
+            const absoluteWindDirections = metricData.map(point => {
+                let direction = point.avg_value;
+                if (normalized && direction > 180) {
+                    direction = direction - 360;
+                }
+                return direction;
+            });
+
+            // Build datasets for wind direction
+            const datasets = [{
+                label: 'Absolute Wind Direction (degrees)',
+                data: absoluteWindDirections,
+                borderColor: '#9b59b6',
+                backgroundColor: 'rgba(155, 89, 182, 0.1)',
+                fill: true,
+                tension: 0.1,
+                pointRadius: 0,
+                pointHoverRadius: 5,
+                yAxisID: 'y'
+            }];
+
+            // Add wind speed dataset if available
+            if (windSpeedData && windSpeedData.length > 0) {
+                const windSpeeds = windSpeedData.map(point => point.avg_value);
+                datasets.push({
+                    label: 'Wind Speed (knots)',
+                    data: windSpeeds,
+                    borderColor: '#27ae60',
+                    backgroundColor: 'rgba(39, 174, 96, 0.05)',
+                    fill: true,
+                    tension: 0.1,
+                    pointRadius: 0,
+                    pointHoverRadius: 5,
+                    yAxisID: 'y1'
+                });
+            }
+
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: datasets
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false
+                    },
+                    scales: {
+                        y: {
+                            type: 'linear',
+                            position: 'left',
+                            min: normalized ? -180 : 0,
+                            max: normalized ? 180 : 360,
+                            title: {
+                                display: true,
+                                text: 'Wind Direction (degrees)',
+                                color: colors.text
+                            },
+                            ticks: {
+                                stepSize: 30,
+                                color: colors.text,
+                                callback: function(value) {
+                                    if (normalized) {
+                                        // For normalized scale: -180..180 where 0=N, ±180=S
+                                        const normalizedValue = (value + 360) % 360;
+                                        const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
+                                        return directions[Math.round(normalizedValue / 45) % 8] + ' (' + value + '°)';
+                                    } else {
+                                        // For standard scale: 0..360
+                                        const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
+                                        return directions[Math.round(value / 45) % 8] + ' (' + value + '°)';
+                                    }
+                                }
+                            },
+                            grid: { color: colors.grid }
+                        },
+                        y1: (windSpeedData && windSpeedData.length > 0) ? {
+                            type: 'linear',
+                            position: 'right',
+                            title: {
+                                display: true,
+                                text: 'Wind Speed (knots)',
+                                color: colors.text
+                            },
+                            ticks: { color: colors.text },
+                            grid: { display: false },
+                            beginAtZero: true
+                        } : undefined,
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time',
+                                color: colors.text
+                            },
+                            ticks: { color: colors.text },
+                            grid: { color: colors.grid }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            labels: { color: colors.text },
+                            position: 'top'
+                        },
+                        title: {
+                            display: true,
+                            text: (windSpeedData && windSpeedData.length > 0) ? 'Absolute Wind Direction & Speed' : 'Absolute Wind Direction',
                             color: colors.text
                         }
                     }
@@ -1507,7 +1964,176 @@
             });
         }
 
+        function createCabinTemperatureChart(cabinTempData) {
+            const ctx = document.getElementById('cabinTemperatureChart').getContext('2d');
+            const colors = getChartColors();
+
+            if (!cabinTempData || cabinTempData.length === 0) {
+                // Return a chart with a message if no data is available
+                return new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: []
+                    },
+                    options: {
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: 'Cabin Temperature (No Data Available)',
+                                color: colors.text
+                            }
+                        }
+                    }
+                });
+            }
+
+            const labels = cabinTempData.map(point => formatTime(point.timestamp));
+            const temperatures = cabinTempData.map(point => point.avg_value);
+
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Cabin Temperature (°C)',
+                        data: temperatures,
+                        borderColor: '#e67e22',
+                        backgroundColor: 'rgba(230, 126, 34, 0.1)',
+                        fill: true,
+                        tension: 0.1,
+                        pointRadius: 0,
+                        pointHoverRadius: 5
+                    }]
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Temperature (°C)',
+                                color: colors.text
+                            },
+                            ticks: { color: colors.text },
+                            grid: { color: colors.grid }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time',
+                                color: colors.text
+                            },
+                            ticks: { color: colors.text },
+                            grid: { color: colors.grid }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false,
+                            labels: { color: colors.text }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Cabin Temperature',
+                            color: colors.text
+                        }
+                    }
+                }
+            });
+        }
+
+        function createHumidityChart(humidityData) {
+            const ctx = document.getElementById('humidityChart').getContext('2d');
+            const colors = getChartColors();
+
+            if (!humidityData || humidityData.length === 0) {
+                // Return a chart with a message if no data is available
+                return new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: []
+                    },
+                    options: {
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: 'Humidity (No Data Available)',
+                                color: colors.text
+                            }
+                        }
+                    }
+                });
+            }
+
+            const labels = humidityData.map(point => formatTime(point.timestamp));
+            const humidities = humidityData.map(point => point.avg_value);
+
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Humidity (%)',
+                        data: humidities,
+                        borderColor: '#3498db',
+                        backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                        fill: true,
+                        tension: 0.1,
+                        pointRadius: 0,
+                        pointHoverRadius: 5
+                    }]
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            min: 0,
+                            max: 100,
+                            title: {
+                                display: true,
+                                text: 'Humidity (%)',
+                                color: colors.text
+                            },
+                            ticks: { color: colors.text },
+                            grid: { color: colors.grid }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time',
+                                color: colors.text
+                            },
+                            ticks: { color: colors.text },
+                            grid: { color: colors.grid }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false,
+                            labels: { color: colors.text }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Humidity',
+                            color: colors.text
+                        }
+                    }
+                }
+            });
+        }
+
         function initializeMap(trackData) {
+            // Check if Google Maps API is available
+            if (!googleMapsLoaded || !window.google?.maps) {
+                console.warn('Google Maps not available, showing fallback');
+                showMapFallback('Google Maps unavailable - map data shown in charts below');
+                return;
+            }
+
             // Filter out data points without valid coordinates
             const validTrackPoints = trackData.filter(point =>
                 point.latitude !== null && point.latitude !== undefined &&
@@ -1515,7 +2141,7 @@
             );
 
             if (validTrackPoints.length === 0) {
-                document.getElementById('map').innerHTML = '<div style="display: flex; justify-content: center; align-items: center; height: 100%; color: #666;">No GPS track data available for this trip</div>';
+                showMapFallback('No GPS track data available for this trip');
                 return;
             }
 

@@ -5,6 +5,7 @@
 use std::time::{Instant, Duration};
 use nmea2k::{MessageHandler, N2kFrame};
 use nmea2k::pgns::{N2kMessage, HeadingReference};
+use crate::position_utils::Position;
 use crate::web::signalk_messages::{
     SignalKDelta, SignalKUpdate, SignalKValue, SignalKSource,
     vessel_context
@@ -22,7 +23,8 @@ pub struct SignalKBroadcaster {
     
     /// Cached SOG in m/s for true wind calculations
     last_sog_ms: Option<f64>,
-    
+    last_sog_timestamp: Option<Instant>,
+
     /// Cached time sync status string ("synced" or "not_synced")
     last_time_sync_status: Option<String>,
     
@@ -48,6 +50,8 @@ pub struct SignalKBroadcaster {
     last_pressure_broadcast: Option<Instant>,
     last_datetime_broadcast: Option<Instant>,
     last_timesync_broadcast: Option<Instant>,
+
+    last_position: Option<Position>,
 }
 
 impl SignalKBroadcaster {
@@ -55,6 +59,7 @@ impl SignalKBroadcaster {
         Self {
             vessel_uuid,
             last_sog_ms: None,
+            last_sog_timestamp: None,
             last_time_sync_status: None,
             last_time_skew_ms: None,
             rate_limit_ms,
@@ -73,6 +78,7 @@ impl SignalKBroadcaster {
             last_pressure_broadcast: None,
             last_datetime_broadcast: None,
             last_timesync_broadcast: None,
+            last_position: None,
         }
     }
     
@@ -144,6 +150,10 @@ impl MessageHandler for SignalKBroadcaster {
             // Position data - PGN 129025
             // SignalK: navigation.position with {latitude, longitude} in decimal degrees
             N2kMessage::PositionRapidUpdate(pos) => {
+                self.last_position = Some(Position {
+                    latitude: pos.latitude,
+                    longitude: pos.longitude,
+                });
                 if self.should_broadcast(self.last_position_broadcast, now) {
                     let values = vec![SignalKValue {
                         path: "navigation.position".to_string(),
@@ -163,6 +173,7 @@ impl MessageHandler for SignalKBroadcaster {
             N2kMessage::CogSogRapidUpdate(cog_sog) => {
                 // Cache SOG for true wind calculations (store in m/s)
                 self.last_sog_ms = Some(cog_sog.sog);
+                self.last_sog_timestamp = Some(now);
                 
                 let mut values = Vec::new();
                 
@@ -204,16 +215,20 @@ impl MessageHandler for SignalKBroadcaster {
                         self.send_delta(source.clone(), timestamp.clone(), values);
                         self.last_heading_broadcast = Some(now);
 
-                        if let Some(variation) = heading.variation {
-                            let heading_true = heading.heading + variation;
-                            
+
+                        if let Some(pos) = self.last_position {
+                            let var = match crate::utilities::get_variation_deg(pos.latitude, pos.longitude, chrono::Utc::now()) {
+                                Ok(v) => v,
+                                Err(_) => 0.0, // Unable to get variation, revert to magnetic - better than nothing
+                            };
+                            let heading_true = heading.heading + var.to_radians(); // heading is in radians, var is in degrees, convert var to radians
+                            // println!("Calculated true heading: {:.2}° + {:.2}° = {:.2}°", heading.heading.to_degrees(), var, heading_true.to_degrees());
                             let values = vec![SignalKValue {
                                 path: "navigation.headingTrue".to_string(),
                                 value: json!(heading_true),
                             }];
                             
                             self.send_delta(source, timestamp, values);
-                            self.last_heading_broadcast = Some(now);
                         }
                     }
                 }
@@ -233,6 +248,14 @@ impl MessageHandler for SignalKBroadcaster {
                     let aws_ms = wind.speed;
                     let awa_rad = wind.angle;
                     
+
+                    if let Some(sog_time) = self.last_sog_timestamp {
+                        // Invalidate cached SOG if it's older than 1 second (the two measure must be contemporaneous for true wind calculation to be accurate)
+                        if now.duration_since(sog_time) > Duration::from_secs(1) {
+                            self.last_sog_ms = None;
+                        }
+                    }
+
                     // Calculate true wind if we have cached SOG
                     let (tws_ms, twa_rad) = if let Some(sog_ms) = self.last_sog_ms {
                         // Convert to knots for calculation, then back to m/s

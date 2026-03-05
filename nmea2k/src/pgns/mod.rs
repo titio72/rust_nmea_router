@@ -23,6 +23,7 @@ pub mod pgn130314;
 pub mod message;
 pub mod nmea2000_date_time;
 pub(crate) mod ais_helpers;
+pub(crate) mod bit_utils;
 
 // Re-export commonly used types
 pub use message::N2kMessage;
