@@ -1442,16 +1442,21 @@
                 return;
             }
 
+            console.log('Importing file:', file.name, 'Size:', file.size, 'bytes');
+
             try {
                 const formData = new FormData();
                 formData.append('file', file);
 
+                console.log('Sending import request...');
                 const response = await fetch('/api/import_trip', {
                     method: 'POST',
                     body: formData
+                    // Note: Do NOT set Content-Type header, FormData will set it automatically with correct boundary
                 });
 
                 const result = await response.json();
+                console.log('Import response:', result);
 
                 if (result.status === 'ok') {
                     alert('Trip imported successfully! ID: ' + result.data.match(/\d+/)[0]);
@@ -1459,7 +1464,8 @@
                     loadTrips();
                     loadHeatmap();
                 } else {
-                    alert('Failed to import trip: ' + result.data);
+                    alert('Failed to import trip: ' + (result.error || 'Unknown error'));
+                    console.error('Import error details:', result.error);
                 }
             } catch (error) {
                 alert('Error importing trip: ' + error.message);

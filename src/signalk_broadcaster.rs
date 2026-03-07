@@ -321,8 +321,8 @@ impl MessageHandler for SignalKBroadcaster {
             N2kMessage::Temperature(temp) => {
                 if self.should_broadcast(self.last_temperature_broadcast, now) {
                     // Temperature is stored in Kelvin in the struct (already SI)
-                    // Instance 0 = water temperature, others = outside/cabin
-                    let path = if temp.instance == 0 {
+                    // Source 4 = water temperature, others = outside/cabin
+                    let path = if temp.source == 4 {
                         "environment.water.temperature"
                     } else {
                         "environment.outside.temperature"

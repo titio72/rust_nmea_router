@@ -405,31 +405,51 @@ pub async fn import_trip(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let field_name = field.name().unwrap_or("unknown").to_string();
-        
-        // Only process the "file" field
-        if field_name != "file" {
-            continue;
-        }
-        
-        if let Ok(json_content) = field.text().await {
-            info!("Processing uploaded JSON file for trip import");
-            
-            match state.db.import_trip(&json_content) {
-                Ok(trip_id) => {
-                    info!(trip_id = trip_id, "Trip imported successfully");
-                    return Ok(Json(ApiResponse::ok(format!("Trip imported successfully with ID: {}", trip_id))));
+    // Process multipart fields with better error logging
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                let field_name = field.name().unwrap_or("unknown").to_string();
+                info!("Received field: {}", field_name);
+                
+                // Only process the "file" field
+                if field_name != "file" {
+                    continue;
                 }
-                Err(e) => {
-                    error!(error = %e, "Failed to import trip");
-                    let error_msg = e.to_string();
-                    return Ok(Json(ApiResponse::error(error_msg)));
+                
+                // Try to read the field as text
+                match field.text().await {
+                    Ok(json_content) => {
+                        info!("Processing uploaded JSON file for trip import, content size: {} bytes", json_content.len());
+                        
+                        match state.db.import_trip(&json_content) {
+                            Ok(trip_id) => {
+                                info!(trip_id = trip_id, "Trip imported successfully");
+                                return Ok(Json(ApiResponse::ok(format!("Trip imported successfully with ID: {}", trip_id))));
+                            }
+                            Err(e) => {
+                                error!(error = %e, "Failed to import trip");
+                                let error_msg = e.to_string();
+                                return Ok(Json(ApiResponse::error(error_msg)));
+                            }
+                        }
+                    }
+                    Err(read_err) => {
+                        error!(error = %read_err, "Failed to read uploaded file content");
+                        let error_msg = format!("Failed to read file: {}", read_err);
+                        return Ok(Json(ApiResponse::error(error_msg)));
+                    }
                 }
             }
-        } else {
-            error!("Failed to read uploaded file");
-            return Ok(Json(ApiResponse::error("Failed to read file".to_string())));
+            Ok(None) => {
+                info!("No more multipart fields");
+                break;
+            }
+            Err(multipart_err) => {
+                error!(error = %multipart_err, "Multipart parsing error");
+                let error_msg = format!("Multipart parsing error: {}", multipart_err);
+                return Ok(Json(ApiResponse::error(error_msg)));
+            }
         }
     }
     

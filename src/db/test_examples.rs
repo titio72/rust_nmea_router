@@ -8,6 +8,9 @@ mod test_infrastructure_examples {
     use crate::position_utils::Position;
     use crate::utilities::EngineStatus;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use mysql::prelude::Queryable;
+    use mysql::params;
+
 
 
 
@@ -420,4 +423,67 @@ mod test_infrastructure_examples {
             assert_eq!(trip.description, "Sailing with mooring");
             assert!(trip.total_distance_sailed > 0.0, "Trip should have distance");
         }
-    }}
+    }
+
+    #[test]
+    #[ignore]
+    fn test_import_trip_from_file() {
+        let db = setup_db();
+        
+        // Read the trip file from Downloads
+        let trip_file_path = format!("{}/Downloads/trip_7.json", std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
+        
+        // Read JSON content from file
+        let json_data = std::fs::read_to_string(&trip_file_path)
+            .expect("Failed to read trip file - ensure ~/Downloads/trip_7.json exists");
+        
+        // Import the trip
+        let imported_trip_id = db.import_trip(&json_data)
+            .expect("Failed to import trip from JSON");
+        
+        assert!(imported_trip_id > 0, "Imported trip ID should be positive");
+        
+        // Verify the trip was inserted correctly by fetching it
+        let mut conn = db.pool.get_conn()
+            .expect("Failed to get database connection");
+        
+        let trip_row: Option<mysql::Row> = conn.exec_first(
+            "SELECT id, description, total_distance_sailed, total_distance_motoring, total_time_sailing, total_time_motoring, total_time_moored FROM trips WHERE id = :id",
+            mysql::params! { "id" => imported_trip_id },
+        ).expect("Failed to query trip");
+        
+        let trip_row = trip_row.expect("Trip not found in database");
+        
+        let _id: i64 = trip_row.get(0).expect("Missing id");
+        let description: String = trip_row.get(1).expect("Missing description");
+        let total_distance_sailed: f64 = trip_row.get(2).expect("Missing total_distance_sailed");
+        let total_distance_motoring: f64 = trip_row.get(3).expect("Missing total_distance_motoring");
+        let total_time_sailing: u64 = trip_row.get(4).expect("Missing total_time_sailing");
+        let total_time_motoring: u64 = trip_row.get(5).expect("Missing total_time_motoring");
+        let total_time_moored: u64 = trip_row.get(6).expect("Missing total_time_moored");
+        
+        // Verify data
+        assert_eq!(description, "Capraia");
+        assert_approx_equal(total_distance_sailed, 42.42989500466847, 0.01, "Total distance sailed");
+        assert_approx_equal(total_distance_motoring, 1.1314214095294126, 0.01, "Total distance motoring");
+        assert_eq!(total_time_sailing, 22798316);
+        assert_eq!(total_time_motoring, 1981479);
+        assert_eq!(total_time_moored, 19492722);
+        
+        // Verify vessel statuses were inserted
+        let vessel_status_count: (i64,) = conn.exec_first(
+            "SELECT COUNT(*) FROM vessel_status",
+            (),
+        ).expect("Failed to count vessel statuses").expect("Query failed");
+        
+        assert!(vessel_status_count.0 > 0, "Vessel status records should be imported");
+        
+        // Verify environmental metrics were inserted
+        let env_metrics_count: (i64,) = conn.exec_first(
+            "SELECT COUNT(*) FROM environmental_data",
+            (),
+        ).expect("Failed to count environmental metrics").expect("Query failed");
+        
+        assert!(env_metrics_count.0 > 0, "Environmental metric records should be imported");
+    }
+}

@@ -1,6 +1,7 @@
 use axum::{
     Router,
     routing::{get, get_service},
+    extract::DefaultBodyLimit,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -42,6 +43,7 @@ pub async fn start_web_server(
                 format!("Unhandled internal error: {}", error),
             )
         }))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB limit for file uploads
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)

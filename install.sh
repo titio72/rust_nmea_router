@@ -51,13 +51,28 @@ cp target/release/nmea_router "$BINARY_PATH"
 chmod +x "$BINARY_PATH"
 echo -e "${GREEN}✓ Installed to $BINARY_PATH${NC}"
 
+# Copy static files (UI)
+echo -e "${YELLOW}Installing UI files...${NC}"
+mkdir -p "$WORK_DIR/static"
+if [ -d "static" ]; then
+    cp -r static/* "$WORK_DIR/static/"
+    echo -e "${GREEN}✓ UI files copied to $WORK_DIR/static${NC}"
+else
+    echo -e "${YELLOW}⚠ static directory not found, skipping UI installation${NC}"
+fi
+
 # Copy configuration files
 echo -e "${YELLOW}Installing configuration files...${NC}"
-cp "$CONFIG_FILE" "$CONFIG_DIR/"
+if [ -f "$CONFIG_DIR/$CONFIG_FILE" ]; then
+    echo -e "${YELLOW}⚠ Configuration file already exists at $CONFIG_DIR/$CONFIG_FILE${NC}"
+    echo -e "${YELLOW}  Skipping configuration file copy to preserve existing settings${NC}"
+else
+    cp "$CONFIG_FILE" "$CONFIG_DIR/"
+fi
 [ -f "$SCHEMA_FILE" ] && cp "$SCHEMA_FILE" "$CONFIG_DIR/"
 [ -f "$PGN_FILE" ] && cp "$PGN_FILE" "$CONFIG_DIR/"
 [ -f "config.example.json" ] && cp "config.example.json" "$CONFIG_DIR/"
-echo -e "${GREEN}✓ Configuration files copied${NC}"
+echo -e "${GREEN}✓ Configuration files processed${NC}"
 
 # Update config.json to use /var/log/nmea_router
 echo -e "${YELLOW}Updating log directory in config...${NC}"

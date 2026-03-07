@@ -467,6 +467,59 @@
             };
         }
 
+        // Build navigation/mooring bands from currentLegs for chart background shading
+        function build_leg_bands(tripStart, tripEnd) {
+            if (!currentLegs || currentLegs.length === 0) return [];
+            const bands = [];
+            const tripStartMs = new Date(tripStart).getTime();
+            const tripEndMs = new Date(tripEnd).getTime();
+            const sortedLegs = [...currentLegs].sort((a, b) =>
+                new Date(a.start_timestamp) - new Date(b.start_timestamp));
+
+            // Mooring gap before first leg
+            const firstLegStart = new Date(sortedLegs[0].start_timestamp).getTime();
+            if (firstLegStart > tripStartMs) {
+                bands.push({ start: new Date(tripStart), end: new Date(sortedLegs[0].start_timestamp), type: 'moored' });
+            }
+
+            for (let i = 0; i < sortedLegs.length; i++) {
+                bands.push({ start: new Date(sortedLegs[i].start_timestamp), end: new Date(sortedLegs[i].end_timestamp), type: 'nav' });
+                if (i + 1 < sortedLegs.length) {
+                    bands.push({ start: new Date(sortedLegs[i].end_timestamp), end: new Date(sortedLegs[i + 1].start_timestamp), type: 'moored' });
+                }
+            }
+
+            // Mooring gap after last leg
+            const lastLegEnd = new Date(sortedLegs[sortedLegs.length - 1].end_timestamp).getTime();
+            if (lastLegEnd < tripEndMs) {
+                bands.push({ start: new Date(sortedLegs[sortedLegs.length - 1].end_timestamp), end: new Date(tripEnd), type: 'moored' });
+            }
+
+            return bands;
+        }
+
+        // Chart.js inline plugin: draws shaded leg bands on time-axis charts
+        const legBandPlugin = {
+            id: 'legBands',
+            beforeDraw(chart, args, options) {
+                if (!options || !options.bands || options.bands.length === 0) return;
+                const { ctx, chartArea, scales } = chart;
+                const xScale = scales.x;
+                if (!xScale || !chartArea) return;
+                ctx.save();
+                for (const band of options.bands) {
+                    const x1 = Math.max(xScale.getPixelForValue(band.start), chartArea.left);
+                    const x2 = Math.min(xScale.getPixelForValue(band.end), chartArea.right);
+                    if (x2 <= x1) continue;
+                    ctx.fillStyle = band.type === 'nav'
+                        ? 'rgba(52, 152, 219, 0.09)'   // blue tint = navigation leg
+                        : 'rgba(210, 140, 30, 0.14)';   // amber tint = moored
+                    ctx.fillRect(x1, chartArea.top, x2 - x1, chartArea.height);
+                }
+                ctx.restore();
+            }
+        };
+
         // Initialize theme on page load
         initializeTheme();
 
@@ -499,8 +552,8 @@
 
         async function loadTripAndLegs(tripId) {
             try {
-                // Load Google Maps API early (non-blocking)
-                loadGoogleMapsAPI().catch(err => {
+                // Load Google Maps API and wait for it to complete before loading trip details
+                await loadGoogleMapsAPI().catch(err => {
                     console.warn('Google Maps loading failed, continuing without map');
                 });
 
@@ -855,7 +908,7 @@
         async function fetchAndRenderSecondaryCharts(trip, trackData, startTime, endTime, isFullTrip) {
             try {
                 // Build query parameters
-                let speedDistQuery, windStatsQuery, pressureQuery, analyticsQuery, absoluteWindQuery, windSpeedQuery, cabinTempQuery, humidityQuery;
+                let speedDistQuery, windStatsQuery, pressureQuery, analyticsQuery, absoluteWindQuery, windSpeedQuery, cabinTempQuery, humidityQuery, rollQuery;
                 
                 if (isFullTrip) {
                     speedDistQuery = '/api/speed_distribution?id=' + trip.id;
@@ -877,6 +930,7 @@
                     windSpeedQuery = '/api/metrics?metric=5&start=' + formattedStart + '&end=' + formattedEnd;
                     cabinTempQuery = '/api/metrics?metric=2&start=' + formattedStart + '&end=' + formattedEnd;
                     humidityQuery = '/api/metrics?metric=4&start=' + formattedStart + '&end=' + formattedEnd;
+                    rollQuery = '/api/metrics?metric=7&start=' + formattedStart + '&end=' + formattedEnd;
                     analyticsQuery = '/api/track_analytics?start=' + formattedStart + '&end=' + formattedEnd;
                 }
 
@@ -999,11 +1053,14 @@
                     container.insertAdjacentHTML('beforeend', chartsHTML);
                 }
 
+                // Compute leg bands for full-trip view
+                const legBands = isFullTrip ? build_leg_bands(startTime, endTime) : [];
+
                 // Create secondary charts
-                allCharts.atmosphericPressure = createAtmosphericPressureChart(pressureData);
-                allCharts.absoluteWindDirection = createAbsoluteWindDirectionChartFromMetric(absoluteWindData, windSpeedData, absoluteWindDirectionNormalized);
-                allCharts.cabinTemperature = createCabinTemperatureChart(cabinTempData);
-                allCharts.humidity = createHumidityChart(humidityData);
+                allCharts.atmosphericPressure = createAtmosphericPressureChart(pressureData, legBands);
+                allCharts.absoluteWindDirection = createAbsoluteWindDirectionChartFromMetric(absoluteWindData, windSpeedData, absoluteWindDirectionNormalized, legBands);
+                allCharts.cabinTemperature = createCabinTemperatureChart(cabinTempData, legBands);
+                allCharts.humidity = createHumidityChart(humidityData, legBands);
                 allCharts.speedDistribution = createSpeedDistributionChart(speedDistData);
                 allCharts.windStatistics = createWindStatisticsChart(windStatsData);
 
@@ -1013,6 +1070,31 @@
                 currentAbsoluteWindData = absoluteWindData;
                 // Save wind speed data globally for chart toggling
                 currentWindSpeedData = windSpeedData;
+
+                // Fetch and render roll angle charts (leg view only)
+                if (!isFullTrip && rollQuery) {
+                    const rollResponse = await fetch(rollQuery);
+                    let rollData = null;
+                    if (rollResponse.ok) {
+                        const result = await rollResponse.json();
+                        if (result.status === 'ok' && result.data) {
+                            rollData = result.data;
+                        }
+                    }
+                    const rollChartsHTML =
+                        '<div class="chartWrapper">' +
+                            '<canvas id="rollAngleChart"></canvas>' +
+                        '</div>' +
+                        '<div class="chartWrapper">' +
+                            '<canvas id="heelDistributionChart"></canvas>' +
+                        '</div>';
+                    const rollContainer = document.getElementById('chartsContainer');
+                    if (rollContainer) {
+                        rollContainer.insertAdjacentHTML('beforeend', rollChartsHTML);
+                    }
+                    allCharts.rollAngle = createRollAngleChart(rollData);
+                    allCharts.heelDistribution = createHeelDistributionChart(rollData);
+                }
 
             } catch (error) {
                 console.error('Failed to fetch secondary charts:', error);
@@ -1257,7 +1339,8 @@
 
             // Recreate the absolute wind direction chart with the new scale (from metric data)
             if (currentAbsoluteWindData) {
-                allCharts.absoluteWindDirection = createAbsoluteWindDirectionChartFromMetric(currentAbsoluteWindData, currentWindSpeedData, absoluteWindDirectionNormalized);
+                const bands = (selectedLeg === null) ? build_leg_bands(currentTrip.start_date, currentTrip.end_date) : [];
+                allCharts.absoluteWindDirection = createAbsoluteWindDirectionChartFromMetric(currentAbsoluteWindData, currentWindSpeedData, absoluteWindDirectionNormalized, bands);
             }
         }
 
@@ -1588,42 +1671,36 @@
             });
         }
 
-        function createAtmosphericPressureChart(pressureData) {
+        function createAtmosphericPressureChart(pressureData, bands = []) {
             const ctx = document.getElementById('atmosphericPressureChart').getContext('2d');
             const colors = getChartColors();
 
             if (!pressureData || pressureData.length === 0) {
-                // Return a chart with a message if no data is available
                 return new Chart(ctx, {
                     type: 'line',
-                    data: {
-                        labels: [],
-                        datasets: []
-                    },
+                    data: { datasets: [] },
                     options: {
                         maintainAspectRatio: false,
                         plugins: {
-                            title: {
-                                display: true,
-                                text: 'Atmospheric Pressure (No Data Available)',
-                                color: colors.text
-                            }
+                            title: { display: true, text: 'Atmospheric Pressure (No Data Available)', color: colors.text }
                         }
                     }
                 });
             }
 
-            const labels = pressureData.map(point => formatTime(point.timestamp));
-            // Convert from Pascals to millibars (1 mbar = 100 Pa)
-            const pressures = pressureData.map(point => point.avg_value / 100);
+            // Convert from Pascals to millibars (1 mbar = 100 Pa), use time-based x-axis
+            const chartData = pressureData.map(point => ({
+                x: new Date(point.timestamp),
+                y: point.avg_value / 100
+            }));
 
             return new Chart(ctx, {
                 type: 'line',
+                plugins: [legBandPlugin],
                 data: {
-                    labels: labels,
                     datasets: [{
                         label: 'Atmospheric Pressure (mbar)',
-                        data: pressures,
+                        data: chartData,
                         borderColor: '#2ecc71',
                         backgroundColor: 'rgba(46, 204, 113, 0.1)',
                         fill: true,
@@ -1639,78 +1716,55 @@
                             beginAtZero: false,
                             min: 950.0,
                             max: 1050.0,
-                            title: {
-                                display: true,
-                                text: 'Pressure (mbar)',
-                                color: colors.text
-                            },
+                            title: { display: true, text: 'Pressure (mbar)', color: colors.text },
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         },
                         x: {
-                            title: {
-                                display: true,
-                                text: 'Time',
-                                color: colors.text
-                            },
+                            type: 'time',
+                            time: { tooltipFormat: 'HH:mm dd/MM' },
+                            title: { display: true, text: 'Time', color: colors.text },
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         }
                     },
                     plugins: {
-                        legend: {
-                            display: false,
-                            labels: { color: colors.text }
-                        },
-                        title: {
-                            display: true,
-                            text: 'Atmospheric Pressure',
-                            color: colors.text
-                        }
+                        legBands: { bands },
+                        legend: { display: false, labels: { color: colors.text } },
+                        title: { display: true, text: 'Atmospheric Pressure', color: colors.text }
                     }
                 }
             });
         }
 
-        function createAbsoluteWindDirectionChartFromMetric(metricData, windSpeedData, normalized = false) {
+        function createAbsoluteWindDirectionChartFromMetric(metricData, windSpeedData, normalized = false, bands = []) {
             const ctx = document.getElementById('absoluteWindDirectionChart').getContext('2d');
             const colors = getChartColors();
 
             if (!metricData || metricData.length === 0) {
-                // Return a chart with a message if no data is available
                 return new Chart(ctx, {
                     type: 'line',
-                    data: {
-                        labels: [],
-                        datasets: []
-                    },
+                    data: { datasets: [] },
                     options: {
                         maintainAspectRatio: false,
                         plugins: {
-                            title: {
-                                display: true,
-                                text: 'Absolute Wind Direction (No Data Available)',
-                                color: colors.text
-                            }
+                            title: { display: true, text: 'Absolute Wind Direction (No Data Available)', color: colors.text }
                         }
                     }
                 });
             }
 
-            const labels = metricData.map(point => formatTime(point.timestamp));
-            // Transform absolute wind direction to -180 to 180 scale if normalized
-            const absoluteWindDirections = metricData.map(point => {
+            // Use time-based x-axis with {x, y} format
+            const windDirData = metricData.map(point => {
                 let direction = point.avg_value;
-                if (normalized && direction > 180) {
-                    direction = direction - 360;
-                }
-                return direction;
+                if (normalized && direction > 180) direction = direction - 360;
+                return { x: new Date(point.timestamp), y: direction };
             });
 
             // Build datasets for wind direction
             const datasets = [{
                 label: 'Absolute Wind Direction (degrees)',
-                data: absoluteWindDirections,
+                data: windDirData,
                 borderColor: '#9b59b6',
                 backgroundColor: 'rgba(155, 89, 182, 0.1)',
                 fill: true,
@@ -1720,12 +1774,12 @@
                 yAxisID: 'y'
             }];
 
-            // Add wind speed dataset if available
+            // Add wind speed dataset if available (also time-based)
             if (windSpeedData && windSpeedData.length > 0) {
-                const windSpeeds = windSpeedData.map(point => point.avg_value);
+                const windSpeedChartData = windSpeedData.map(point => ({ x: new Date(point.timestamp), y: point.avg_value }));
                 datasets.push({
                     label: 'Wind Speed (knots)',
-                    data: windSpeeds,
+                    data: windSpeedChartData,
                     borderColor: '#27ae60',
                     backgroundColor: 'rgba(39, 174, 96, 0.05)',
                     fill: true,
@@ -1738,38 +1792,27 @@
 
             return new Chart(ctx, {
                 type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: datasets
-                },
+                plugins: [legBandPlugin],
+                data: { datasets },
                 options: {
                     maintainAspectRatio: false,
-                    interaction: {
-                        mode: 'index',
-                        intersect: false
-                    },
+                    interaction: { mode: 'index', intersect: false },
                     scales: {
                         y: {
                             type: 'linear',
                             position: 'left',
                             min: normalized ? -180 : 0,
                             max: normalized ? 180 : 360,
-                            title: {
-                                display: true,
-                                text: 'Wind Direction (degrees)',
-                                color: colors.text
-                            },
+                            title: { display: true, text: 'Wind Direction (degrees)', color: colors.text },
                             ticks: {
                                 stepSize: 30,
                                 color: colors.text,
                                 callback: function(value) {
                                     if (normalized) {
-                                        // For normalized scale: -180..180 where 0=N, ±180=S
                                         const normalizedValue = (value + 360) % 360;
                                         const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
                                         return directions[Math.round(normalizedValue / 45) % 8] + ' (' + value + '°)';
                                     } else {
-                                        // For standard scale: 0..360
                                         const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
                                         return directions[Math.round(value / 45) % 8] + ' (' + value + '°)';
                                     }
@@ -1780,31 +1823,22 @@
                         y1: (windSpeedData && windSpeedData.length > 0) ? {
                             type: 'linear',
                             position: 'right',
-                            title: {
-                                display: true,
-                                text: 'Wind Speed (knots)',
-                                color: colors.text
-                            },
+                            title: { display: true, text: 'Wind Speed (knots)', color: colors.text },
                             ticks: { color: colors.text },
                             grid: { display: false },
                             beginAtZero: true
                         } : undefined,
                         x: {
-                            title: {
-                                display: true,
-                                text: 'Time',
-                                color: colors.text
-                            },
+                            type: 'time',
+                            time: { tooltipFormat: 'HH:mm dd/MM' },
+                            title: { display: true, text: 'Time', color: colors.text },
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         }
                     },
                     plugins: {
-                        legend: {
-                            display: true,
-                            labels: { color: colors.text },
-                            position: 'top'
-                        },
+                        legBands: { bands },
+                        legend: { display: true, labels: { color: colors.text }, position: 'top' },
                         title: {
                             display: true,
                             text: (windSpeedData && windSpeedData.length > 0) ? 'Absolute Wind Direction & Speed' : 'Absolute Wind Direction',
@@ -1964,41 +1998,32 @@
             });
         }
 
-        function createCabinTemperatureChart(cabinTempData) {
+        function createCabinTemperatureChart(cabinTempData, bands = []) {
             const ctx = document.getElementById('cabinTemperatureChart').getContext('2d');
             const colors = getChartColors();
 
             if (!cabinTempData || cabinTempData.length === 0) {
-                // Return a chart with a message if no data is available
                 return new Chart(ctx, {
                     type: 'line',
-                    data: {
-                        labels: [],
-                        datasets: []
-                    },
+                    data: { datasets: [] },
                     options: {
                         maintainAspectRatio: false,
                         plugins: {
-                            title: {
-                                display: true,
-                                text: 'Cabin Temperature (No Data Available)',
-                                color: colors.text
-                            }
+                            title: { display: true, text: 'Cabin Temperature (No Data Available)', color: colors.text }
                         }
                     }
                 });
             }
 
-            const labels = cabinTempData.map(point => formatTime(point.timestamp));
-            const temperatures = cabinTempData.map(point => point.avg_value);
+            const chartData = cabinTempData.map(point => ({ x: new Date(point.timestamp), y: point.avg_value }));
 
             return new Chart(ctx, {
                 type: 'line',
+                plugins: [legBandPlugin],
                 data: {
-                    labels: labels,
                     datasets: [{
                         label: 'Cabin Temperature (°C)',
-                        data: temperatures,
+                        data: chartData,
                         borderColor: '#e67e22',
                         backgroundColor: 'rgba(230, 126, 34, 0.1)',
                         fill: true,
@@ -2011,74 +2036,53 @@
                     maintainAspectRatio: false,
                     scales: {
                         y: {
-                            title: {
-                                display: true,
-                                text: 'Temperature (°C)',
-                                color: colors.text
-                            },
+                            title: { display: true, text: 'Temperature (°C)', color: colors.text },
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         },
                         x: {
-                            title: {
-                                display: true,
-                                text: 'Time',
-                                color: colors.text
-                            },
+                            type: 'time',
+                            time: { tooltipFormat: 'HH:mm dd/MM' },
+                            title: { display: true, text: 'Time', color: colors.text },
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         }
                     },
                     plugins: {
-                        legend: {
-                            display: false,
-                            labels: { color: colors.text }
-                        },
-                        title: {
-                            display: true,
-                            text: 'Cabin Temperature',
-                            color: colors.text
-                        }
+                        legBands: { bands },
+                        legend: { display: false, labels: { color: colors.text } },
+                        title: { display: true, text: 'Cabin Temperature', color: colors.text }
                     }
                 }
             });
         }
 
-        function createHumidityChart(humidityData) {
+        function createHumidityChart(humidityData, bands = []) {
             const ctx = document.getElementById('humidityChart').getContext('2d');
             const colors = getChartColors();
 
             if (!humidityData || humidityData.length === 0) {
-                // Return a chart with a message if no data is available
                 return new Chart(ctx, {
                     type: 'line',
-                    data: {
-                        labels: [],
-                        datasets: []
-                    },
+                    data: { datasets: [] },
                     options: {
                         maintainAspectRatio: false,
                         plugins: {
-                            title: {
-                                display: true,
-                                text: 'Humidity (No Data Available)',
-                                color: colors.text
-                            }
+                            title: { display: true, text: 'Humidity (No Data Available)', color: colors.text }
                         }
                     }
                 });
             }
 
-            const labels = humidityData.map(point => formatTime(point.timestamp));
-            const humidities = humidityData.map(point => point.avg_value);
+            const chartData = humidityData.map(point => ({ x: new Date(point.timestamp), y: point.avg_value }));
 
             return new Chart(ctx, {
                 type: 'line',
+                plugins: [legBandPlugin],
                 data: {
-                    labels: labels,
                     datasets: [{
                         label: 'Humidity (%)',
-                        data: humidities,
+                        data: chartData,
                         borderColor: '#3498db',
                         backgroundColor: 'rgba(52, 152, 219, 0.1)',
                         fill: true,
@@ -2093,33 +2097,194 @@
                         y: {
                             min: 0,
                             max: 100,
-                            title: {
-                                display: true,
-                                text: 'Humidity (%)',
-                                color: colors.text
-                            },
+                            title: { display: true, text: 'Humidity (%)', color: colors.text },
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         },
                         x: {
-                            title: {
-                                display: true,
-                                text: 'Time',
-                                color: colors.text
-                            },
+                            type: 'time',
+                            time: { tooltipFormat: 'HH:mm dd/MM' },
+                            title: { display: true, text: 'Time', color: colors.text },
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         }
                     },
                     plugins: {
-                        legend: {
-                            display: false,
-                            labels: { color: colors.text }
+                        legBands: { bands },
+                        legend: { display: false, labels: { color: colors.text } },
+                        title: { display: true, text: 'Humidity', color: colors.text }
+                    }
+                }
+            });
+        }
+
+        function createRollAngleChart(rollData) {
+            const ctx = document.getElementById('rollAngleChart').getContext('2d');
+            const colors = getChartColors();
+
+            if (!rollData || rollData.length === 0) {
+                return new Chart(ctx, {
+                    type: 'line',
+                    data: { datasets: [] },
+                    options: {
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: { display: true, text: 'Roll Angle (No Data Available)', color: colors.text }
+                        }
+                    }
+                });
+            }
+
+            const chartData = rollData.map(point => ({ x: new Date(point.timestamp), y: point.avg_value }));
+
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'Roll Angle (°)',
+                        data: chartData,
+                        borderColor: '#e74c3c',
+                        backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                        fill: true,
+                        tension: 0.1,
+                        pointRadius: 0,
+                        pointHoverRadius: 5
+                    }]
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            title: { display: true, text: 'Roll Angle (degrees)', color: colors.text },
+                            ticks: { color: colors.text },
+                            grid: { color: colors.grid }
                         },
-                        title: {
-                            display: true,
-                            text: 'Humidity',
-                            color: colors.text
+                        x: {
+                            type: 'time',
+                            time: { tooltipFormat: 'HH:mm' },
+                            title: { display: true, text: 'Time', color: colors.text },
+                            ticks: { color: colors.text },
+                            grid: { color: colors.grid }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false, labels: { color: colors.text } },
+                        title: { display: true, text: 'Roll Angle', color: colors.text }
+                    }
+                }
+            });
+        }
+
+        function createHeelDistributionChart(rollData) {
+            const ctx = document.getElementById('heelDistributionChart').getContext('2d');
+            const colors = getChartColors();
+
+            if (!rollData || rollData.length === 0) {
+                return new Chart(ctx, {
+                    type: 'bar',
+                    data: { datasets: [] },
+                    options: {
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: { display: true, text: 'Heel Distribution (No Data Available)', color: colors.text }
+                        }
+                    }
+                });
+            }
+
+            // Bucket time by signed roll angle in centered 5° ranges (..., -7.5…-2.5, -2.5…2.5, 2.5…7.5, ...)
+            const BUCKET_DEG = 5;
+            const MAX_ANGLE = 60;
+            const HALF_BUCKET = BUCKET_DEG / 2;
+            const bucketRanges = [];
+            for (let center = -MAX_ANGLE; center <= MAX_ANGLE; center += BUCKET_DEG) {
+                bucketRanges.push({
+                    center,
+                    lo: center - HALF_BUCKET,
+                    hi: center + HALF_BUCKET
+                });
+            }
+            const format_angle = value => Number.isInteger(value) ? value.toString() : value.toFixed(1);
+            const labels = bucketRanges.map(range => format_angle(range.center) + '\u00b0');
+            const timeHours = new Array(bucketRanges.length).fill(0);
+
+            for (let i = 0; i < rollData.length; i++) {
+                const val = rollData[i].avg_value;
+                if (val === null || val === undefined) continue;
+                const clampedVal = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, val));
+                let bucketIdx = 0;
+                let minDistance = Number.POSITIVE_INFINITY;
+                let minCenterAbs = Number.POSITIVE_INFINITY;
+                for (let b = 0; b < bucketRanges.length; b++) {
+                    const center = bucketRanges[b].center;
+                    const distance = Math.abs(clampedVal - center);
+                    const centerAbs = Math.abs(center);
+                    if (distance < minDistance || (Math.abs(distance - minDistance) < 1e-9 && centerAbs < minCenterAbs)) {
+                        minDistance = distance;
+                        minCenterAbs = centerAbs;
+                        bucketIdx = b;
+                    }
+                }
+                // Estimate duration from timestamp gap to next point; fall back to 30 s
+                let durationSec = 30;
+                if (i + 1 < rollData.length) {
+                    const t1 = new Date(rollData[i].timestamp).getTime();
+                    const t2 = new Date(rollData[i + 1].timestamp).getTime();
+                    durationSec = Math.max(1, (t2 - t1) / 1000);
+                }
+                timeHours[bucketIdx] += durationSec / 3600;
+            }
+
+            const barColors = bucketRanges.map(range => {
+                if (range.center < 0) return 'rgba(52, 152, 219, 0.7)';
+                if (range.center > 0) return 'rgba(231, 76, 60, 0.7)';
+                return 'rgba(149, 165, 166, 0.7)';
+            });
+
+            const borderColors = bucketRanges.map(range => {
+                if (range.center < 0) return '#3498db';
+                if (range.center > 0) return '#e74c3c';
+                return '#95a5a6';
+            });
+
+            return new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Time (hours)',
+                        data: timeHours,
+                        backgroundColor: barColors,
+                        borderColor: borderColors,
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            title: { display: true, text: 'Heel Angle Bucket (degrees)', color: colors.text },
+                            ticks: { color: colors.text },
+                            grid: { color: colors.grid }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'Time (hours)', color: colors.text },
+                            ticks: { color: colors.text },
+                            grid: { color: colors.grid }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false, labels: { color: colors.text } },
+                        title: { display: true, text: 'Heel Distribution (Port / Starboard)', color: colors.text },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const range = bucketRanges[context.dataIndex];
+                                    const side = range.center < 0 ? 'Port' : (range.center > 0 ? 'Starboard' : 'Upright');
+                                    return side + ' (' + format_angle(range.center) + '° bucket): ' + context.parsed.y.toFixed(2) + ' hours';
+                                }
+                            }
                         }
                     }
                 }
