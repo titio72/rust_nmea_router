@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State, Multipart},
+    extract::{DefaultBodyLimit, Query, State, Multipart},
     http::StatusCode,
     response::Json,
     routing::get,
@@ -15,6 +15,8 @@ use tower_http::trace::TraceLayer;
 use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData, SpeedDistributionData, WindStatisticsData, TripLegsData, TrackAnalytics, HeatmapData};
 use crate::config::Config;
 use crate::web::broadcast_manager::SignalKBroadcastChannels;
+
+const MAX_IMPORT_TRIP_UPLOAD_BYTES: usize = 100 * 1024 * 1024; // 100 MiB
 
 #[derive(Clone)]
 pub struct AppState {
@@ -417,12 +419,23 @@ pub async fn import_trip(
                     continue;
                 }
                 
-                // Try to read the field as text
-                match field.text().await {
-                    Ok(json_content) => {
-                        info!("Processing uploaded JSON file for trip import, content size: {} bytes", json_content.len());
+                // Read the field as bytes to better handle large files
+                match field.bytes().await {
+                    Ok(file_bytes) => {
+                        info!("Processing uploaded JSON file for trip import, content size: {} bytes", file_bytes.len());
                         
-                        match state.db.import_trip(&json_content) {
+                        // Convert bytes to UTF-8 string
+                        let json_content = match std::str::from_utf8(&file_bytes) {
+                            Ok(content) => content,
+                            Err(e) => {
+                                error!(error = %e, "Uploaded file is not valid UTF-8 JSON");
+                                return Ok(Json(ApiResponse::error(
+                                    "Uploaded file is not valid UTF-8 JSON".to_string(),
+                                )));
+                            }
+                        };
+                        
+                        match state.db.import_trip(json_content) {
                             Ok(trip_id) => {
                                 info!(trip_id = trip_id, "Trip imported successfully");
                                 return Ok(Json(ApiResponse::ok(format!("Trip imported successfully with ID: {}", trip_id))));
@@ -644,7 +657,10 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/delete_trip", delete(delete_trip))
         .route("/trim_trip", post(trim_trip))
         .route("/export_trip", get(export_trip))
-        .route("/import_trip", post(import_trip))
+        .route(
+            "/import_trip",
+            post(import_trip).layer(DefaultBodyLimit::max(MAX_IMPORT_TRIP_UPLOAD_BYTES)),
+        )
         .route("/list_exports", get(list_exports))
         .route("/trips", get(get_trips))
         .route("/trip", get(get_trip))

@@ -513,7 +513,7 @@
                         break;
                     
                     // Temperature - Outside/Cabin (Kelvin to Celsius)
-                    case 'environment.outside.temperature':
+                    case 'environment.air.inside.maincabin.temperature':
                         const cabin_temp_c = value - 273.15;
                         document.getElementById('cabinTemp').textContent = formatValue(cabin_temp_c, 1) + '°C';
                         lastUpdate.env = new Date();

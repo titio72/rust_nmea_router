@@ -782,7 +782,8 @@
                 html += '<div class="trip-card" onclick="window.location.href=\'trip.html?id=' + trip.id + '\'">' +
                     '<div class="trip-line-1">' +
                     '<div class="trip-header">' +
-                    '<div class="trip-title">' + (trip.description || 'Trip ' + trip.id) + '<span class="trip-title-id"> (ID: ' + trip.id + ')</span>  ' + '</div>' +
+                    '<div class="trip-title">' + formatDate(trip.start_date) + ' - ' + (trip.description || 'Trip ' + trip.id) + '<span class="trip-title-id"> (ID: ' + trip.id + ')</span> - ' 
+                        + totalDistance.toFixed(1) + ' NM - ' +  formatDuration(totalTime) + '</div>' +
                     '<button class="trip-btn" onclick="openEditModal(event, ' + trip.id + ', \'' + (trip.description || '').replace(/'/g, "\\'") + '\')" title="Edit description">✎</button>' +
                     '<button class="trip-btn" onclick="exportTrip(event, ' + trip.id + ')" title="Export trip">⬇</button>' +
                     '<button class="trip-btn" onclick="trimTrip(event, ' + trip.id + ')" title="Trim trip">✂</button>' +
@@ -839,7 +840,10 @@
             const totalMinutes = Math.floor(ms / (1000 * 60));
             const hours = Math.floor(totalMinutes / 60);
             const minutes = totalMinutes % 60;
-            return hours + 'h ' + minutes + 'm';
+            if (hours < 24)
+                return hours + 'h ' + minutes + 'm';
+            else
+                return Math.floor(hours / 24) + 'd ' + (hours % 24) + 'h ' + minutes + 'm';
         }
 
         // Heatmap functions
@@ -1439,6 +1443,14 @@
             // Validate file type
             if (!file.name.endsWith('.json')) {
                 alert('Please select a valid JSON file');
+                return;
+            }
+
+            // Validate file size (100 MiB max)
+            const maxImportSizeBytes = 100 * 1024 * 1024; // 100 MiB
+            if (file.size > maxImportSizeBytes) {
+                alert('Selected file is too large. Maximum supported size is 100 MiB. Your file is ' + (file.size / (1024 * 1024)).toFixed(2) + ' MiB.');
+                event.target.value = '';
                 return;
             }
 

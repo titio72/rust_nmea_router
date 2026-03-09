@@ -99,12 +99,12 @@ customElements.define('my-compass-rose', class extends HTMLElement {
         const svg = buildCompassRoseSVG();
 
         // Arrow (blue)
-        this.arrowTrue = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        this.arrowTrue.setAttributeNS(null, "d", "M95 105 L105 45 L115 105 Z");
-        this.arrowTrue.setAttributeNS(null, "fill", "blue");
-        this.arrowTrue.setAttributeNS(null, "stroke", "gray");
-        this.arrowTrue.setAttributeNS(null, "stroke-width", "3");
-        svg.appendChild(this.arrowTrue);
+        this.arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        this.arrow.setAttributeNS(null, "d", "M95 105 L105 45 L115 105 Z");
+        this.arrow.setAttributeNS(null, "fill", "blue");
+        this.arrow.setAttributeNS(null, "stroke", "gray");
+        this.arrow.setAttributeNS(null, "stroke-width", "3");
+        svg.appendChild(this.arrow);
 
         this.appendChild(svg);
         this.updateArrows();
