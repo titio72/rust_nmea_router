@@ -918,6 +918,9 @@
 
                 const data = result.data;
 
+                // Calculate sailing/motoring totals
+                const sailingMotoring = calculateSailingMotoringTotals();
+
                 // Update stats
                 statsContainer.innerHTML = `
                     <div class="stat-box">
@@ -931,6 +934,16 @@
                     <div class="stat-box">
                         <div class="stat-label">Min Daily Distance</div>
                         <div class="stat-value">${data.min_distance.toFixed(2)} nm</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">Sailing Distance</div>
+                        <div class="stat-value">${sailingMotoring.sailing_nm.toFixed(2)} nm</div>
+                        <div class="stat-details"><span class="sailing-percentage">${sailingMotoring.sailing_percent.toFixed(1)}%</span></div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">Motoring Distance</div>
+                        <div class="stat-value">${sailingMotoring.motoring_nm.toFixed(2)} nm</div>
+                        <div class="stat-details"><span class="motoring-percentage">${sailingMotoring.motoring_percent.toFixed(1)}%</span></div>
                     </div>
                     <div class="stat-box">
                         <div class="stat-label">Active Days</div>
@@ -1064,6 +1077,55 @@
                 const selectedYear = parseInt(filterValue);
                 return new Date(selectedYear, 11, 31); // Dec 31 of selected year
             }
+        }
+
+        // Calculate sailing and motoring totals from trips within the heatmap date range
+        function calculateSailingMotoringTotals() {
+            if (!window.allTrips || window.allTrips.length === 0) {
+                return {
+                    sailing_nm: 0,
+                    motoring_nm: 0,
+                    total_nm: 0,
+                    sailing_percent: 0,
+                    motoring_percent: 0
+                };
+            }
+
+            const endDate = getHeatmapEndDate();
+            const startDate = new Date(endDate);
+            startDate.setDate(startDate.getDate() - 364); // 365 days (including end date)
+
+            // Extract date strings for comparison (YYYY-MM-DD format)
+            const startDateStr = startDate.toISOString().split('T')[0];
+            const endDateStr = endDate.toISOString().split('T')[0];
+
+            // Filter trips that overlap with the heatmap period
+            let totalSailing = 0;
+            let totalMotoring = 0;
+
+            window.allTrips.forEach(trip => {
+                // Extract date parts for comparison
+                const tripStartDate = trip.start_date.split('T')[0];
+                const tripEndDate = trip.end_date.split('T')[0];
+
+                // Check if trip overlaps with heatmap period
+                if (tripEndDate >= startDateStr && tripStartDate <= endDateStr) {
+                    totalSailing += trip.sailing_distance_nm || 0;
+                    totalMotoring += trip.motoring_distance_nm || 0;
+                }
+            });
+
+            const total = totalSailing + totalMotoring;
+            const sailingPercent = total > 0 ? (totalSailing / total) * 100 : 0;
+            const motoringPercent = total > 0 ? (totalMotoring / total) * 100 : 0;
+
+            return {
+                sailing_nm: totalSailing,
+                motoring_nm: totalMotoring,
+                total_nm: total,
+                sailing_percent: sailingPercent,
+                motoring_percent: motoringPercent
+            };
         }
 
         // Handle filter changes - update both heatmap and trips
