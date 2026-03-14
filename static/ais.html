@@ -148,26 +148,7 @@
     </style>
 </head>
 <body>
-    <div class="header-bar">
-        <div style="display: flex; align-items: center; gap: 10px; margin: 0 auto 20px auto; max-width: 1500px;">
-            <img id="brandLogo" src="/nmeasail-dark.png" alt="Logo" style="height: 40px; cursor: pointer;">
-            <h1 style="margin: 0; flex: 1;">AIS Targets</h1>
-            <div class="connection-status" id="connectionStatus">
-                <div class="status-dot"></div>
-                <span>Disconnected</span>
-            </div>
-            <button id="themeBtn" class="theme-toggle">
-                <span id="theme-icon">◐</span>
-                <span id="theme-text">Dark</span>
-            </button>
-        </div>
-        <nav style="text-align: center; max-width: 1500px; margin: 0 auto;">
-            <a href="/" style="margin-right: 20px;">Home</a>
-            <a href="/realtime.html" style="margin-right: 20px;">Real-Time</a>
-            <a href="/trip.html" style="margin-right: 20px;">Trips</a>
-            <a href="/ais.html" style="font-weight: bold;">AIS</a>
-        </nav>
-    </div>
+    <div id="headerContainer"></div>
 
     <div class="level-1-container">
         <div class="controls">
@@ -215,6 +196,10 @@
         let sortBy = 'distance';  // Default sort by distance
         let sortAsc = true;
         let filteredTargets = [];
+
+        // Initialize header and theme
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('ais');
+        initializeTheme();
 
         // Haversine formula to calculate distance between two points
         // Returns distance in nautical miles

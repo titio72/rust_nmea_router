@@ -204,3 +204,174 @@ customElements.define('my-wind-dial', class extends HTMLElement {
         this.render();
     }
 });
+
+
+/**
+ * Build SVG roll dial (semi-circle) for displaying boat heel angle
+ * Scale: -90° (port heel) to +90° (starboard heel)
+ */
+function buildRollDialSVG() {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttributeNS(null, "width", "210");
+    svg.setAttributeNS(null, "height", "105");
+    svg.setAttributeNS(null, "style", "display: block; margin: auto;");
+
+    // Get theme-aware colors
+    const bgColor = getComputedStyle(document.documentElement).getPropertyValue('--bg-secondary') || '#EEEEFF';
+    const tickColor = getComputedStyle(document.documentElement).getPropertyValue('--text-secondary') || '#000000';
+
+    // Circle background
+    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    circle.setAttributeNS(null, "cx", "50%");
+    circle.setAttributeNS(null, "cy", "100%");
+    circle.setAttributeNS(null, "r", "90");
+    circle.setAttributeNS(null, "stroke", "var(--border-color)");
+    circle.setAttributeNS(null, "stroke-width", "3");
+    circle.setAttributeNS(null, "fill", bgColor.trim());
+    svg.appendChild(circle);
+
+    // Tick marks and labels (-90, -60, -30, 0, 30, 60, 90)
+    const angles = [
+        { value: -90, label: "Port" },
+        { value: -75, label: "" },
+        { value: -60, label: "" },
+        { value: -45, label: "" },
+        { value: -30, label: "" },
+        { value: -15, label: "" },
+        { value: -10, label: "" },
+        { value: -5, label: "" },
+        { value: 0, label: "0°" },
+        { value: 5, label: "" },
+        { value: 10, label: "" },
+        { value: 15, label: "" },
+        { value: 30, label: "" },
+        { value: 45, label: "" },
+        { value: 60, label: "" },
+        { value: 75, label: "" },
+        { value: 90, label: "Starboard" }
+    ];
+
+    angles.forEach(({ value, label }) => {
+        // Convert roll angle (-90 to +90) to arc angle (180 to 0 degrees)
+        const arcAngle = 180 - (value + 90);
+        const radians = (arcAngle * Math.PI) / 180;
+        
+        // Calculate tick position on the arc
+        const radius = 90;
+        const centerX = 105;
+        const centerY = 105;
+        const x = centerX + radius * Math.cos(radians);
+        const y = centerY - radius * Math.sin(radians);
+        
+        // Calculate inner tick position
+        const tickLength = value % 30 === 0 ? 15 : 8;
+        const innerRadius = radius - tickLength;
+        const innerX = centerX + innerRadius * Math.cos(radians);
+        const innerY = centerY - innerRadius * Math.sin(radians);
+
+        // Draw tick mark
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttributeNS(null, "x1", x);
+        line.setAttributeNS(null, "y1", y);
+        line.setAttributeNS(null, "x2", innerX);
+        line.setAttributeNS(null, "y2", innerY);
+        line.setAttributeNS(null, "stroke", tickColor.trim() || "black");
+        line.setAttributeNS(null, "stroke-width", value % 30 === 0 ? "2" : "1");
+        svg.appendChild(line);
+
+        // Draw label for major ticks
+        if (label) {
+            const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            const labelRadius = radius - 30;
+            const labelX = centerX + labelRadius * Math.cos(radians);
+            const labelY = centerY - labelRadius * Math.sin(radians);
+            
+            text.setAttributeNS(null, "x", labelX);
+            text.setAttributeNS(null, "y", labelY);
+            text.setAttributeNS(null, "text-anchor", "middle");
+            text.setAttributeNS(null, "dominant-baseline", "middle");
+            text.setAttributeNS(null, "font-size", "12");
+            text.setAttributeNS(null, "fill", tickColor.trim() || "black");
+            text.textContent = label;
+            svg.appendChild(text);
+        }
+    });
+
+    // Center circle
+    const centerDot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    centerDot.setAttributeNS(null, "cx", "105");
+    centerDot.setAttributeNS(null, "cy", "105");
+    centerDot.setAttributeNS(null, "r", "5");
+    centerDot.setAttributeNS(null, "fill", "var(--text-primary)");
+    svg.appendChild(centerDot);
+
+    return svg;
+}
+
+/**
+ * Custom element: my-roll-dial
+ * Displays boat roll angle on a semi-circular gauge
+ * Scale: -90° (port heel) to +90° (starboard heel)
+ * Attribute: angle (in degrees, positive = starboard heel)
+ */
+customElements.define('my-roll-dial', class extends HTMLElement {
+    static get observedAttributes() {
+        return ['angle'];
+    }
+
+    constructor() {
+        super();
+        this.needle = null;
+    }
+
+    connectedCallback() {
+        this.render();
+    }
+
+    attributeChangedCallback(name, oldValue, newValue) {
+        if (oldValue !== newValue && this.needle) {
+            this.updateNeedle();
+        }
+    }
+
+    render() {
+        this.innerHTML = '';
+        const svg = buildRollDialSVG();
+
+        // Needle (red line from center pointing to current roll angle)
+        this.needle = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        this.needle.setAttributeNS(null, "x1", "105");
+        this.needle.setAttributeNS(null, "y1", "105");
+        this.needle.setAttributeNS(null, "x2", "105");
+        this.needle.setAttributeNS(null, "y2", "35");
+        this.needle.setAttributeNS(null, "stroke", "#e74c3c");
+        this.needle.setAttributeNS(null, "stroke-width", "4");
+        this.needle.setAttributeNS(null, "stroke-linecap", "round");
+        this.needle.setAttributeNS(null, "transform-origin", "105 105");
+        svg.appendChild(this.needle);
+
+        this.appendChild(svg);
+        this.updateNeedle();
+    }
+
+    updateNeedle() {
+        const rollAngleDeg = parseFloat(this.getAttribute('angle')) || 0;
+        
+        // Clamp to -90 to +90 range
+        const clampedAngle = Math.max(-90, Math.min(90, rollAngleDeg));
+        
+        // Convert roll angle (-90 to +90) to rotation (-180 to 0 degrees)
+        // At -90 (port), needle points left (-180°)
+        // At 0 (upright), needle points up (-90°)
+        // At +90 (starboard), needle points right (0°)
+        const rotationAngle = -90 - clampedAngle;
+
+        if (this.needle) {
+            this.needle.setAttributeNS(null, "transform", `rotate(${rotationAngle} 105 105)`);
+        }
+    }
+
+    refreshTheme() {
+        this.render();
+    }
+});

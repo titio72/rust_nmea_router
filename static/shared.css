@@ -28,9 +28,9 @@
 }
 
 body.dark-theme {
-    --bg-primary: #0a1628;
-    --bg-secondary: #0f1f3c;
-    --bg-tertiary: #1a2d47;
+    --bg-primary: #080f1a;
+    --bg-secondary: #0d1a2d;
+    --bg-tertiary: #112237;
     --bg-accent: #1e3a52;
     --text-primary: #e0e8f0;
     --text-secondary: #a8b8cc;
@@ -53,6 +53,27 @@ body.dark-theme {
     --primary-color: #3498db;
     --secondary-color: #bdc3c7;
 }
+
+body.alternative-theme {
+    --bg:        #080f1a;
+    --surface:   #0d1a2d;
+    --surface2:  #112237;
+    --border:    #1a3050;
+    --border2:   #234060;
+    --text:      #ddeeff;
+    --muted:     #6a8aa8;
+    --dim:       #3a5570;
+    --sail:      #19c2a3;
+    --sail-dim:  #0d7a68;
+    --motor:     #f5a623;
+    --motor-dim: #8a5c0f;
+    --moored:    #3d5a7a;
+    --accent:    #4fb3ff;
+    --accent2:   #1a6db0;
+    --danger:    #e05555;
+}
+
+
 
 body {
     font-family: Arial, sans-serif;
@@ -151,8 +172,28 @@ h2 {
 }
 
 .theme-toggle:hover {
-    background: var(--bg-accent);
+    background: var(--btn-hover);
     opacity: 0.8;
+}
+
+.nmea-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 24px;
+    cursor: pointer;
+    padding: 4px 8px;
+    transition: color 0.2s;
+}
+
+.nmea-btn:hover {
+    background: var(--btn-hover);
+    border-radius: 4px;
+}
+
+.nmea-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 /* Analytics and Summary Card Styles */

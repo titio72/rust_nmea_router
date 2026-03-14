@@ -267,6 +267,22 @@
                 <div class="last-update" id="windLastUpdate">No data received</div>
             </div>
 
+            <!-- Boat Attitude Card -->
+            <div class="data-card">
+                <div class="card-title">Boat Attitude</div>
+
+                <div class="data-row">
+                    <span class="data-label">Roll Angle</span>
+                    <span class="data-value" id="rollAngle">--<span class="data-unit">°</span></span>
+                </div>
+
+                <div class="dial-container">
+                    <my-roll-dial id="rollDial" angle="0"></my-roll-dial>
+                </div>
+
+                <div class="last-update" id="attitudeLastUpdate">No data received</div>
+            </div>
+
             <!-- Environmental Data Card -->
             <div class="data-card">
                 <div class="card-title">Environmental Conditions</div>
@@ -305,7 +321,8 @@
         let lastUpdate = {
             gnss: null,
             wind: null,
-            env: null
+            env: null,
+            attitude: null
         };
 
         // Track heading and wind angles for dial updates
@@ -562,6 +579,19 @@
                         lastUpdate.nav = new Date();
                         updateLastUpdateTime('navLastUpdate', lastUpdate.nav);
                         break;
+                    
+                    // Roll Angle (radians to degrees)
+                    case 'navigation.roll':
+                        const roll_deg = (value * 180 / Math.PI);
+                        document.getElementById('rollAngle').textContent = formatValue(roll_deg, 1) + '°';
+                        // Update roll dial
+                        const rollDial = document.getElementById('rollDial');
+                        if (rollDial) {
+                            rollDial.setAttribute('angle', roll_deg);
+                        }
+                        lastUpdate.attitude = new Date();
+                        updateLastUpdateTime('attitudeLastUpdate', lastUpdate.attitude);
+                        break;
                 }
             } catch (error) {
                 console.error('Error updating value for path', path, ':', error);
@@ -585,6 +615,7 @@
             if (lastUpdate.gnss) updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
             if (lastUpdate.wind) updateLastUpdateTime('windLastUpdate', lastUpdate.wind);
             if (lastUpdate.env) updateLastUpdateTime('envLastUpdate', lastUpdate.env);
+            if (lastUpdate.attitude) updateLastUpdateTime('attitudeLastUpdate', lastUpdate.attitude);
         }
 
         // Initialize

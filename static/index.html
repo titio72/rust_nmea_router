@@ -8,6 +8,7 @@
     <link rel="icon" type="image/png" href="/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
     <script src="/shared-theme.js"></script>
+    <script src="/trip-card-component.js"></script>
     <style>
         .import-trip-btn {
             background: var(--bg-tertiary);
@@ -753,10 +754,10 @@
                 });
             }
 
-            displayTrips(filteredTrips);
+            display_trips(filteredTrips);
         }
 
-        function displayTrips(trips) {
+        function display_trips(trips) {
             const content = document.getElementById('content');
 
             if (!trips || trips.length === 0) {
@@ -764,55 +765,28 @@
                 return;
             }
 
-            let html = '<div class="trips-grid">';
+            const grid = document.createElement('div');
+            grid.className = 'trips-grid';
 
             trips.forEach(trip => {
-                const totalDistance = trip.total_distance_nm;
-                const sailingDistance = trip.sailing_distance_nm;
-                const motoringDistance = trip.motoring_distance_nm;
-                const sailingPercent = totalDistance > 0 ? (sailingDistance / totalDistance * 100) : 0;
+                const card = document.createElement('trip-card');
+                card.setAttribute('data-id', trip.id);
+                card.setAttribute('data-description', trip.description || '');
+                card.setAttribute('data-start-date', trip.start_date);
+                card.setAttribute('data-end-date', trip.end_date);
+                card.setAttribute('data-total-distance', trip.total_distance_nm);
+                card.setAttribute('data-sailing-distance', trip.sailing_distance_nm);
+                card.setAttribute('data-motoring-distance', trip.motoring_distance_nm);
+                card.setAttribute('data-total-time', trip.total_time_ms);
+                card.setAttribute('data-sailing-time', trip.sailing_time_ms);
+                card.setAttribute('data-motoring-time', trip.motoring_time_ms);
+                card.setAttribute('data-moored-time', trip.moored_time_ms || 0);
 
-                const totalTime = trip.total_time_ms;
-                const sailingTime = trip.sailing_time_ms;
-                const motoringTime = trip.motoring_time_ms;
-                const mooredTime = trip.moored_time_ms || 0;
-                const sailingTimePercent = totalTime > 0 ? (sailingTime / totalTime * 100) : 0;
-                const motoringTimePercent = totalTime > 0 ? (motoringTime / totalTime * 100) : 0;
-
-                html += '<div class="trip-card" onclick="window.location.href=\'trip.html?id=' + trip.id + '\'">' +
-                    '<div class="trip-line-1">' +
-                    '<div class="trip-header">' +
-                    '<div class="trip-title">' + formatDate(trip.start_date) + ' - ' + (trip.description || 'Trip ' + trip.id) + '<span class="trip-title-id"> (ID: ' + trip.id + ')</span> - ' 
-                        + totalDistance.toFixed(1) + ' NM - ' +  formatDuration(totalTime) + '</div>' +
-                    '<button class="trip-btn" onclick="openEditModal(event, ' + trip.id + ', \'' + (trip.description || '').replace(/'/g, "\\'") + '\')" title="Edit description">✎</button>' +
-                    '<button class="trip-btn" onclick="exportTrip(event, ' + trip.id + ')" title="Export trip">⬇</button>' +
-                    '<button class="trip-btn" onclick="trimTrip(event, ' + trip.id + ')" title="Trim trip">✂</button>' +
-                    '<button class="trip-btn" onclick="deleteTrip(event, ' + trip.id + ')" title="Delete trip">🗑</button>' +
-                    '</div>' +
-                    '</div>' +
-                    '<div class="trip-line-2">' +
-                    '<div class="line-item"><span class="label">Start:</span> ' + formatDateTime(trip.start_date) + '</div>' +
-                    '<div class="line-item"><span class="label">End:</span> ' + formatDateTime(trip.end_date) + '</div>' +
-                    '<div class="line-item"><span class="label">Duration:</span> ' + formatDuration(totalTime) + '</div>' +
-                    '<div class="line-item"><span class="label">Moored:</span> ' + formatDuration(mooredTime) + '</div>' +
-                    '</div>' +
-                    '<div class="trip-line-3">' +
-                    '<div class="line-item"><span class="label">Total Distance:</span> ' + totalDistance.toFixed(1) + ' NM</div>' +
-                    '<div class="line-item"><span class="label">Sailing:</span> ' + sailingDistance.toFixed(1) + ' NM</div>' +
-                    '<div class="line-item"><span class="label">Motoring:</span> ' + motoringDistance.toFixed(1) + ' NM</div>' +
-                    '<div class="line-item"><span class="label">Sailing %:</span> ' + sailingPercent.toFixed(1) + '%</div>' +
-                    '</div>' +
-                    '<div class="trip-line-4">' +
-                    '<div class="progress-bar">' +
-                    '<div class="progress-sailing" style="width: ' + sailingPercent.toFixed(1) + '%;" title="Sailing: ' + sailingDistance.toFixed(1) + ' NM"></div>' +
-                    '<div class="progress-motoring" style="width: ' + (100 - sailingPercent).toFixed(1) + '%;" title="Motoring: ' + motoringDistance.toFixed(1) + ' NM"></div>' +
-                    '</div>' +
-                    '</div>' +
-                    '</div>';
+                grid.appendChild(card);
             });
 
-            html += '</div>';
-            content.innerHTML = html;
+            content.innerHTML = '';
+            content.appendChild(grid);
         }
 
         function formatDate(dateStr) {
@@ -845,6 +819,26 @@
             else
                 return Math.floor(hours / 24) + 'd ' + (hours % 24) + 'h ' + minutes + 'm';
         }
+
+        // Event delegation for trip-action custom events from Web Components
+        document.addEventListener('trip-action', (event) => {
+            const { action, trip_id, description } = event.detail;
+
+            switch(action) {
+                case 'edit':
+                    openEditModal(event, trip_id, description);
+                    break;
+                case 'export':
+                    exportTrip(event, trip_id);
+                    break;
+                case 'trim':
+                    trimTrip(event, trip_id);
+                    break;
+                case 'delete':
+                    deleteTrip(event, trip_id);
+                    break;
+            }
+        });
 
         // Heatmap functions
         function getColorVariable(value, minDistance, maxDistance) {
@@ -1075,7 +1069,7 @@
                 return today;
             } else {
                 const selectedYear = parseInt(filterValue);
-                return new Date(selectedYear, 11, 31); // Dec 31 of selected year
+                return new Date(Date.UTC(selectedYear, 11, 31)); // Dec 31 of selected year in UTC
             }
         }
 
@@ -1136,8 +1130,8 @@
 
         // Register Service Worker for offline support and graceful degradation
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').catch(err => {
-                console.log('Service Worker registration failed (non-critical):', err);
+            navigator.serviceWorker.register('/sw.js').catch(() => {
+                // Service Worker registration failed (non-critical)
             });
         }
 
@@ -1516,13 +1510,10 @@
                 return;
             }
 
-            console.log('Importing file:', file.name, 'Size:', file.size, 'bytes');
-
             try {
                 const formData = new FormData();
                 formData.append('file', file);
 
-                console.log('Sending import request...');
                 const response = await fetch('/api/import_trip', {
                     method: 'POST',
                     body: formData
@@ -1530,7 +1521,6 @@
                 });
 
                 const result = await response.json();
-                console.log('Import response:', result);
 
                 if (result.status === 'ok') {
                     alert('Trip imported successfully! ID: ' + result.data.match(/\d+/)[0]);

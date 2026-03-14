@@ -3,7 +3,11 @@
 ## Table of Contents
 1. [What This Software Does](#what-this-software-does)
 2. [Specs](#specs)
-3. [Rules] (#rules)
+3. [Rules](#rules)
+4. [Agent Guidelines](#agent-guidelines)
+   - [Code Hygiene & Cleanup](#code-hygiene--cleanup)
+   - [Cleanup Guidelines (Mandatory Process)](#cleanup-guidelines-mandatory-process)
+5. [When in Doubt](#when-in-doubt)
 
 ---
 
@@ -403,6 +407,93 @@ All pages must follow this hierarchical structure:
 - Include units in variable names or comments (`speed_kn`, `distance_nm`)
 - Link to specifications (WMM 2025, Haversine, NMEA2000 specs)
 - Explain test data generation strategies
+
+### Code Hygiene & Cleanup
+
+**CRITICAL - Do NOT leave unused code behind:**
+- If implementing a feature/refactor, complete it fully or revert it completely
+- Never commit unused imports, abandoned modules, or partial implementations
+- Never leave infrastructure (like importmaps, module scripts, component libraries) without using them
+- If transitioning between approaches (e.g., plain HTML → Lit):
+  - Either fully migrate and test the new approach
+  - OR completely revert to the original and remove all intermediate code
+- Remove all debugging console.log() statements before committing
+- Clean up attempt branches: use `git stash` or create feature branches, don't merge partial work
+
+**When Work is Incomplete:**
+1. Create a feature branch (`git checkout -b feature/lit-refactor`)
+2. Work fully to completion on that branch
+3. Only merge to main when fully tested and working
+4. If abandoning, use `git revert` to clean up, don't leave debris
+
+### Cleanup Guidelines (Mandatory Process)
+
+When removing an abandoned feature, tool, or approach, follow this exhaustive process to ensure nothing is left behind:
+
+**Step 1: Search Comprehensively**
+Before deleting anything, search for ALL references to the feature across the entire workspace:
+```bash
+# Replace "angular" with the feature name being removed
+grep -r "angular\|Angular\|ng-trip\|frontend" \
+  --include="*.md" --include="*.rs" --include="*.js" \
+  --include="*.html" --include="*.json" --include="*.toml" \
+  --include="*.lock" --include="*.xml" \
+  . 2>/dev/null | grep -v ".git"
+```
+
+**Step 2: Categorize All Artifacts**
+Systematically document every artifact found in the search:
+- [ ] **Source code**: Directories, modules, files (e.g., `/frontend/src/`, `src/app/`)
+- [ ] **Configuration**: Build configs, `Cargo.toml`, `package.json`, `tsconfig.json`, etc.
+- [ ] **Tests**: Test files, test helpers, test data
+- [ ] **Documentation**: README sections, design docs, migration guides (e.g., `docs/ANGULAR_MIGRATION_*.md`)
+- [ ] **Static files**: HTML debug pages, CSS for feature, SVGs, assets
+- [ ] **Build outputs**: `target/`, `dist/`, `node_modules/`, compiled artifacts
+- [ ] **Debug statements**: `console.log()`, print statements, logging entries
+- [ ] **Comments/docstrings**: Code comments referencing the feature
+- [ ] **Dependencies**: Package lock files, version constraints in Cargo.toml
+- [ ] **Database migrations**: If applicable, old migration files
+
+**Step 3: Remove Everything**
+Delete all artifacts identified in Step 1 and categorized in Step 2:
+```bash
+# Example cleanup for Angular migration
+rm -rf /path/to/frontend/
+rm /path/to/docs/ANGULAR_MIGRATION_*.md
+rm /path/to/src/app/
+rm -f /path/to/static/debug-angular.html
+# ... remove all others
+```
+
+**Step 4: Verify Cleanup is Complete**
+```bash
+# Run the verification to ensure NO references remain
+FEATURE="angular"
+MATCHES=$(grep -r "$FEATURE" --include="*.md" --include="*.rs" --include="*.js" \
+  --include="*.html" --include="*.json" --include="*.toml" . 2>/dev/null | grep -v ".git" | wc -l)
+
+if [ $MATCHES -eq 0 ]; then
+  echo "✓ Complete: No references to '$FEATURE' remain"
+else
+  echo "✗ Incomplete: Found $MATCHES references. Review and remove:"
+  grep -r "$FEATURE" --include="*.md" --include="*.rs" --include="*.js" \
+    --include="*.html" --include="*.json" . 2>/dev/null | grep -v ".git"
+fi
+```
+
+**Step 5: Update Core Documentation**
+- [ ] Update `README.md` if feature is mentioned
+- [ ] Update Table of Contents in `AGENTS.md` if sections were added
+- [ ] Update project status in relevant documentation
+
+**Examples of Incomplete Cleanups (What NOT to do):**
+- **Bad**: Deleted source code but left documentation → Search for "angular" still finds references
+- **Bad**: Removed code but left `console.log()` debug statements → Code still has artifacts
+- **Bad**: Removed `/frontend/` but left `/docs/ANGULAR_MIGRATION_*.md` → Confusing documentation remains
+- **Bad**: Deleted files but kept build outputs → `/target/`, `/dist/` still contain old artifacts
+
+**Rule of Thumb:**
+If `grep -r "FEATURE_NAME"` returns zero results, cleanup is complete. If it returns any results, you're not done.
 
 ### When in Doubt
 

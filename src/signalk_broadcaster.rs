@@ -50,6 +50,7 @@ pub struct SignalKBroadcaster {
     last_pressure_broadcast: Option<Instant>,
     last_datetime_broadcast: Option<Instant>,
     last_timesync_broadcast: Option<Instant>,
+    last_roll_broadcast: Option<Instant>,
 
     last_position: Option<Position>,
 }
@@ -78,6 +79,7 @@ impl SignalKBroadcaster {
             last_pressure_broadcast: None,
             last_datetime_broadcast: None,
             last_timesync_broadcast: None,
+            last_roll_broadcast: None,
             last_position: None,
         }
     }
@@ -661,6 +663,20 @@ impl MessageHandler for SignalKBroadcaster {
                 ];
                 
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
+            },
+
+            // Attitude data - PGN 127257
+            // SignalK: navigation.roll (radians)
+            N2kMessage::Attitude(attitude) => {
+                if self.should_broadcast(self.last_roll_broadcast, now) {
+                    let values = vec![SignalKValue {
+                        path: "navigation.roll".to_string(),
+                        value: json!(attitude.roll),
+                    }];
+                    
+                    self.send_delta(source, timestamp, values);
+                    self.last_roll_broadcast = Some(now);
+                }
             },
 
             // All other messages - ignore
