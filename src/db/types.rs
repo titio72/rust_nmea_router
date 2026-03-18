@@ -167,6 +167,9 @@ pub struct FastestSegment {
 pub struct TrackAnalytics {
     pub max_speed_kn: Option<f64>,
     pub max_speed_timestamp: Option<String>,
+    pub average_speed_kn: Option<f64>,
+    pub average_speed_sailing_kn: Option<f64>,
+    pub average_speed_motoring_kn: Option<f64>,
     pub fastest_1nm: Option<FastestSegment>,
     pub fastest_5nm: Option<FastestSegment>,
     pub fastest_10nm: Option<FastestSegment>,

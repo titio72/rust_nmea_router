@@ -25,9 +25,7 @@
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 15px;
-            margin-top: 25px;
-            padding-top: 25px;
-            border-top: 1px solid var(--border-color);
+            margin-bottom: 25px;
         }
 
         .legend {
@@ -53,6 +51,56 @@
             border-radius: 3px;
         }
 
+        .stats-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+
+        .stats-table th,
+        .stats-table td {
+            padding: 10px 16px;
+            text-align: right;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 14px;
+        }
+
+        .stats-table th:first-child,
+        .stats-table td:first-child {
+            text-align: left;
+        }
+
+        .stats-table th {
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stats-table tbody tr {
+            transition: background-color 0.15s ease;
+        }
+
+        .cell-max {
+            color: #e74c3c;
+            font-weight: 700;
+        }
+
+        .stats-table tbody tr:hover {
+            background-color: rgba(52, 152, 219, 0.15);
+            cursor: default;
+        }
+
+        .stats-table tbody tr:hover td.cell-max {
+            color: #e74c3c;
+            font-weight: 700;
+        }
+
+        .stats-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+
         .error {
             color: #e74c3c;
             background: #fadbd8;
@@ -66,6 +114,22 @@
             padding: 50px;
             color: var(--text-secondary);
         }
+
+        .tableValue {
+            font-size: 16px;
+            color: var(--text-primary);
+            font-weight: 700;
+        }
+
+        .tableValueMax {
+            color: #e74c3c;
+        }
+
+        .tablePercentage {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
     </style>
 </head>
 <body>
@@ -76,13 +140,6 @@
         <div id="error" class="error" style="display: none;"></div>
         
         <div id="statsContent" style="display: none;">
-            <div class="chart-wrapper">
-                <canvas id="yearlyChart"></canvas>
-            </div>
-
-            <div class="chart-wrapper">
-                <canvas id="accumulatedChart"></canvas>
-            </div>
 
             <div class="summary-grid" style="grid-column: 1 / -1;">
                 <div class="analyticsCard">
@@ -106,6 +163,27 @@
                     <div class="analyticsDetail">of total distance</div>
                 </div>
             </div>
+
+            <div class="chart-wrapper">
+                <canvas id="yearlyChart"></canvas>
+            </div>
+
+            <div class="chart-wrapper">
+                <canvas id="accumulatedChart"></canvas>
+            </div>
+
+            <table class="stats-table" id="yearlyTable">
+                <thead>
+                    <tr>
+                        <th>Year</th>
+                        <th>Sailing (nm)</th>
+                        <th>Motoring (nm)</th>
+                        <th>Total (nm)</th>
+                        <th id="ytdHeader">Jan–Mar (nm)</th>
+                    </tr>
+                </thead>
+                <tbody id="yearlyTableBody"></tbody>
+            </table>
         </div>
     </div>
 
@@ -118,7 +196,7 @@
             light: {
                 sailing: '#2980b9',
                 motoring: '#95a5a6',
-                text: '#333',
+                text: '#1a1a1a',
                 border: '#ddd',
                 bg: '#f5f5f5'
             },
@@ -213,6 +291,54 @@
             
             // Create accumulated chart
             createAccumulatedChart(data.months);
+
+            // Populate yearly table
+            populateYearlyTable(yearlyData, data.months);
+        }
+
+        function populateYearlyTable(yearlyData, monthlyData) {
+            const currentMonth = new Date().getMonth() + 1; // 1-based
+            const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+            const ytdLabel = `Jan\u2013${monthNames[currentMonth - 1]} (nm)`;
+            document.getElementById('ytdHeader').textContent = ytdLabel;
+
+            // Build YTD lookup: year -> total distance for months 1..currentMonth
+            const ytdByYear = {};
+            monthlyData.forEach(m => {
+                if (m.month <= currentMonth) {
+                    if (!ytdByYear[m.year]) ytdByYear[m.year] = 0;
+                    ytdByYear[m.year] += m.sailing_distance_nm + m.motoring_distance_nm;
+                }
+            });
+
+            const tbody = document.getElementById('yearlyTableBody');
+            tbody.innerHTML = '';
+            const years = Object.keys(yearlyData).sort((a, b) => b - a);
+
+            // Find max total and max YTD
+            const maxTotal = Math.max(...years.map(y => yearlyData[y].sailing + yearlyData[y].motoring));
+            const ytdValues = years.map(y => ytdByYear[y] !== undefined ? ytdByYear[y] : -Infinity);
+            const maxYtd = Math.max(...ytdValues);
+
+            years.forEach(year => {
+                const sailing = yearlyData[year].sailing;
+                const motoring = yearlyData[year].motoring;
+                const total = sailing + motoring;
+                const pct = total > 0 ? ((sailing / total) * 100).toFixed(1) : '0.0';
+                const pctM = total > 0 ? ((motoring / total) * 100).toFixed(1) : '0.0';
+                const ytdRaw = ytdByYear[year] !== undefined ? ytdByYear[year] : null;
+                const ytdDisplay = ytdRaw !== null ? Math.round(ytdRaw) : '\u2013';
+                const totalClass = total === maxTotal ? 'tableValueMax' : 'tableValue';
+                const ytdClass = ytdRaw !== null && ytdRaw === maxYtd ? 'tableValueMax' : 'tableValue';
+                const tr = document.createElement('tr');
+                tr.innerHTML = 
+                    `<td>${year}</td>
+                    <td class="tableValue">${Math.round(sailing)}<br><span class="tablePercentage">${pct}%</span></td>
+                    <td class="tableValue">${Math.round(motoring)}<br><span class="tablePercentage">${pctM}%</span></td>
+                    <td class="${totalClass}">${Math.round(total)}</td>
+                    <td class="${ytdClass}">${ytdDisplay}</td>`;
+                tbody.appendChild(tr);
+            });
         }
 
         function createAccumulatedChart(monthlyData) {

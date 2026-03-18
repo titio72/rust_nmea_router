@@ -27,25 +27,18 @@ class TripCard extends HTMLElement {
             ? (trip_data.sailing_distance_nm / trip_data.total_distance_nm * 100) 
             : 0;
 
+        const motoring_percent = trip_data.total_distance_nm > 0 
+            ? (trip_data.motoring_distance_nm / trip_data.total_distance_nm * 100) 
+            : 0;
+
         this.shadowRoot.innerHTML = `
+            <link rel="stylesheet" href="/shared.css">
             <style>
                 :host {
                     display: block;
-                    background: var(--bg-secondary);
-                    border: 1px solid var(--border-color);
-                    border-radius: 8px;
-                    padding: 20px;
-                    box-shadow: 0 2px 5px var(--card-shadow);
-                    cursor: pointer;
-                    transition: transform 0.2s, box-shadow 0.2s;
                 }
 
-                :host(:hover) {
-                    transform: translateY(-2px);
-                    box-shadow: 0 4px 15px var(--card-shadow);
-                }
-
-                .trip-line-1 {
+                .trip-line {
                     display: flex;
                     justify-content: space-between;
                     align-items: center;
@@ -59,7 +52,6 @@ class TripCard extends HTMLElement {
 
                 .trip-title {
                     font-size: 24px;
-                    font-weight: bold;
                     color: var(--text-bold);
                 }
 
@@ -77,83 +69,84 @@ class TripCard extends HTMLElement {
                     display: flex;
                     gap: 5px;
                 }
-
-                .trip-line-2, .trip-line-3, .trip-line-x {
-                    display: flex;
-                    gap: 20px;
-                    flex-wrap: wrap;
-                    font-size: 13px;
-                    margin-bottom: 12px;
-                }
-
-                .line-item {
-                    flex: 1;
-                    min-width: 200px;
-                }
-
-                .label {
-                    font-weight: 600;
-                    color: var(--text-bold);
-                }
-
-                .trip-line-4 {
-                    width: 100%;
-                }
-
-                .progress-bar {
-                    width: 100%;
-                    height: 8px;
-                    background-color: var(--empty-color);
-                    border-radius: 4px;
-                    overflow: hidden;
-                    display: flex;
-                }
-
-                .progress-sailing {
-                    height: 100%;
-                    background: linear-gradient(to right, #ff9900, #4caf50);
-                }
-
-                .progress-motoring {
-                    height: 100%;
-                    background-color: var(--motoring-color);
-                }
             </style>
 
-            <div class="trip-line-1">
-                <div class="trip-header">
-                    <div class="trip-title">
-                        ${trip_data.description || 'Trip ' + trip_data.id}
-                        <span class="trip-title-id">(ID: ${trip_data.id})</span><br>
-                        <span class="trip-sub-title">${this.format_date(trip_data.start_date)} - ${this.format_date(trip_data.end_date)}</span>
+            <div class="app-card">
+                <div class="trip-line">
+                    <div class="trip-header">
+                        <div class="trip-title">
+                            ${trip_data.description || 'Trip ' + trip_data.id}
+                            <span class="trip-title-id">(ID: ${trip_data.id})</span><br>
+                            <span class="trip-sub-title">${this.format_date(trip_data.start_date)} - ${this.format_date(trip_data.end_date)}</span>
+                        </div>
+                    </div>
+                    <div class="trip-buttons">
+                        <button class="app-btn" data-action="edit" title="Edit description">✎</button>
+                        <button class="app-btn" data-action="export" title="Export trip">⬇</button>
+                        <button class="app-btn" data-action="trim" title="Trim trip">✂</button>
+                        <button class="app-btn" data-action="delete" title="Delete trip">🗑</button>
                     </div>
                 </div>
-                <div class="trip-buttons">
-                    <button class="nmea-btn" data-action="edit" title="Edit description">✎</button>
-                    <button class="nmea-btn" data-action="export" title="Export trip">⬇</button>
-                    <button class="nmea-btn" data-action="trim" title="Trim trip">✂</button>
-                    <button class="nmea-btn" data-action="delete" title="Delete trip">🗑</button>
-                </div>
-            </div>
-            <div class="trip-line-2">
-                <div class="line-item"><span class="label">Start:</span> ${this.format_date_time(trip_data.start_date)}</div>
-                <div class="line-item"><span class="label">End:</span> ${this.format_date_time(trip_data.end_date)}</div>
-                <div class="line-item"><span class="label">Duration:</span> ${this.format_duration(trip_data.total_time_ms)}</div>
-                <div class="line-item"><span class="label">Moored:</span> ${this.format_duration(trip_data.moored_time_ms)}</div>
-            </div>
 
-            <div class="trip-line-3">
-                <div class="line-item"><span class="label">Total Distance:</span> ${trip_data.total_distance_nm.toFixed(1)} NM</div>
-                <div class="line-item"><span class="label">Sailing:</span> ${trip_data.sailing_distance_nm.toFixed(1)} NM</div>
-                <div class="line-item"><span class="label">Motoring:</span> ${trip_data.motoring_distance_nm.toFixed(1)} NM</div>
-                <div class="line-item"><span class="label">Sailing %:</span> ${sailing_percent.toFixed(1)}%</div>
-            </div>
 
-            <div class="trip-line-4">
-                <div class="progress-bar">
-                    <div class="progress-sailing" style="width: ${sailing_percent.toFixed(1)}%;" title="Sailing: ${trip_data.sailing_distance_nm.toFixed(1)} NM"></div>
-                    <div class="progress-motoring" style="width: ${(100 - sailing_percent).toFixed(1)}%;" title="Motoring: ${trip_data.motoring_distance_nm.toFixed(1)} NM"></div>
+                <div class="trip-line">
+                    <div class="card-stats">
+                    <div class="card-stat">
+                        <div class="card-stat-label">Total</div>
+                        <div class="card-stat-value">${trip_data.total_distance_nm.toFixed(1)}<span class="unit-sm"> NM</span></div>
+                        <div class="card-stat-details">${this.format_duration(trip_data.total_time_ms)}</div>
+                    </div>
+                    <div class="stat-divider"></div>
+                    <div class="card-stat">
+                        <div class="card-stat-label">Sailing Distance</div>
+                        <div class="card-stat-value">${trip_data.sailing_distance_nm.toFixed(1)}<span class="unit-sm"> NM</span></div>
+                        <div class="card-stat-details"><span class="sailing-percentage">${sailing_percent.toFixed(1)}%</span></div>
+                    </div>
+                    <div class="stat-divider"></div>
+                    <div class="card-stat">
+                        <div class="card-stat-label">Motoring Distance</div>
+                        <div class="card-stat-value">${trip_data.motoring_distance_nm.toFixed(1)}<span class="unit-sm"> NM</span></div>
+                        <div class="card-stat-details"><span class="motoring-percentage">${motoring_percent.toFixed(1)}%</span></div>
+                    </div>
+                    <div class="stat-divider"></div>
+                    <div class="card-stat">
+                        <div class="card-stat-label">Start</div>
+                        <div class="card-stat-value">${this.format_date(trip_data.start_date)}</div>
+                        <div class="card-stat-details">${this.format_time(trip_data.start_date)}</div>
+                    </div>
+                    <div class="stat-divider"></div>
+                    <div class="card-stat">
+                        <div class="card-stat-label">End</div>
+                        <div class="card-stat-value">${this.format_date(trip_data.end_date)}</div>
+                        <div class="card-stat-details">${this.format_time(trip_data.end_date)}</div>
+                    </div>
+                    <div class="stat-divider"></div>
+                    <div class="card-stat">
+                        <div class="card-stat-label">Moored</div>
+                        <div class="card-stat-value">${this.format_duration(trip_data.moored_time_ms)}</div>
+                    </div>
+                    </div>
                 </div>
+
+                <div class="trip-line">
+                    <div class="voyage-bar-wrap">
+                        <div class="voyage-bar">
+                            <div class="vb-sail" style="width: ${sailing_percent}%"></div>
+                            <div class="vb-motor" style="width: ${motoring_percent}%"></div>
+                        </div>
+                        <div class="voyage-bar-legend">
+                            <div class="vbl-item">
+                                <div class="vbl-dot sail"></div>
+                                <span><span class="vbl-val">${trip_data.sailing_distance_nm.toFixed(1)} NM</span> sailing</span>
+                            </div>
+                            <div class="vbl-item">
+                                <div class="vbl-dot motor"></div>
+                                <span><span class="vbl-val">${trip_data.motoring_distance_nm.toFixed(1)} NM</span> motoring</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         `;
 
@@ -161,7 +154,7 @@ class TripCard extends HTMLElement {
     }
 
     attach_event_listeners(trip_data) {
-        this.shadowRoot.querySelectorAll('.nmea-btn').forEach(btn => {
+        this.shadowRoot.querySelectorAll('.app-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const action = btn.getAttribute('data-action');
@@ -174,7 +167,7 @@ class TripCard extends HTMLElement {
         });
 
         this.addEventListener('click', (e) => {
-            if (!e.target.classList.contains('nmea-btn')) {
+            if (!e.target.classList.contains('app-btn')) {
                 window.location.href = `trip.html?id=${trip_data.id}`;
             }
         });
@@ -185,6 +178,16 @@ class TripCard extends HTMLElement {
         try {
             const date = new Date(date_str);
             return date.toLocaleDateString();
+        } catch (e) {
+            return date_str;
+        }
+    }
+
+    format_time(date_str) {
+        if (!date_str) return 'Unknown';
+        try {
+            const date = new Date(date_str);
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         } catch (e) {
             return date_str;
         }

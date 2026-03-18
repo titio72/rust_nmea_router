@@ -53,73 +53,6 @@
             width: 100%;
             padding: 0;
         }
-        .tripInfo {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 20px;
-        }
-        .infoItem.fullWidth {
-            grid-column: 1 / -1;
-        }
-        .infoRow {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 15px;
-            grid-column: 1 / -1;
-        }
-        .infoItem {
-            text-align: center;
-        }
-        .infoLabel {
-            font-size: 12px;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            margin-bottom: 5px;
-        }
-        .infoValue {
-            font-size: 24px;
-            font-weight: bold;
-            color: var(--text-bold);
-        }
-        .progressBarContainer {
-            width: 100%;
-            height: 24px;
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            overflow: hidden;
-            display: flex;
-            margin-top: 10px;
-        }
-        .progressBarSailing {
-            height: 100%;
-            background-color: var(--sailing-color);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-size: 11px;
-            font-weight: bold;
-            transition: width 0.3s ease;
-        }
-        .progressBarMotoring {
-            height: 100%;
-            background-color: var(--motoring-color);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-size: 11px;
-            font-weight: bold;
-            transition: width 0.3s ease;
-        }
-        .infoItem.fullWidth {
-            grid-column: 1 / -1;
-        }
         .analyticsTitle {
             font-size: 14px;
             font-weight: bold;
@@ -147,17 +80,13 @@
             gap: 30px;
             margin-bottom: 30px;
         }
-        .mapContainer {
-            display: flex;
-            flex-direction: column;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 20px;
-        }
         #map {
             flex: 1;
             min-height: 300px;
+        }
+        .map-card {
+            display: flex;
+            flex-direction: column;
         }
         .mapLegend {
             margin-top: 15px;
@@ -185,12 +114,6 @@
             color: var(--text-secondary);
             white-space: nowrap;
         }
-        .legendSubItem {
-            flex-basis: 100%;
-            font-size: 12px;
-            color: var(--text-tertiary);
-            margin-left: 0;
-        }
         .legendColor {
             width: 16px;
             height: 16px;
@@ -210,32 +133,16 @@
             font-size: 12px;
             color: white;
         }
-        .legendSubItem {
-            margin-left: 26px;
-            font-size: 12px;
-            color: var(--text-tertiary);
-        }
-        #map {
-            flex: 1;
-            min-height: 300px;
-        }
         .chartsContainer {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
             gap: 30px;
         }
+
         .chartWrapper {
             min-height: 400px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 20px;
         }
-        .chartWithToolbar {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
+
         .chartToolbar {
             display: flex;
             justify-content: flex-end;
@@ -461,7 +368,7 @@
         function getChartColors() {
             const isDark = document.body.classList.contains('dark-theme');
             return {
-                text: isDark ? '#e0e0e0' : '#666',
+                text: isDark ? '#e0e0e0' : '#333',
                 grid: isDark ? '#444' : '#e0e0e0',
                 background: isDark ? '#2d2d2d' : 'white'
             };
@@ -617,7 +524,7 @@
                     '<div class="tripDescription">' + description + '</div>' +
                     '<div class="navButtons">' +
                     '<button class="navButton" onclick="previousLeg()" title="Previous">← Prev</button>' +
-                    '<div class="legDisplay" id="legDisplay">Entire Trip</div>' +
+                    '<div class="legDisplay" id="legDisplay">Entire Trip (' + currentLegs.length + ' legs)</div>' +
                     '<button class="navButton" onclick="nextLeg()" title="Next">Next →</button>' +
                     '</div>' +
                     '</div>';
@@ -641,7 +548,7 @@
             const displayEl = document.getElementById('legDisplay');
             
             if (leg === null) {
-                displayEl.textContent = 'Entire Trip';
+                displayEl.textContent = 'Entire Trip (' + currentLegs.length + ' legs)';
                 selectLeg(null);
             } else {
                 const totalLegs = currentLegs.length;
@@ -775,69 +682,71 @@
             const motoringTime = trip.motoring_time_ms;
             const sailingTimePercent = totalTime > 0 ? (sailingTime / totalTime * 100) : 0;
 
-            content.innerHTML = '<div class="infoAndMapContainer"><div class="tripInfo">' +
-                '<div class="infoRow" style="font-size: 0.9em;">' +
-                    '<div class="infoItem">' +
-                        '<div class="infoLabel">Start Date</div>' +
-                        '<div class="infoValue">' + formatDate(trip.start_date) + '</div>' +
+            content.innerHTML = '<div class="infoAndMapContainer"><div class="app-card">' +
+                '<div class="card-stats">' +
+                    '<div class="card-stat">' +
+                        '<div class="card-stat-label">Start Date</div>' +
+                        '<div class="card-stat-value">' + formatDate(trip.start_date) + '</div>' +
+                        '<div class="card-stat-detail">' + formatTime(trip.start_date) + '</div>' +
                     '</div>' +
-                    '<div class="infoItem">' +
-                        '<div class="infoLabel">End Date</div>' +
-                        '<div class="infoValue">' + formatDate(trip.end_date) + '</div>' +
+                    '<div class="stat-divider"></div>' +
+                    '<div class="card-stat">' +
+                        '<div class="card-stat-label">End Date</div>' +
+                        '<div class="card-stat-value">' + formatDate(trip.end_date) + '</div>' +
+                        '<div class="card-stat-detail">' + formatTime(trip.end_date) + '</div>' +
                     '</div>' +
-                    '<div class="infoItem">' +
-                        '<div class="infoLabel">Duration</div>' +
-                        '<div class="infoValue">' + calculateDuration(trip.start_date, trip.end_date) + '</div>' +
+                    '<div class="stat-divider"></div>' +
+                    '<div class="card-stat">' +
+                        '<div class="card-stat-label">Duration</div>' +
+                        '<div class="card-stat-value">' + calculateDuration(trip.start_date, trip.end_date) + '</div>' +
                     '</div>' +
-                '</div>' +
-                '<div class="infoRow">' +
-                    '<div class="infoItem">' +
-                        '<div class="infoLabel">Total Distance</div>' +
-                        '<div class="infoValue">' + totalDistance.toFixed(1) + ' NM</div>' +
-                    '</div>' +
-                    '<div class="infoItem">' +
-                        '<div class="infoLabel">Distance Sailed</div>' +
-                        '<div class="infoValue">' + sailingDistance.toFixed(1) + ' NM</div>' +
-                    '</div>' +
-                    '<div class="infoItem">' +
-                        '<div class="infoLabel">Distance Motoring</div>' +
-                        '<div class="infoValue">' + motoringDistance.toFixed(1) + ' NM</div>' +
+                    '<div class="stat-divider"></div>' +
+                    '<div class="card-stat">' +
+                        '<div class="card-stat-label">Total Distance</div>' +
+                        '<div class="card-stat-value">' + totalDistance.toFixed(1) + ' NM</div>' +
                     '</div>' +
                 '</div>' +
-                '<div class="infoRow">' +
-                    '<div class="infoItem">' +
-                        '<div class="infoLabel">Navigation Time</div>' +
-                        '<div class="infoValue">' + formatDuration(totalTime) + '</div>' +
+                '<div class="card-stats">' +
+                    '<div class="card-stat">' +
+                        '<div class="card-stat-label">Navigation Time</div>' +
+                        '<div class="card-stat-value">' + formatDuration(totalTime) + '</div>' +
                     '</div>' +
-                    '<div class="infoItem">' +
-                        '<div class="infoLabel">Sailing Time</div>' +
-                        '<div class="infoValue">' + formatDuration(sailingTime) + ' (' + sailingTimePercent.toFixed(1) + '%)</div>' +
+                    '<div class="stat-divider"></div>' +
+                    '<div class="card-stat">' +
+                        '<div class="card-stat-label">Sailing Time</div>' +
+                        '<div class="card-stat-value">' + formatDuration(sailingTime) + ' (' + sailingTimePercent.toFixed(1) + '%)</div>' +
                     '</div>' +
-                    '<div class="infoItem">' +
-                        '<div class="infoLabel">Motoring Time</div>' +
-                        '<div class="infoValue">' + formatDuration(motoringTime) + ' (' + (100 - sailingTimePercent).toFixed(1) + '%)</div>' +
-                    '</div>' +
-                '</div>' +
-                '<div class="infoItem fullWidth">' +
-                    '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 12px; color: var(--text-secondary);">' +
-                        '<div>Sailing</div>' +
-                        '<div>Motoring</div>' +
-                    '</div>' +
-                    '<div class="progressBarContainer">' +
-                        '<div class="progressBarSailing" style="width: ' + sailingPercent.toFixed(1) + '%;">' + (sailingPercent.toFixed(1) > 5 ? sailingPercent.toFixed(0) + '%' : '') + '</div>' +
-                        '<div class="progressBarMotoring" style="width: ' + (100 - sailingPercent).toFixed(1) + '%;">' + ((100 - sailingPercent).toFixed(1) > 5 ? (100 - sailingPercent).toFixed(0) + '%' : '') + '</div>' +
+                    '<div class="stat-divider"></div>' +
+                    '<div class="card-stat">' +
+                        '<div class="card-stat-label">Motoring Time</div>' +
+                        '<div class="card-stat-value">' + formatDuration(motoringTime) + ' (' + (100 - sailingTimePercent).toFixed(1) + '%)</div>' +
                     '</div>' +
                 '</div>' +
-                '<div class="infoItem fullWidth" style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 20px;">' +
+                '<div class="voyage-bar-wrap">' +
+                    '<div class="voyage-bar">' +
+                        '<div class="vb-sail" style="width: ' + sailingPercent.toFixed(1) + '%"></div>' +
+                        '<div class="vb-motor" style="width: ' + (100 - sailingPercent).toFixed(1) + '%"></div>' +
+                    '</div>' +
+                    '<div class="voyage-bar-legend">' +
+                        '<div class="vbl-item">' +
+                            '<div class="vbl-dot sail"></div>' +
+                            '<span><span class="vbl-val">' + sailingDistance.toFixed(1) + ' NM</span> sailing</span>' +
+                        '</div>' +
+                        '<div class="vbl-item">' +
+                            '<div class="vbl-dot motor"></div>' +
+                            '<span><span class="vbl-val">' + motoringDistance.toFixed(1) + ' NM</span> motoring</span>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="card-stat fullWidth" style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 20px;">' +
                     '<div class="analyticsTitle" id="analyticsTitle">Performance Analytics</div>' +
                     '<div class="analyticsGrid" id="analyticsGrid">' +
                     '</div>' +
                 '</div>' +
             '</div>' +
-            '<div class="mapContainer">' +
+            '<div class="app-card map-card">' +
                 '<div id="map"></div>' +
                 '<div id="mapLegend" class="mapLegend">' +
-                    '<div class="legendTitle">Track Color Legend</div>' +
                     '<div class="legendItem">' +
                         '<div class="legendColor" style="background-color: #FFD700;"></div>' +
                         '<span>Unknown Engine Status</span>' +
@@ -848,7 +757,7 @@
                     '</div>' +
                     '<div class="legendItem">' +
                         '<div class="legendColorGradient">●</div>' +
-                        '<span>Sailing (Engine Off) - Color by Speed</span>' +
+                        '<span>Sailing (Engine Off)</span>' +
                     '</div>' +
                 '</div>' +
             '</div></div>' +
@@ -869,10 +778,10 @@
 
         function renderTimeSeriesCharts(trackData) {
             // Build HTML for time series charts
-            const chartsHTML = '<div class="chartWrapper">' +
+            const chartsHTML = '<div class="app-card">' +
                     '<canvas id="speedChart"></canvas>' +
                 '</div>' +
-                '<div class="chartWithToolbar">' +
+                '<div class="app-card">' +
                     '<div class="chartToolbar">' +
                         '<button id="headingScaleBtn" class="chartToggleBtn" onclick="toggleHeadingScale()">Switch to −180…180</button>' +
                     '</div>' +
@@ -880,10 +789,10 @@
                         '<canvas id="headingChart"></canvas>' +
                     '</div>' +
                 '</div>' +
-                '<div class="chartWrapper">' +
+                '<div class="app-card">' +
                     '<canvas id="windSpeedChart"></canvas>' +
                 '</div>' +
-                '<div class="chartWithToolbar">' +
+                '<div class="app-card">' +
                     '<div class="chartToolbar">' +
                         '<button id="windDirectionScaleBtn" class="chartToggleBtn" onclick="toggleWindDirectionScale()">Switch to −180…180</button>' +
                     '</div>' +
@@ -1023,16 +932,16 @@
 
                 // Build charts container HTML for secondary charts
                 const chartsHTML = 
-                    '<div class="chartWrapper">' +
+                    '<div class="app-card">' +
                         '<canvas id="speedDistributionChart"></canvas>' +
                     '</div>' +
-                    '<div class="chartWrapper">' +
+                    '<div class="app-card">' +
                         '<canvas id="windStatisticsChart"></canvas>' +
                     '</div>' +
-                    '<div class="chartWrapper">' +
+                    '<div class="app-card">' +
                         '<canvas id="atmosphericPressureChart"></canvas>' +
                     '</div>' +
-                    '<div class="chartWithToolbar">' +
+                    '<div class="app-card">' +
                         '<div class="chartToolbar">' +
                             '<button id="absoluteWindDirectionScaleBtn" class="chartToggleBtn" onclick="toggleAbsoluteWindDirectionScale()">Switch to −180…180</button>' +
                         '</div>' +
@@ -1040,10 +949,10 @@
                             '<canvas id="absoluteWindDirectionChart"></canvas>' +
                         '</div>' +
                     '</div>' +
-                    '<div class="chartWrapper">' +
+                    '<div class="app-card">' +
                         '<canvas id="cabinTemperatureChart"></canvas>' +
                     '</div>' +
-                    '<div class="chartWrapper">' +
+                    '<div class="app-card">' +
                         '<canvas id="humidityChart"></canvas>' +
                     '</div>';
 
@@ -1082,10 +991,10 @@
                         }
                     }
                     const rollChartsHTML =
-                        '<div class="chartWrapper">' +
+                        '<div class="app-card">' +
                             '<canvas id="rollAngleChart"></canvas>' +
                         '</div>' +
-                        '<div class="chartWrapper">' +
+                        '<div class="app-card">' +
                             '<canvas id="heelDistributionChart"></canvas>' +
                         '</div>';
                     const rollContainer = document.getElementById('chartsContainer');
@@ -1147,6 +1056,15 @@
                     '<div class="analyticsDetail">Distance: ' + analyticsData.fastest_10nm.distance_nm.toFixed(2) + ' NM</div>' +
                     '<div class="analyticsDetail">Duration: ' + formatDuration(analyticsData.fastest_10nm.duration_ms) + '</div>' +
                     '<div class="analyticsDetail">' + formatTime(analyticsData.fastest_10nm.start_timestamp) + ' → ' + formatTime(analyticsData.fastest_10nm.end_timestamp) + '</div>' +
+                    '</div>';
+            }
+
+            if (analyticsData.average_speed_kn !== null) {
+                html += '<div class="analyticsCard">' +
+                    '<div class="analyticsCardTitle">Average Speed</div>' +
+                    '<div class="analyticsValue">' + analyticsData.average_speed_kn.toFixed(2) + ' knots</div>' +
+                    '<div class="analyticsDetail">' + analyticsData.average_speed_sailing_kn.toFixed(2) + ' knots <span class="analyticsLabel">Sailing</span></div>' +
+                    '<div class="analyticsDetail">' + analyticsData.average_speed_motoring_kn.toFixed(2) + ' knots <span class="analyticsLabel">Motoring</span></div>' +
                     '</div>';
             }
 
@@ -1860,14 +1778,14 @@
                     datasets: [{
                         label: 'Sailing (NM)',
                         data: speedDistData.sailing,
-                        backgroundColor: '#27ae60',
-                        borderColor: '#229954',
+                        backgroundColor: getComputedStyle(document.documentElement).getPropertyValue('--sailing-color').trim(),
+                        borderColor: getComputedStyle(document.documentElement).getPropertyValue('--sailing-color').trim(),
                         borderWidth: 1
                     }, {
                         label: 'Motoring (NM)',
                         data: speedDistData.motoring,
-                        backgroundColor: '#e74c3c',
-                        borderColor: '#c0392b',
+                        backgroundColor: getComputedStyle(document.documentElement).getPropertyValue('--motoring-color').trim(),
+                        borderColor: getComputedStyle(document.documentElement).getPropertyValue('--motoring-color').trim(),
                         borderWidth: 1
                     }]
                 },
@@ -2504,11 +2422,22 @@
             return '#' + toHex(r) + toHex(g) + toHex(b);
         }
 
-        function formatDate(dateStr) {
+        function formatDateTime(dateStr) {
             if (!dateStr) return 'Unknown';
             try {
                 const date = new Date(dateStr);
                 return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+            } catch (e) {
+                return dateStr;
+            }
+        }
+    
+        function formatDate(dateStr) {
+            if (!dateStr) return 'Unknown';
+            try {
+                const date = new Date(dateStr);
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+                // return date.toLocaleDateString();
             } catch (e) {
                 return dateStr;
             }

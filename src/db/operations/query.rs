@@ -598,7 +598,10 @@ impl VesselDatabase {
                 vs.latitude,
                 vs.longitude,
                 vs.average_speed_kn,
-                vs.engine_on
+                vs.engine_on,
+                vs.is_moored,
+                vs.total_distance_nm,
+                vs.total_time_ms
              FROM vessel_status vs
              WHERE vs.timestamp BETWEEN '{}' AND '{}'
              AND vs.average_speed_kn IS NOT NULL
@@ -616,11 +619,25 @@ impl VesselDatabase {
             return Ok(TrackAnalytics {
                 max_speed_kn: None,
                 max_speed_timestamp: None,
+                average_speed_kn: None,
+                average_speed_sailing_kn: None,
+                average_speed_motoring_kn: None,
                 fastest_1nm: None,
                 fastest_5nm: None,
                 fastest_10nm: None,
             });
         }
+
+        let mut distance = 0.0;
+        let mut time_h = 0.0;
+        let mut distance_engine = 0.0;
+        let mut time_engine_h = 0.0;
+        let mut distance_sailing = 0.0;
+        let mut time_sailing_h = 0.0;
+
+        // Find max speed when sailing
+        let mut max_speed = None;
+        let mut max_speed_timestamp = None;
 
         // Collect track points
         let mut track_points = Vec::new();
@@ -638,19 +655,33 @@ impl VesselDatabase {
                 .and_then(|v| v.ok())
                 .map(|v: u8| v == 1) // Only treat 1 (On) as true
                 .unwrap_or(false);
+            let is_moored: bool = row.get_opt("is_moored")
+                .and_then(|v| v.ok())
+                .unwrap_or(false);
+            let sample_distance: f64 = row.get_opt("total_distance_nm")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let sample_time_ms: u64 = row.get_opt("total_time_ms")
+                .and_then(|v| v.ok())
+                .unwrap_or(0);
 
             if let (Some(lat), Some(lon), Some(spd)) = (latitude, longitude, speed) {
+                if !engine_on && (max_speed.is_none() || spd > max_speed.unwrap()) {
+                    max_speed = Some(spd);
+                    max_speed_timestamp = Some(timestamp.clone());
+                }
+                if !is_moored {
+                    distance += sample_distance;
+                    time_h += sample_time_ms as f64 / 3600000.0; // Convert ms to hours
+                    if engine_on {
+                        distance_engine += sample_distance;
+                        time_engine_h += sample_time_ms as f64 / 3600000.0;
+                    } else {
+                        distance_sailing += sample_distance;
+                        time_sailing_h += sample_time_ms as f64 / 3600000.0;
+                    }
+                }
                 track_points.push((timestamp, lat, lon, spd, engine_on));
-            }
-        }
-
-        // Find max speed when sailing
-        let mut max_speed = None;
-        let mut max_speed_timestamp = None;
-        for (timestamp, _, _, speed, engine_on) in &track_points {
-            if !engine_on && (max_speed.is_none() || *speed > max_speed.unwrap()) {
-                max_speed = Some(*speed);
-                max_speed_timestamp = Some(timestamp.clone());
             }
         }
 
@@ -662,6 +693,9 @@ impl VesselDatabase {
         Ok(TrackAnalytics {
             max_speed_kn: max_speed,
             max_speed_timestamp,
+            average_speed_kn: if time_h > 0.0 { Some(distance / time_h) } else { None },
+            average_speed_sailing_kn: if time_sailing_h > 0.0 { Some(distance_sailing / time_sailing_h) } else { None },
+            average_speed_motoring_kn: if time_engine_h > 0.0 { Some(distance_engine / time_engine_h) } else { None },
             fastest_1nm,
             fastest_5nm,
             fastest_10nm,
