@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backup - NMEA Router</title>
+    <link rel="icon" type="image/png" href="/nmeasail.png">
+    <link rel="stylesheet" href="/shared.css">
+    <script src="/shared-theme.js"></script>
+    <style>
+        .backup-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .backup-table th,
+        .backup-table td {
+            padding: 10px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 14px;
+        }
+
+        .backup-table th {
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .backup-table td:last-child {
+            text-align: right;
+            white-space: nowrap;
+        }
+
+        .backup-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .backup-table tbody tr:hover {
+            background-color: rgba(52, 152, 219, 0.08);
+        }
+
+        .file-size {
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 50px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+
+        .status-bar {
+            margin-top: 16px;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .status-bar.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        body.dark-theme .status-bar.success {
+            background: #1a3d2b;
+            color: #7bcea0;
+            border-color: #2d6a4f;
+        }
+
+        .status-bar.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        body.dark-theme .status-bar.error {
+            background: #3d1a1e;
+            color: #f1a8ad;
+            border-color: #6a2d32;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .app-btn.spinning {
+            animation: spin 0.7s linear infinite;
+            display: inline-block;
+        }
+
+        .trip-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            flex: 1;
+        }
+    </style>
+</head>
+<body>
+    <div id="headerContainer"></div>
+
+    <div class="level-1-container">
+        <div class="trip-header"><h2>Database Backup</h2><div><button class="app-btn" id="btnGenerate" onclick="generateBackup()" title="Generate new backup">🖴</button><button class="app-btn" id="btnDeleteAll" onclick="deleteAllBackups()" title="Delete all backups">🗑</button></div></div>
+
+        <div id="statusBar" class="status-bar"></div>
+
+        <div id="loadingState" style="text-align:center; padding: 40px; color: var(--text-secondary);">
+            Loading backups&hellip;
+        </div>
+
+        <div id="emptyState" class="empty-state" style="display:none;">
+            <div class="empty-state-icon">🖴</div>
+            <div>No backups available</div>
+            <div style="font-size:13px; margin-top:6px;">Click the <strong>🖴</strong> button to create one.</div>
+        </div>
+
+        <table class="backup-table" id="backupTable" style="display:none;">
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th>Size</th>
+                    <th>Created</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="backupTableBody"></tbody>
+        </table>
+    </div>
+
+    <script>
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('backup');
+        initializeTheme();
+
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function showStatus(message, type) {
+            const bar = document.getElementById('statusBar');
+            bar.textContent = message;
+            bar.className = 'status-bar ' + type;
+            bar.style.display = 'block';
+            if (type === 'success') {
+                setTimeout(() => { bar.style.display = 'none'; }, 4000);
+            }
+        }
+
+        function hideStatus() {
+            document.getElementById('statusBar').style.display = 'none';
+        }
+
+        function setButtonsDisabled(disabled) {
+            document.getElementById('btnGenerate').disabled = disabled;
+            document.getElementById('btnDeleteAll').disabled = disabled;
+            document.querySelectorAll('.btn-delete-one').forEach(b => b.disabled = disabled);
+        }
+
+        async function loadBackups() {
+            document.getElementById('loadingState').style.display = 'block';
+            document.getElementById('emptyState').style.display = 'none';
+            document.getElementById('backupTable').style.display = 'none';
+
+            try {
+                const resp = await fetch('/api/backup');
+                const result = await resp.json();
+                if (result.status !== 'ok') throw new Error(result.error || 'Unknown error');
+                renderBackups(result.data);
+            } catch (e) {
+                document.getElementById('loadingState').style.display = 'none';
+                showStatus('Failed to load backups: ' + e.message, 'error');
+            }
+        }
+
+        function renderBackups(files) {
+            document.getElementById('loadingState').style.display = 'none';
+            const tbody = document.getElementById('backupTableBody');
+            tbody.innerHTML = '';
+
+            if (!files || files.length === 0) {
+                document.getElementById('emptyState').style.display = 'block';
+                document.getElementById('backupTable').style.display = 'none';
+                document.getElementById('btnDeleteAll').disabled = true;
+                return;
+            }
+
+            document.getElementById('btnDeleteAll').disabled = false;
+            files.forEach(f => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${escapeHtml(f.name)}</td>
+                    <td class="file-size">${formatBytes(f.size)}</td>
+                    <td class="file-size">${escapeHtml(f.modified)}</td>
+                    <td style="text-align:right; white-space:nowrap;">
+                        <a class="app-btn" href="/api/backup/download?file=${encodeURIComponent(f.name)}" download="${escapeHtml(f.name)}" title="Download backup" style="text-decoration:none;">⬇</a>
+                        <button class="app-btn btn-delete-one" onclick="deleteBackup('${escapeHtml(f.name)}')" title="Delete backup">🗑</button>
+                    </td>`;
+                tbody.appendChild(tr);
+            });
+
+            document.getElementById('backupTable').style.display = 'table';
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        async function generateBackup() {
+            hideStatus();
+            setButtonsDisabled(true);
+            const btn = document.getElementById('btnGenerate');
+            const originalText = btn.textContent;
+            btn.classList.add('spinning');
+
+            try {
+                const resp = await fetch('/api/backup', { method: 'POST' });
+                const result = await resp.json();
+                if (result.status !== 'ok') throw new Error(result.error || 'Backup failed');
+                showStatus('Backup created: ' + result.data.file, 'success');
+                await loadBackups();
+            } catch (e) {
+                showStatus('Backup failed: ' + e.message, 'error');
+            } finally {
+                btn.classList.remove('spinning');
+                setButtonsDisabled(false);
+            }
+        }
+
+        async function deleteBackup(filename) {
+            if (!confirm('Delete backup "' + filename + '"?')) return;
+            hideStatus();
+            setButtonsDisabled(true);
+            try {
+                const resp = await fetch('/api/backup?file=' + encodeURIComponent(filename), { method: 'DELETE' });
+                const result = await resp.json();
+                if (result.status !== 'ok') throw new Error(result.error || 'Delete failed');
+                showStatus('Deleted: ' + filename, 'success');
+                await loadBackups();
+            } catch (e) {
+                showStatus('Delete failed: ' + e.message, 'error');
+            } finally {
+                setButtonsDisabled(false);
+            }
+        }
+
+        async function deleteAllBackups() {
+            if (!confirm('Delete ALL backups? This cannot be undone.')) return;
+            hideStatus();
+            setButtonsDisabled(true);
+            try {
+                const resp = await fetch('/api/backup?all=true', { method: 'DELETE' });
+                const result = await resp.json();
+                if (result.status !== 'ok') throw new Error(result.error || 'Delete failed');
+                showStatus('All backups deleted.', 'success');
+                await loadBackups();
+            } catch (e) {
+                showStatus('Delete failed: ' + e.message, 'error');
+            } finally {
+                setButtonsDisabled(false);
+            }
+        }
+
+        // Load on startup
+        loadBackups();
+    </script>
+</body>
+</html>

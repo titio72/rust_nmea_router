@@ -67,7 +67,8 @@ function createHeaderBar(currentPage) {
         { href: '/realtime.html', label: 'Monitor', page: 'monitor' },
         { href: '/ais.html', label: 'AIS', page: 'ais' },
         { href: '/yearly-stats.html', label: 'Stats', page: 'stats' },
-        { href: '/signalk-browser.html', label: 'SignalK Browser', page: 'signalk-browser' }
+        { href: '/signalk-browser.html', label: 'SignalK Browser', page: 'signalk-browser' },
+        { href: '/backup.html', label: 'Backup', page: 'backup' }
     ];
 
     let headerHTML = `

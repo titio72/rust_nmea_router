@@ -9,6 +9,7 @@ use tower_http::services::ServeDir;
 use tower_http::cors::{CorsLayer, Any};
 use tracing::info;
 
+use std::sync::atomic::AtomicBool;
 use crate::db::VesselDatabase;
 use crate::config::Config;
 use crate::utilities::cleanup_old_exports;
@@ -23,7 +24,12 @@ pub async fn start_web_server(
     // Get the global SignalK broadcast channels
     let signalk_broadcast = get_signalk_channels();
     
-    let state = AppState { db, config, signalk_broadcast };
+    let state = AppState {
+        db,
+        config,
+        signalk_broadcast,
+        backup_in_progress: Arc::new(AtomicBool::new(false)),
+    };
 
     // Spawn cleanup task to remove old exports every 24 hours
     tokio::spawn(async {

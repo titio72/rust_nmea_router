@@ -1,7 +1,8 @@
 use axum::{
+    body::Body,
     extract::{DefaultBodyLimit, Query, State, Multipart},
-    http::StatusCode,
-    response::Json,
+    http::{header, StatusCode},
+    response::{Json, Response},
     routing::get,
     routing::post,
     routing::delete,
@@ -9,7 +10,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::{info, error, Span};
-use std::{backtrace::Backtrace, sync::Arc, time::Duration};
+use std::{backtrace::Backtrace, sync::Arc, sync::atomic::{AtomicBool, Ordering}, time::Duration};
 use tower_http::trace::TraceLayer;
 
 use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData, SpeedDistributionData, WindStatisticsData, TripLegsData, TrackAnalytics, HeatmapData};
@@ -23,6 +24,7 @@ pub struct AppState {
     pub db: Arc<VesselDatabase>,
     pub config: Arc<Config>,
     pub signalk_broadcast: Arc<SignalKBroadcastChannels>,
+    pub backup_in_progress: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -143,6 +145,29 @@ pub struct SignalKStatusRequest {
 #[derive(Debug, Serialize)]
 pub struct SignalKStatusResponse {
     pub enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BackupResponse {
+    pub file: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BackupFileInfo {
+    pub name: String,
+    pub size: u64,
+    pub modified: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteBackupQuery {
+    pub file: Option<String>,
+    pub all: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DownloadBackupQuery {
+    pub file: String,
 }
 
 pub async fn get_trips(
@@ -651,6 +676,203 @@ pub async fn set_signalk_status(
     Ok(Json(ApiResponse::ok(response)))
 }
 
+pub async fn download_backup(
+    Query(params): Query<DownloadBackupQuery>,
+) -> Result<Response<Body>, StatusCode> {
+    let filename = &params.file;
+
+    // Prevent path traversal
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let path = std::path::Path::new("backups").join(filename);
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!(error = %e, file = %filename, "Failed to read backup file");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    let disposition = format!("attachment; filename=\"{}\"", filename);
+    let response = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/gzip")
+        .header(header::CONTENT_DISPOSITION, disposition)
+        .header(header::CONTENT_LENGTH, bytes.len())
+        .body(Body::from(bytes))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    info!(file = %filename, "Backup download served");
+    Ok(response)
+}
+
+pub async fn list_backups() -> Result<Json<ApiResponse<Vec<BackupFileInfo>>>, StatusCode> {
+    use std::fs;
+
+    let backup_dir = std::path::Path::new("backups");
+    if !backup_dir.exists() {
+        return Ok(Json(ApiResponse::ok(vec![])));
+    }
+
+    match fs::read_dir(backup_dir) {
+        Ok(entries) => {
+            let mut files = Vec::new();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let (Ok(metadata), Some(name_str)) = (
+                        path.metadata(),
+                        path.file_name().and_then(|n| n.to_str()),
+                    ) {
+                        let modified = metadata
+                            .modified()
+                            .map(|t| {
+                                chrono::DateTime::<chrono::Utc>::from(t)
+                                    .format("%Y-%m-%d %H:%M:%S UTC")
+                                    .to_string()
+                            })
+                            .unwrap_or_else(|_| "Unknown".to_string());
+                        files.push(BackupFileInfo {
+                            name: name_str.to_string(),
+                            size: metadata.len(),
+                            modified,
+                        });
+                    }
+                }
+            }
+            files.sort_by(|a, b| b.name.cmp(&a.name));
+            Ok(Json(ApiResponse::ok(files)))
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to read backups directory");
+            Ok(Json(ApiResponse::error(e.to_string())))
+        }
+    }
+}
+
+pub async fn delete_backup(
+    Query(params): Query<DeleteBackupQuery>,
+) -> Result<Json<ApiResponse<()>>, StatusCode> {
+    use std::fs;
+
+    let backup_dir = std::path::Path::new("backups");
+
+    if params.all.unwrap_or(false) {
+        // Delete all backup files
+        match fs::read_dir(backup_dir) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Err(e) = fs::remove_file(&path) {
+                            error!(path = %path.display(), error = %e, "Failed to delete backup file");
+                            return Ok(Json(ApiResponse::error(format!(
+                                "Failed to delete {}: {}",
+                                path.display(),
+                                e
+                            ))));
+                        }
+                    }
+                }
+                info!("All backups deleted");
+                Ok(Json(ApiResponse::ok(())))
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to read backups directory");
+                Ok(Json(ApiResponse::error(e.to_string())))
+            }
+        }
+    } else if let Some(filename) = params.file {
+        // Validate filename to prevent path traversal
+        if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+            return Ok(Json(ApiResponse::error("Invalid filename".to_string())));
+        }
+        let path = backup_dir.join(&filename);
+        match fs::remove_file(&path) {
+            Ok(()) => {
+                info!(file = %filename, "Backup deleted");
+                Ok(Json(ApiResponse::ok(())))
+            }
+            Err(e) => {
+                error!(error = %e, file = %filename, "Failed to delete backup");
+                Ok(Json(ApiResponse::error(format!("Failed to delete {}: {}", filename, e))))
+            }
+        }
+    } else {
+        Ok(Json(ApiResponse::error(
+            "Specify 'file' or 'all=true'".to_string(),
+        )))
+    }
+}
+
+pub async fn post_backup(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<BackupResponse>>, StatusCode> {
+    // Reject concurrent backup requests atomically
+    if state.backup_in_progress
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        return Ok(Json(ApiResponse::error(
+            "A backup is already in progress".to_string(),
+        )));
+    }
+
+    let backup_dir = std::path::Path::new("backups");
+    if !backup_dir.exists() {
+        if let Err(e) = std::fs::create_dir_all(backup_dir) {
+            state.backup_in_progress.store(false, Ordering::Release);
+            error!(error = %e, "Failed to create backup directory");
+            return Ok(Json(ApiResponse::error(format!(
+                "Failed to create backup directory: {}", e
+            ))));
+        }
+    }
+
+    let filename = format!(
+        "backup_{}.gz",
+        chrono::Utc::now().format("%Y%m%d_%H%M%S")
+    );
+    let output_path = backup_dir.join(&filename);
+    let output_str = output_path.to_string_lossy().to_string();
+
+    let db_cfg = &state.config.database.connection;
+    let user = db_cfg.username.clone();
+    let password = db_cfg.password.clone();
+
+    info!(output = %output_str, "Starting database backup");
+
+    let result = tokio::process::Command::new("./backup.sh")
+        .arg(&user)
+        .arg(&password)
+        .arg(&output_str)
+        .output()
+        .await;
+
+    state.backup_in_progress.store(false, Ordering::Release);
+
+    match result {
+        Ok(output) if output.status.success() => {
+            info!(file = %filename, "Backup completed successfully");
+            Ok(Json(ApiResponse::ok(BackupResponse { file: filename })))
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            error!(stderr = %stderr, "Backup script failed");
+            Ok(Json(ApiResponse::error(format!("Backup failed: {}", stderr))))
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to execute backup script");
+            Ok(Json(ApiResponse::error(format!(
+                "Failed to execute backup script: {}", e
+            ))))
+        }
+    }
+}
+
 pub fn create_api_router(state: AppState) -> Router {
     Router::new()
         .route("/trip_description", post(update_trip_description))
@@ -679,6 +901,10 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/metrics/status", post(set_metrics_status))
         .route("/signalk/status", get(get_signalk_status))
         .route("/signalk/status", post(set_signalk_status))
+        .route("/backup", get(list_backups))
+        .route("/backup", post(post_backup))
+        .route("/backup", delete(delete_backup))
+        .route("/backup/download", get(download_backup))
         .layer(
             TraceLayer::new_for_http()
                 .on_request(|request: &axum::http::Request<_>, _span: &Span| {
@@ -730,6 +956,7 @@ mod tests {
             db: Arc::new(db),
             config: Arc::new(config),
             signalk_broadcast,
+            backup_in_progress: Arc::new(AtomicBool::new(false)),
         };
         create_api_router(state)
     }
