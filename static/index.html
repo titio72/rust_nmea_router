@@ -517,7 +517,7 @@
 
     <!-- Trips Section -->
     <div id="tripsSection" class="level-1-container">
-        <div class="trip-header"><h2>Trips</h2><button class="app-btn" onclick="triggerImportDialog()" title="Import trip">⬆</button></div>
+        <div class="trip-header"><h2 id="tripsTitle">Trips</h2><button class="app-btn" onclick="triggerImportDialog()" title="Import trip">⬆</button></div>
         <div id="content">
             <div class="loading">Loading trips...</div>
         </div>
@@ -587,24 +587,27 @@
         }
 
         function filterTrips() {
-            const filterValue = document.getElementById('yearFilter').value;
             let filteredTrips = window.allTrips || [];
 
-            if (filterValue !== '12months') {
-                const selectedYear = parseInt(filterValue);
-                filteredTrips = filteredTrips.filter(trip => {
-                    if (trip.start_date) {
-                        const year = new Date(trip.start_date).getFullYear();
-                        return year === selectedYear;
-                    }
-                    return false;
-                });
-            }
+            const endDate = getHeatmapEndDate();
+            const startDate = new Date(endDate);
+            startDate.setDate(startDate.getDate() - 364);
+
+            const startDateStr = startDate.toISOString().split('T')[0];
+            const endDateStr = endDate.toISOString().split('T')[0];
+
+            filteredTrips = filteredTrips.filter(trip => {
+                const tripStartDate = trip.start_date.split('T')[0];
+                const tripEndDate = trip.end_date.split('T')[0];
+                return tripEndDate >= startDateStr && tripStartDate <= endDateStr;
+            });
 
             display_trips(filteredTrips);
         }
 
         function display_trips(trips) {
+            document.getElementById('tripsTitle').textContent = `Trips (${trips.length})`;
+
             const content = document.getElementById('content');
 
             if (!trips || trips.length === 0) {

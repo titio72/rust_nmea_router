@@ -700,11 +700,6 @@
                         '<div class="card-stat-label">Duration</div>' +
                         '<div class="card-stat-value">' + calculateDuration(trip.start_date, trip.end_date) + '</div>' +
                     '</div>' +
-                    '<div class="stat-divider"></div>' +
-                    '<div class="card-stat">' +
-                        '<div class="card-stat-label">Total Distance</div>' +
-                        '<div class="card-stat-value">' + totalDistance.toFixed(1) + ' NM</div>' +
-                    '</div>' +
                 '</div>' +
                 '<div class="card-stats">' +
                     '<div class="card-stat">' +
@@ -720,6 +715,24 @@
                     '<div class="card-stat">' +
                         '<div class="card-stat-label">Motoring Time</div>' +
                         '<div class="card-stat-value">' + formatDuration(motoringTime) + ' (' + (100 - sailingTimePercent).toFixed(1) + '%)</div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="card-stats">' +
+                    '<div class="card-stat">' +
+                        '<div class="card-stat-label">Total Distance</div>' +
+                        '<div class="card-stat-value">' + totalDistance.toFixed(1) + ' NM</div>' +
+                    '</div>' +
+                    '<div class="stat-divider"></div>' +
+                    '<div class="card-stat">' +
+                        '<div class="card-stat-label">Sailing</div>' +
+                        '<div class="card-stat-value">' + sailingDistance.toFixed(1) + ' NM</div>' +
+                        '<div class="card-stat-detail"><span class="sailing-percentage">' + sailingPercent.toFixed(1) + '%</span></div>' +
+                    '</div>' +
+                    '<div class="stat-divider"></div>' +
+                    '<div class="card-stat">' +
+                        '<div class="card-stat-label">Motoring</div>' +
+                        '<div class="card-stat-value">' + motoringDistance.toFixed(1) + ' NM</div>' +
+                        '<div class="card-stat-detail"><span class="motoring-percentage">' + (100 - sailingPercent).toFixed(1) + '%</span></div>' +
                     '</div>' +
                 '</div>' +
                 '<div class="voyage-bar-wrap">' +

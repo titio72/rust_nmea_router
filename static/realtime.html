@@ -176,7 +176,7 @@
         <div class="cards-grid">
             <!-- GNSS & Time Information Card -->
             <div class="app-card">
-                <div class="card-title">GNSS & Navigation</div>
+                <div class="card-title">GNSS</div>
 
                 <div class="data-row">
                     <span class="data-label">Latitude</span>
@@ -196,22 +196,6 @@
                 <div class="data-row">
                     <span class="data-label">Speed Over Ground</span>
                     <span class="data-value" id="sog">--<span class="data-unit">kn</span></span>
-                </div>
-
-                <div class="data-row">
-                    <span class="data-label">GNSS Time</span>
-                    <span class="data-value" id="gnssTime"
-                        style="font-family: monospace; font-size: 13px;">--</span>
-                </div>
-
-                <div class="data-row">
-                    <span class="data-label">Time Sync Status</span>
-                    <span class="sync-status" id="timeSyncStatus">--</span>
-                </div>
-
-                <div class="data-row">
-                    <span class="data-label">Time Skew</span>
-                    <span class="data-value" id="timeSkew">--<span class="data-unit">ms</span></span>
                 </div>
 
                 <div class="last-update" id="gnssLastUpdate">No data received</div>
@@ -249,15 +233,20 @@
                 <div class="card-title">Wind Data</div>
 
                 <div class="data-row">
+                    <span class="data-label" style="width: 125px;">Apparent Wind</span>
+                    <span class="data-value" style="width: 75px;" id="aws">--<span class="data-unit">kn</span></span>
+                    <span class="data-value" style="width: 75px;" id="awa">--<span class="data-unit">°</span></span>
+                </div>
+                
+                <div class="data-row">
                     <span class="data-label" style="width: 125px;">True Wind</span>
                     <span class="data-value" style="width: 75px;" id="tws">--<span class="data-unit">kn</span></span>
                     <span class="data-value" style="width: 75px;" id="twa">--<span class="data-unit">°</span></span>
                 </div>
 
                 <div class="data-row">
-                    <span class="data-label" style="width: 125px;">Apparent Wind</span>
-                    <span class="data-value" style="width: 75px;" id="aws">--<span class="data-unit">kn</span></span>
-                    <span class="data-value" style="width: 75px;" id="awa">--<span class="data-unit">°</span></span>
+                    <span class="data-label" style="width: 125px;">Absolute Wind</span>
+                    <span class="data-value" style="width: 75px;" id="absolute_wind">--<span class="data-unit">°</span></span>
                 </div>
 
                 <div class="dial-container">
@@ -309,6 +298,28 @@
 
                 <div class="last-update" id="envLastUpdate">No data received</div>
             </div>
+
+            <div class="app-card">
+                <div class="card-title">System Status</div>
+
+                <div class="data-row">
+                    <span class="data-label">GNSS Time</span>
+                    <span class="data-value" id="gnssTime"
+                        style="font-family: monospace; font-size: 13px;">--</span>
+                </div>
+
+                <div class="data-row">
+                    <span class="data-label">Time Sync Status</span>
+                    <span class="sync-status" id="timeSyncStatus">--</span>
+                </div>
+
+                <div class="data-row">
+                    <span class="data-label">Time Skew</span>
+                    <span class="data-value" id="timeSkew">--<span class="data-unit">ms</span></span>
+                </div>
+
+                <div class="last-update" id="systemLastUpdate">No data received</div>
+            </div>                
         </div>
     </div>
 
@@ -468,14 +479,14 @@
                             headingDial.setAttribute('angle', heading_deg);
                         }
                         lastUpdate.gnss = new Date();
-                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        updateLastUpdateTime('navLastUpdate', lastUpdate.gnss);
                         break;
                     
                     // Navigation - GNSS DateTime
                     case 'navigation.datetime':
                         document.getElementById('gnssTime').textContent = value;
                         lastUpdate.gnss = new Date();
-                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        updateLastUpdateTime('systemLastUpdate', lastUpdate.gnss);
                         break;
                     
                     // Wind - True Wind Speed (m/s to knots)
@@ -560,14 +571,14 @@
                         syncBadge.classList.remove('synced', 'not_synced');
                         syncBadge.classList.add(value === 'synced' ? 'synced' : 'not_synced');
                         lastUpdate.gnss = new Date();
-                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        updateLastUpdateTime('systemLastUpdate', lastUpdate.gnss);
                         break;
                     
                     // Time Skew (milliseconds, custom non-standard SignalK path)
                     case 'vessel.timeSkewMs':
                         document.getElementById('timeSkew').textContent = formatValue(value, 0) + 'ms';
                         lastUpdate.gnss = new Date();
-                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        updateLastUpdateTime('systemLastUpdate', lastUpdate.gnss);
                         break;
 
                     // Mooring Status (1 = moored, 0 = underway; custom non-standard SignalK path)
