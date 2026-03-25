@@ -58,6 +58,11 @@ pub struct TripIdQuery {
     pub id: u32,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TripUuidQuery {
+    pub uuid: String,
+}
+
 // Query parameters
 #[derive(Debug, Deserialize)]
 pub struct TripDescriptionQuery {
@@ -198,6 +203,23 @@ pub async fn get_trip(
         }
         Err(e) => {
             error!(error = %e, "Failed to fetch trip");
+            Ok(Json(ApiResponse::error(e.to_string())))
+        }
+    }
+}
+
+pub async fn get_trip_by_uuid(
+    State(state): State<AppState>,
+    Query(params): Query<TripUuidQuery>,
+) -> Result<Json<ApiResponse<TripSummary>>, StatusCode> {
+    match state.db.fetch_trip_by_uuid(&params.uuid) {
+        Ok(Some(trip)) => Ok(Json(ApiResponse::ok(trip))),
+        Ok(None) => {
+            error!(uuid = %params.uuid, "Trip not found by UUID");
+            Ok(Json(ApiResponse::error(format!("Trip with UUID {} not found", params.uuid))))
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to fetch trip by UUID");
             Ok(Json(ApiResponse::error(e.to_string())))
         }
     }
@@ -886,6 +908,7 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/list_exports", get(list_exports))
         .route("/trips", get(get_trips))
         .route("/trip", get(get_trip))
+        .route("/trip_by_uuid", get(get_trip_by_uuid))
         .route("/track", get(get_track))
         .route("/metrics", get(get_metrics))
         .route("/speed_distribution", get(get_speed_distribution))
@@ -1753,5 +1776,81 @@ mod tests {
         assert_eq!(json["status"], "ok");
         assert!(json["data"].is_object());
         assert!(json["data"]["enabled"].is_boolean());
+    }
+
+    #[tokio::test]
+    async fn test_get_trip_by_uuid() {
+        let app = create_test_app();
+
+        // Get a list of trips and pick the first one that has a uuid
+        let list_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/trips?last_months=12")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let list_body = axum::body::to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_json: serde_json::Value = serde_json::from_slice(&list_body).unwrap();
+
+        if let Some(trips) = list_json["data"].as_array() {
+            if let Some(trip) = trips.iter().find(|t| !t["uuid"].is_null()) {
+                let uuid = trip["uuid"].as_str().unwrap().to_string();
+                let trip_id = trip["id"].as_u64().unwrap();
+
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .uri(&format!("/trip_by_uuid?uuid={}", uuid))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+                assert_eq!(json["status"], "ok");
+                assert!(json["data"].is_object());
+                assert_eq!(json["data"]["id"], trip_id, "UUID lookup must return the correct trip");
+                assert_eq!(json["data"]["uuid"], uuid, "Returned uuid must match queried uuid");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_trip_by_uuid_not_found() {
+        let app = create_test_app();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/trip_by_uuid?uuid=00000000-0000-0000-0000-000000000000")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["status"], "error");
+        assert!(
+            json["error"].as_str().unwrap().contains("not found"),
+            "Error message should indicate trip not found"
+        );
     }
 }

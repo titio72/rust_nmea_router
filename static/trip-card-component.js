@@ -20,7 +20,8 @@ class TripCard extends HTMLElement {
             total_time_ms: parseInt(this.getAttribute('data-total-time')) || 0,
             sailing_time_ms: parseInt(this.getAttribute('data-sailing-time')) || 0,
             motoring_time_ms: parseInt(this.getAttribute('data-motoring-time')) || 0,
-            moored_time_ms: parseInt(this.getAttribute('data-moored-time')) || 0
+            moored_time_ms: parseInt(this.getAttribute('data-moored-time')) || 0,
+            uuid: this.getAttribute('data-uuid') || ''
         };
 
         const sailing_percent = trip_data.total_distance_nm > 0 
@@ -60,9 +61,9 @@ class TripCard extends HTMLElement {
                     font-size: 14px;
                 }
 
-                .trip-title-id {
+                .trip-sub-title-tiny {
                     color: var(--text-secondary);
-                    font-size: 16px;
+                    font-size: 10px;
                 }
 
                 .trip-buttons {
@@ -76,7 +77,7 @@ class TripCard extends HTMLElement {
                     <div class="trip-header">
                         <div class="trip-title">
                             ${trip_data.description || 'Trip ' + trip_data.id}
-                            <span class="trip-title-id">(ID: ${trip_data.id})</span><br>
+                            <span class="trip-sub-title-tiny">(ID: ${trip_data.id}${trip_data.uuid ? `, UUID: ${trip_data.uuid}` : ''})</span><br>
                             <span class="trip-sub-title">${this.format_date(trip_data.start_date)} - ${this.format_date(trip_data.end_date)}</span>
                         </div>
                     </div>

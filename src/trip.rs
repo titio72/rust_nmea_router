@@ -4,6 +4,7 @@ use crate::utilities::EngineStatus;
 #[derive(Debug, Clone)]
 pub struct Trip {
     pub id: Option<i64>,
+    pub uuid: String,
     pub description: String,
     pub start_timestamp: SystemTime,
     pub end_timestamp: SystemTime,
@@ -19,6 +20,7 @@ impl Trip {
     pub fn new(start_timestamp: SystemTime, description: String) -> Self {
         Self {
             id: None,
+            uuid: uuid::Uuid::new_v4().to_string(),
             description,
             start_timestamp,
             end_timestamp: start_timestamp,
@@ -93,6 +95,21 @@ mod tests {
         assert_eq!(trip.total_time_sailing, 0);
         assert_eq!(trip.total_time_motoring, 0);
         assert_eq!(trip.total_time_moored, 0);
+    }
+
+    #[test]
+    fn test_uuid_generation() {
+        let now = SystemTime::now();
+        let trip = Trip::new(now, "UUID Test".to_string());
+
+        // UUID must be non-empty and exactly 36 chars (8-4-4-4-12 with dashes)
+        assert!(!trip.uuid.is_empty(), "UUID must not be empty");
+        assert_eq!(trip.uuid.len(), 36, "UUID must be 36 characters");
+        assert!(uuid::Uuid::parse_str(&trip.uuid).is_ok(), "UUID must be parseable");
+
+        // Two trips must have different UUIDs
+        let trip2 = Trip::new(now, "UUID Test 2".to_string());
+        assert_ne!(trip.uuid, trip2.uuid, "Each trip must get a unique UUID");
     }
 
     #[test]

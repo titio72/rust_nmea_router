@@ -1072,6 +1072,16 @@
                     '</div>';
             }
 
+            if (analyticsData.fastest_25nm) {
+                html += '<div class="analyticsCard fastestSegmentCard" data-segment-type="25nm" onclick="handleSegmentClick(event, \'25nm\')">' +
+                    '<div class="analyticsCardTitle">Fastest 25 NM</div>' +
+                    '<div class="analyticsValue">' + analyticsData.fastest_25nm.average_speed_kn.toFixed(2) + ' knots</div>' +
+                    '<div class="analyticsDetail">Distance: ' + analyticsData.fastest_25nm.distance_nm.toFixed(2) + ' NM</div>' +
+                    '<div class="analyticsDetail">Duration: ' + formatDuration(analyticsData.fastest_25nm.duration_ms) + '</div>' +
+                    '<div class="analyticsDetail">' + formatTime(analyticsData.fastest_25nm.start_timestamp) + ' → ' + formatTime(analyticsData.fastest_25nm.end_timestamp) + '</div>' +
+                    '</div>';
+            }
+
             if (analyticsData.average_speed_kn !== null) {
                 html += '<div class="analyticsCard">' +
                     '<div class="analyticsCardTitle">Average Speed</div>' +
@@ -1105,6 +1115,8 @@
                 segment = currentAnalyticsData.fastest_5nm;
             } else if (segmentType === '10nm') {
                 segment = currentAnalyticsData.fastest_10nm;
+            } else if (segmentType === '25nm') {
+                segment = currentAnalyticsData.fastest_25nm;
             }
 
             if (!segment) {

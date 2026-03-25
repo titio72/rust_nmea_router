@@ -486,4 +486,71 @@ mod test_infrastructure_examples {
         
         assert!(env_metrics_count.0 > 0, "Environmental metric records should be imported");
     }
+
+    #[test]
+    #[ignore]
+    fn test_uuid_import_deduplication() {
+        let db = setup_db();
+
+        let fixed_uuid = "11111111-2222-3333-4444-555555555555";
+
+        // Build a minimal valid import JSON with a fixed UUID
+        let make_payload = |description: &str| -> String {
+            serde_json::json!({
+                "trip": {
+                    "description": description,
+                    "start_timestamp": "2026-01-01T10:00:00Z",
+                    "end_timestamp": "2026-01-01T14:00:00Z",
+                    "total_distance_sailed": 10.0,
+                    "total_distance_motoring": 1.0,
+                    "total_time_sailing": 10000000u64,
+                    "total_time_motoring": 1000000u64,
+                    "total_time_moored": 500000u64,
+                    "uuid": fixed_uuid,
+                },
+                "vessel_statuses": [],
+                "environmental_metrics": []
+            }).to_string()
+        };
+
+        // First import: should insert a new trip
+        let first_id = db.import_trip(&make_payload("Original"))
+            .expect("First import failed");
+        assert!(first_id > 0);
+
+        // Verify it's in the DB with the expected UUID
+        let mut conn = db.pool.get_conn().unwrap();
+        let count_with_uuid: (i64,) = conn.exec_first(
+            "SELECT COUNT(*) FROM trips WHERE uuid = :uuid",
+            mysql::params! { "uuid" => fixed_uuid },
+        ).unwrap().unwrap();
+        assert_eq!(count_with_uuid.0, 1, "Should have exactly 1 trip with that UUID after first import");
+
+        // Second import with same UUID, different description: should delete old and insert new
+        let second_id = db.import_trip(&make_payload("Re-imported"))
+            .expect("Second import failed");
+        assert!(second_id > 0);
+        assert_ne!(first_id, second_id, "Re-import should produce a new DB row ID");
+
+        // After dedup: still exactly 1 trip with that UUID
+        let count_after: (i64,) = conn.exec_first(
+            "SELECT COUNT(*) FROM trips WHERE uuid = :uuid",
+            mysql::params! { "uuid" => fixed_uuid },
+        ).unwrap().unwrap();
+        assert_eq!(count_after.0, 1, "Should still have exactly 1 trip with that UUID after re-import");
+
+        // The surviving record should have the new description
+        let desc: Option<String> = conn.exec_first(
+            "SELECT description FROM trips WHERE uuid = :uuid",
+            mysql::params! { "uuid" => fixed_uuid },
+        ).expect("Query failed");
+        assert_eq!(desc.as_deref(), Some("Re-imported"), "Surviving trip should have updated description");
+
+        // Old ID must be gone
+        let old_id_row: Option<mysql::Row> = conn.exec_first(
+            "SELECT id FROM trips WHERE id = :id",
+            mysql::params! { "id" => first_id },
+        ).expect("Query failed");
+        assert!(old_id_row.is_none(), "Old trip record must have been deleted");
+    }
 }

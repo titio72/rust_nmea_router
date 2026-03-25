@@ -20,7 +20,7 @@ impl VesselDatabase {
                      DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
                      total_distance_sailed, total_distance_motoring,
                      (total_distance_sailed + total_distance_motoring) as total_distance,
-                     total_time_sailing, total_time_motoring, total_time_moored
+                     total_time_sailing, total_time_motoring, total_time_moored, uuid
               FROM trips
               WHERE id = :trip_id",
             mysql::params! {
@@ -31,6 +31,7 @@ impl VesselDatabase {
         if let Some(row) = row {
             let trip = TripSummary {
                 id: row.get_opt("id").and_then(|v| v.ok()).unwrap_or(0),
+                uuid: row.get_opt::<Option<String>, _>("uuid").and_then(|v| v.ok()).flatten(),
                 description: row.get_opt::<String, _>("description").and_then(|v| v.ok()).unwrap_or_default(),
                 start_date: row.get_opt::<String, _>("start_ts").and_then(|v| v.ok()).unwrap_or_default(),
                 end_date: row.get_opt::<String, _>("end_ts").and_then(|v| v.ok()).unwrap_or_default(),
@@ -61,7 +62,8 @@ impl VesselDatabase {
                     total_time_motoring as total_time_motoring,
                     total_time_moored as total_time_moored,
                     total_distance_sailed as total_distance_sailed,
-                    total_distance_motoring as total_distance_motoring
+                    total_distance_motoring as total_distance_motoring,
+                    uuid
              FROM trips WHERE "
         );
 
@@ -86,6 +88,7 @@ impl VesselDatabase {
             .iter()
             .map(|row| TripSummary {
                 id: row.get_opt("id").and_then(|v| v.ok()).unwrap_or(0),
+                uuid: row.get_opt::<Option<String>, _>("uuid").and_then(|v| v.ok()).flatten(),
                 description: row.get_opt::<String, _>("description").and_then(|v| v.ok()).unwrap_or_default(),
                 start_date: row.get_opt::<String, _>("start_ts").and_then(|v| v.ok()).unwrap_or_default(),
                 end_date: row.get_opt::<String, _>("end_ts").and_then(|v| v.ok()).unwrap_or_default(),
@@ -100,6 +103,45 @@ impl VesselDatabase {
             .collect();
 
         Ok(trips)
+    }
+
+    pub fn fetch_trip_by_uuid(&self, trip_uuid: &str) -> Result<Option<TripSummary>, Box<dyn std::error::Error>> {
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+        
+        let row: Option<mysql::Row> = conn.exec_first(
+            r"SELECT id, description,
+                     DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as start_ts,
+                     DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
+                     total_distance_sailed, total_distance_motoring,
+                     (total_distance_sailed + total_distance_motoring) as total_distance,
+                     total_time_sailing, total_time_motoring, total_time_moored, uuid
+              FROM trips
+              WHERE uuid = :uuid",
+            mysql::params! {
+                "uuid" => trip_uuid,
+            },
+        ).map_err(|e| format!("Database query error: {}", e))?;
+        
+        if let Some(row) = row {
+            let trip = TripSummary {
+                id: row.get_opt("id").and_then(|v| v.ok()).unwrap_or(0),
+                uuid: row.get_opt::<Option<String>, _>("uuid").and_then(|v| v.ok()).flatten(),
+                description: row.get_opt::<String, _>("description").and_then(|v| v.ok()).unwrap_or_default(),
+                start_date: row.get_opt::<String, _>("start_ts").and_then(|v| v.ok()).unwrap_or_default(),
+                end_date: row.get_opt::<String, _>("end_ts").and_then(|v| v.ok()).unwrap_or_default(),
+                total_distance_nm: row.get_opt::<f64, _>("total_distance").and_then(|v| v.ok()).unwrap_or(0.0),
+                total_time_ms: row.get_opt::<i64, _>("total_time").and_then(|v| v.ok()).unwrap_or(0),
+                sailing_time_ms: row.get_opt::<i64, _>("total_time_sailing").and_then(|v| v.ok()).unwrap_or(0),
+                motoring_time_ms: row.get_opt::<i64, _>("total_time_motoring").and_then(|v| v.ok()).unwrap_or(0),
+                moored_time_ms: row.get_opt::<i64, _>("total_time_moored").and_then(|v| v.ok()).unwrap_or(0),
+                sailing_distance_nm: row.get_opt::<f64, _>("total_distance_sailed").and_then(|v| v.ok()).unwrap_or(0.0),
+                motoring_distance_nm: row.get_opt::<f64, _>("total_distance_motoring").and_then(|v| v.ok()).unwrap_or(0.0),
+            };
+            Ok(Some(trip))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Fetch monthly statistics since January 2020
@@ -625,6 +667,7 @@ impl VesselDatabase {
                 fastest_1nm: None,
                 fastest_5nm: None,
                 fastest_10nm: None,
+                fastest_25nm: None,
             });
         }
 
@@ -689,6 +732,7 @@ impl VesselDatabase {
         let fastest_1nm = find_fastest_segment(&track_points, 1.0);
         let fastest_5nm = find_fastest_segment(&track_points, 5.0);
         let fastest_10nm = find_fastest_segment(&track_points, 10.0);
+        let fastest_25nm = find_fastest_segment(&track_points, 25.0);
 
         Ok(TrackAnalytics {
             max_speed_kn: max_speed,
@@ -699,6 +743,7 @@ impl VesselDatabase {
             fastest_1nm,
             fastest_5nm,
             fastest_10nm,
+            fastest_25nm,
         })
     }
 
@@ -1130,6 +1175,52 @@ mod tests {
         // Clean up
         fs::remove_file(&export_path)
             .expect("Should be able to delete test file");
+    }
+
+    #[test]
+    #[ignore]
+    fn test_fetch_trip_by_uuid() {
+        let db = setup_db();
+
+        let start_time = SystemTime::now();
+        let end_time = start_time + std::time::Duration::from_secs(3600);
+
+        // Insert a trip; add_test_trip generates a random UUID internally
+        let trip_id = add_test_trip(
+            &db,
+            "UUID Lookup Test".to_string(),
+            start_time,
+            end_time,
+            5.0,
+            1.0,
+            1800000,
+            600000,
+            0,
+        ).expect("Failed to insert test trip");
+
+        // Retrieve the UUID that was stored for this trip
+        let mut conn = db.pool.get_conn().expect("Failed to get connection");
+        let stored_uuid: Option<String> = conn
+            .exec_first(
+                "SELECT uuid FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .expect("Query failed");
+        let stored_uuid = stored_uuid.expect("UUID must not be NULL");
+
+        // fetch_trip_by_uuid should return the same trip
+        let result = db.fetch_trip_by_uuid(&stored_uuid)
+            .expect("fetch_trip_by_uuid failed");
+
+        let trip = result.expect("Trip should be found by UUID");
+        assert_eq!(trip.id, trip_id, "Returned trip ID must match");
+        assert_eq!(trip.description, "UUID Lookup Test");
+        assert_eq!(trip.uuid, Some(stored_uuid.clone()), "Returned uuid must match");
+
+        // Looking up a non-existent UUID must return None
+        let missing = db.fetch_trip_by_uuid("00000000-0000-0000-0000-000000000000")
+            .expect("fetch_trip_by_uuid should not error on missing uuid");
+        assert!(missing.is_none(), "Non-existent UUID must return None");
     }
 }
 

@@ -51,6 +51,7 @@ pub struct HealthCheckManager {
 #[derive(Debug, serde::Serialize)]
 pub struct TripSummary {
     pub id: u32,
+    pub uuid: Option<String>,
     pub description: String,
     pub start_date: String,
     pub end_date: String,
@@ -173,6 +174,7 @@ pub struct TrackAnalytics {
     pub fastest_1nm: Option<FastestSegment>,
     pub fastest_5nm: Option<FastestSegment>,
     pub fastest_10nm: Option<FastestSegment>,
+    pub fastest_25nm: Option<FastestSegment>,
 }
 
 #[derive(Debug, serde::Serialize)]

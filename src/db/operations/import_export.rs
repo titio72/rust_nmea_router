@@ -35,7 +35,7 @@ impl VesselDatabase {
                     DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
                     description, total_distance_sailed, 
                     total_distance_motoring, total_time_sailing, total_time_motoring, 
-                    total_time_moored, 
+                    total_time_moored, uuid,
                     start_timestamp as start_ts_raw, end_timestamp as end_ts_raw
              FROM trips WHERE id = :id",
             params! { "id" => trip_id },
@@ -51,8 +51,9 @@ impl VesselDatabase {
         let total_time_sailing: u64 = trip_row.get(6).ok_or("Missing total_time_sailing")?;
         let total_time_motoring: u64 = trip_row.get(7).ok_or("Missing total_time_motoring")?;
         let total_time_moored: u64 = trip_row.get(8).ok_or("Missing total_time_moored")?;
-        let start_ts: mysql::Value = trip_row.get(9).ok_or("Missing start_timestamp_raw")?;
-        let end_ts: mysql::Value = trip_row.get(10).ok_or("Missing end_timestamp_raw")?;
+        let trip_uuid: Option<String> = trip_row.get(9).unwrap_or(None);
+        let start_ts: mysql::Value = trip_row.get(10).ok_or("Missing start_timestamp_raw")?;
+        let end_ts: mysql::Value = trip_row.get(11).ok_or("Missing end_timestamp_raw")?;
 
         // Step 2: Fetch vessel status records within time range with formatted timestamps
         let vessel_statuses: Vec<mysql::Row> = conn.exec(
@@ -139,6 +140,7 @@ impl VesselDatabase {
         let export_data = json!({
             "trip": {
                 "id": trip_id_fetched,
+                "uuid": trip_uuid,
                 "description": description,
                 "start_timestamp": start_ts_str,
                 "end_timestamp": end_ts_str,
@@ -205,35 +207,54 @@ impl VesselDatabase {
         let total_time_moored = trip["total_time_moored"]
             .as_u64()
             .ok_or("Missing or invalid trip.total_time_moored")?;
+        let import_uuid: Option<&str> = trip["uuid"].as_str();
         
         let mut conn = self.pool.get_conn()?;
         
-        // Check for overlapping trips
-        // Parse the start_timestamp to compare with existing trips' end_timestamps
         let new_trip_start = chrono::DateTime::parse_from_rfc3339(start_ts_str)
             .map_err(|e| format!("Invalid start_timestamp format: {}", e))?;
-        
-        let overlapping_trip: Option<(i64, String)> = conn.exec_first(
-            "SELECT id, end_timestamp FROM trips WHERE end_timestamp >= :new_start ORDER BY end_timestamp DESC LIMIT 1",
-            params! {
-                "new_start" => new_trip_start.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
-            },
-        )?;
-        
-        if let Some((existing_id, existing_end_ts)) = overlapping_trip {
-            return Err(format!(
-                "Trip overlaps with existing trip ID {}. Existing trip ends at {}, new trip starts at {}",
-                existing_id, existing_end_ts, start_ts_str
-            ).into());
+
+        if let Some(uuid) = import_uuid {
+            // UUID present: if a trip with this UUID already exists, delete it first (replace semantics)
+            let existing_id: Option<u64> = conn.exec_first(
+                "SELECT id FROM trips WHERE uuid = :uuid LIMIT 1",
+                params! { "uuid" => uuid },
+            )?;
+            if let Some(id) = existing_id {
+                info!("Import: deleting existing trip {} with UUID {} before re-import", id, uuid);
+                self.delete_trip(id as u32)?;
+            }
+        } else {
+            // No UUID in file: use the old overlap check
+            let overlapping_trip: Option<(i64, String)> = conn.exec_first(
+                "SELECT id, CAST(end_timestamp AS CHAR) FROM trips WHERE end_timestamp >= :new_start ORDER BY end_timestamp DESC LIMIT 1",
+                params! {
+                    "new_start" => new_trip_start.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+                },
+            )?;
+            if let Some((existing_id, existing_end_ts)) = overlapping_trip {
+                return Err(format!(
+                    "Trip overlaps with existing trip ID {}. Existing trip ends at {}, new trip starts at {}",
+                    existing_id, existing_end_ts, start_ts_str
+                ).into());
+            }
         }
-        
+
+        // Re-acquire connection after possible delete_trip (which borrows &self)
+        let mut conn = self.pool.get_conn()?;
+
         // Start transaction for atomic insert
         let mut tx = conn.start_transaction(mysql::TxOpts::default())?;
         
+        // The UUID to store: use the one from the file, or generate a new one for legacy files
+        let effective_uuid = import_uuid
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
         // Insert trip
         tx.exec_drop(
-            "INSERT INTO trips (description, start_timestamp, end_timestamp, total_distance_sailed, total_distance_motoring, total_time_sailing, total_time_motoring, total_time_moored)
-             VALUES (:desc, :start_ts, :end_ts, :dist_sailed, :dist_motoring, :time_sailing, :time_motoring, :time_moored)",
+            "INSERT INTO trips (description, start_timestamp, end_timestamp, total_distance_sailed, total_distance_motoring, total_time_sailing, total_time_motoring, total_time_moored, uuid)
+             VALUES (:desc, :start_ts, :end_ts, :dist_sailed, :dist_motoring, :time_sailing, :time_motoring, :time_moored, :uuid)",
             params! {
                 "desc" => description,
                 "start_ts" => new_trip_start.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
@@ -244,6 +265,7 @@ impl VesselDatabase {
                 "time_sailing" => total_time_sailing,
                 "time_motoring" => total_time_motoring,
                 "time_moored" => total_time_moored,
+                "uuid" => &effective_uuid,
             },
         )?;
         

@@ -53,10 +53,10 @@ impl VesselDatabase {
                     r"INSERT INTO trips 
                       (description, start_timestamp, end_timestamp, 
                        total_distance_sailed, total_distance_motoring,
-                       total_time_sailing, total_time_motoring, total_time_moored)
+                       total_time_sailing, total_time_motoring, total_time_moored, uuid)
                       VALUES (:description, :start_ts, :end_ts, 
                               :distance_sailed, :distance_motoring,
-                              :time_sailing, :time_motoring, :time_moored)",
+                              :time_sailing, :time_motoring, :time_moored, :uuid)",
                     params! {
                         "description" => &trip.description,
                         "start_ts" => start_timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
@@ -66,6 +66,7 @@ impl VesselDatabase {
                         "time_sailing" => trip.total_time_sailing,
                         "time_motoring" => trip.total_time_motoring,
                         "time_moored" => trip.total_time_moored,
+                        "uuid" => &trip.uuid,
                     },
                 )?;
                 
@@ -128,7 +129,7 @@ impl VesselDatabase {
                      DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as start_ts,
                      DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
                      total_distance_sailed, total_distance_motoring,
-                     total_time_sailing, total_time_motoring, total_time_moored
+                     total_time_sailing, total_time_motoring, total_time_moored, uuid
               FROM trips
               ORDER BY end_timestamp DESC
               LIMIT 1",
@@ -143,8 +144,9 @@ impl VesselDatabase {
             let total_distance_sailed: f64 = row.take("total_distance_sailed").ok_or("Missing total_distance_sailed")?;
             let total_distance_motoring: f64 = row.take("total_distance_motoring").ok_or("Missing total_distance_motoring")?;
             let total_time_sailing: u64 = row.take("total_time_sailing").ok_or("Missing total_time_sailing")?;
-            let total_time_motoring: u64 = row.take("total_time_motoring").ok_or("Missing total_time_motoring")?;
+            let total_time_motoring: u64 = row.take("total_time_motoring").ok_or("Missing total_time_moored")?;
             let total_time_moored: u64 = row.take("total_time_moored").ok_or("Missing total_time_moored")?;
+            let uuid: Option<String> = row.take("uuid").unwrap_or(None);
             
             // Parse timestamps - remove 'Z' suffix and parse ISO 8601 format
             let start_ts_clean = start_ts.trim_end_matches('Z');
@@ -160,6 +162,7 @@ impl VesselDatabase {
 
             Ok(Some(Trip {
                 id: Some(id),
+                uuid: uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
                 description,
                 start_timestamp,
                 end_timestamp,

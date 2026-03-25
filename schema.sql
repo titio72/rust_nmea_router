@@ -86,10 +86,16 @@ CREATE TABLE IF NOT EXISTS trips (
     total_time_sailing BIGINT NOT NULL DEFAULT 0 COMMENT 'Time spent sailing in milliseconds',
     total_time_motoring BIGINT NOT NULL DEFAULT 0 COMMENT 'Time spent motoring in milliseconds',
     total_time_moored BIGINT NOT NULL DEFAULT 0 COMMENT 'Time spent moored in milliseconds',
+    uuid CHAR(36) NULL COMMENT 'UUID v4 for portable trip identification (used for import deduplication)',
     INDEX idx_end_timestamp (end_timestamp),
-    INDEX idx_start_timestamp (start_timestamp)
+    INDEX idx_start_timestamp (start_timestamp),
+    UNIQUE INDEX idx_trips_uuid (uuid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Stores vessel trips with sailing vs motoring breakdown';
+
+-- For existing databases, run:
+-- ALTER TABLE trips ADD COLUMN uuid CHAR(36) NULL COMMENT 'UUID v4 for portable trip identification';
+-- ALTER TABLE trips ADD UNIQUE INDEX idx_trips_uuid (uuid);
 
 -- ============================================================================
 -- EXAMPLE QUERIES

@@ -93,8 +93,8 @@ pub fn add_test_trip(
         r"INSERT INTO trips 
             (description, start_timestamp, end_timestamp, 
              total_distance_sailed, total_distance_motoring,
-             total_time_sailing, total_time_motoring, total_time_moored)
-        VALUES (:description, :start_ts, :end_ts, :dist_sailed, :dist_motoring, :time_sailing, :time_motoring, :time_moored)",
+             total_time_sailing, total_time_motoring, total_time_moored, uuid)
+        VALUES (:description, :start_ts, :end_ts, :dist_sailed, :dist_motoring, :time_sailing, :time_motoring, :time_moored, :uuid)",
         params! {
             "description" => description,
             "start_ts" => start_dt.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
@@ -104,6 +104,7 @@ pub fn add_test_trip(
             "time_sailing" => total_time_sailing,
             "time_motoring" => total_time_motoring,
             "time_moored" => total_time_moored,
+            "uuid" => uuid::Uuid::new_v4().to_string(),
         },
     )?;
     
@@ -340,6 +341,7 @@ pub fn fetch_trip_by_timestamp(
         
         Ok(Some(Trip {
             id: Some(id),
+            uuid: uuid::Uuid::new_v4().to_string(),
             description,
             start_timestamp: UNIX_EPOCH + Duration::from_secs_f64(start_ts),
             end_timestamp: UNIX_EPOCH + Duration::from_secs_f64(end_ts),
