@@ -186,98 +186,54 @@ h2 {
 }
 
 
+/* Card Stat Styles */
 
-
-
-  .card-stats {
-    display: flex;
-    gap: 28px;
-    margin-bottom: 16px;
-    align-items: flex-start;
-  }
-
-  .card-stat {
-  }
-
-  .card-stat-value {
-    font-family: 'DM Mono', monospace;
-    font-size: 24px;
-    font-weight: 500;
-    color: var(--text-primary);
-    letter-spacing: -0.02em;
-    line-height: 1;
-  }
-
-
-  .card-stat-value .unit-sm {
-    font-size: 13px;
-    font-weight: 400;
-    color: var(--text-secondary);
-  }
-
-  .card-stat-label {
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--text-secondary);
-    margin-top: 4px;
-  }
-
-  .card-stat-value.is-sail { color: var(--sailing-color); }
-  .card-stat-value.is-motor { color: var(--motoring-color); }
-
-  .stat-divider {
-    width: 1px;
-    height: 32px;
-    background: var(--border-color);
-    margin-bottom: 6px;
-  }
-
-
-
-
-
-
-
-/*
-
-
-.stats {
-    display: flex;
-    gap: 10px;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-    justify-content: center;
+.card-stats {
+display: flex;
+gap: 28px;
+margin-bottom: 16px;
+align-items: flex-start;
 }
 
-.stat-box {
-    padding: 15px 25px;
-    border-radius: 6px;
-    text-align: center;
-    min-width: 150px;
-    transition: background-color 0.3s ease;
+.card-stat {
 }
 
-.stat-label {
-    font-size: 12px;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    margin-bottom: 5px;
+.card-stat-value {
+font-family: 'DM Mono', monospace;
+font-size: 24px;
+font-weight: 500;
+color: var(--text-primary);
+letter-spacing: -0.02em;
+line-height: 1;
 }
 
-.stat-value {
-    font-size: 24px;
-    font-weight: bold;
-    color: var(--text-bold);
+
+.card-stat-value .unit-sm {
+font-size: 13px;
+font-weight: 400;
+color: var(--text-secondary);
 }
 
-.stat-details {
-    font-size: 16px;
-    color: var(--text-secondary);
-    margin-top: 5px;
+.card-stat-label {
+font-size: 10px;
+font-weight: 600;
+letter-spacing: 0.14em;
+text-transform: uppercase;
+color: var(--text-secondary);
+margin-top: 4px;
 }
-*/
+
+.card-stat-value.is-sail { color: var(--sailing-color); }
+.card-stat-value.is-motor { color: var(--motoring-color); }
+
+.stat-divider {
+width: 1px;
+height: 32px;
+background: var(--border-color);
+margin-bottom: 6px;
+}
+
+
 /* Voyage Bar Legend Styles */
 
 .voyage-bar-legend {

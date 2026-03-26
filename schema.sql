@@ -98,6 +98,21 @@ COMMENT='Stores vessel trips with sailing vs motoring breakdown';
 -- ALTER TABLE trips ADD UNIQUE INDEX idx_trips_uuid (uuid);
 
 -- ============================================================================
+-- HEATMAP CACHE TABLE
+-- ============================================================================
+-- Stores pre-computed per-day sailing distances for the heatmap UI.
+-- Today is never cached (still being written); all past days are cached after first computation.
+CREATE TABLE IF NOT EXISTS heatmap_cache (
+    date DATE NOT NULL COMMENT 'UTC date of the aggregated sailing distance',
+    distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Total sailing distance for this day in nautical miles (0 if no sailing)',
+    PRIMARY KEY (date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='Per-day heatmap distance cache; recomputed only for missing past days and today';
+
+-- For existing databases, run:
+-- CREATE TABLE IF NOT EXISTS heatmap_cache (date DATE NOT NULL, distance_nm DOUBLE NOT NULL DEFAULT 0, PRIMARY KEY (date)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================================
 -- EXAMPLE QUERIES
 -- ============================================================================
 

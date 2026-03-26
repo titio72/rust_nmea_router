@@ -747,63 +747,145 @@ impl VesselDatabase {
         })
     }
 
-    /// Fetch heatmap data - distance traveled grouped by day for 365 days before the given date
+    /// Fetch heatmap data - distance traveled grouped by day for 365 days before the given date.
+    /// Uses a per-day database cache (heatmap_cache) to avoid recomputing past days.
+    /// Today is always recomputed fresh since vessel_status data for it is still being written.
     pub fn fetch_heatmap(&self, end_date: &str) -> Result<HeatmapData, Box<dyn std::error::Error>> {
-        // Parse the end date and calculate start date (365 days before)
-        let end_dt = chrono::NaiveDate::parse_from_str(end_date, "%Y-%m-%d")?;
+        use chrono::NaiveDate;
+
+        let end_dt = NaiveDate::parse_from_str(end_date, "%Y-%m-%d")?;
         let start_dt = end_dt - chrono::Duration::days(365);
-        
-        let query = format!(
-            r"SELECT DATE(vs.timestamp) as day, COALESCE(SUM(COALESCE(vs.total_distance_nm, 0)), 0) as total_distance
-             FROM vessel_status vs
-             WHERE DATE(vs.timestamp) BETWEEN '{}' AND '{}' AND vs.is_moored = 0
-             GROUP BY DATE(vs.timestamp)
-             ORDER BY vs.timestamp",
-            start_dt, end_dt
-        );
+
+        // Today in UTC — never cache today since vessel_status data is still being written
+        let today = chrono::Utc::now().date_naive();
+        // Only cache days strictly before today
+        let cache_end = if end_dt < today { end_dt } else { today - chrono::Duration::days(1) };
 
         let mut conn = self.pool.get_conn()
             .map_err(|e| format!("Database connection error: {}", e))?;
-        
-        let results: Vec<mysql::Row> = conn.query(&query)
-            .map_err(|e| format!("Database query error: {}", e))?;
 
-        let mut days = Vec::new();
+        // Ensure the cache table exists so existing deployments work without a manual migration
+        conn.query_drop(
+            r"CREATE TABLE IF NOT EXISTS heatmap_cache (
+                date DATE NOT NULL COMMENT 'UTC date of the aggregated sailing distance',
+                distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Total sailing distance in nautical miles',
+                PRIMARY KEY (date)
+              ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        ).map_err(|e| format!("Failed to ensure heatmap_cache table: {}", e))?;
+
+        // Step 1: Load already-cached days for [start_dt, cache_end]
+        let cached_rows: Vec<mysql::Row> = conn.exec(
+            "SELECT DATE_FORMAT(date, '%Y-%m-%d') as day, distance_nm \
+             FROM heatmap_cache WHERE date BETWEEN :start AND :end",
+            mysql::params! {
+                "start" => start_dt.to_string(),
+                "end" => cache_end.to_string(),
+            },
+        ).map_err(|e| format!("Database query error (heatmap cache read): {}", e))?;
+
+        let mut day_distances: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        for row in cached_rows {
+            let date: String = row.get_opt("day").and_then(|v| v.ok()).unwrap_or_default();
+            let dist: f64 = row.get_opt("distance_nm").and_then(|v| v.ok()).unwrap_or(0.0);
+            day_distances.insert(date, dist);
+        }
+
+        // Step 2: Find the earliest missing date in [start_dt, cache_end].
+        // All dates from that point on are considered stale — this keeps the recompute
+        // query simple (a single range scan) and avoids building an IN list.
+        let mut recompute_from: Option<NaiveDate> = None;
+        let mut d = start_dt;
+        while d <= cache_end {
+            if !day_distances.contains_key(&d.format("%Y-%m-%d").to_string()) {
+                recompute_from = Some(d);
+                break;
+            }
+            d += chrono::Duration::days(1);
+        }
+
+        // Step 3: Recompute from the first missing date to cache_end using a simple range query
+        if let Some(from_dt) = recompute_from {
+            let query = format!(
+                "SELECT DATE_FORMAT(DATE(timestamp), '%Y-%m-%d') as day, \
+                        COALESCE(SUM(COALESCE(total_distance_nm, 0)), 0) as total_distance \
+                 FROM vessel_status \
+                 WHERE timestamp >= '{}' AND DATE(timestamp) <= '{}' AND is_moored = 0 \
+                 GROUP BY DATE(timestamp)",
+                from_dt, cache_end
+            );
+
+            let results: Vec<mysql::Row> = conn.query(&query)
+                .map_err(|e| format!("Database query error (heatmap recompute): {}", e))?;
+
+            let mut computed: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+            for row in results {
+                let date: String = row.get_opt("day").and_then(|v| v.ok()).unwrap_or_default();
+                let dist: f64 = row.get_opt("total_distance").and_then(|v| v.ok()).unwrap_or(0.0);
+                computed.insert(date, dist);
+            }
+
+            // Batch INSERT IGNORE all dates in [from_dt, cache_end] — including 0-distance days
+            // so they won't be considered missing on the next call.
+            let mut insert_values: Vec<String> = Vec::new();
+            let mut d = from_dt;
+            while d <= cache_end {
+                let s = d.format("%Y-%m-%d").to_string();
+                let dist = computed.get(&s).copied().unwrap_or(0.0);
+                insert_values.push(format!("('{}', {})", s, dist));
+                day_distances.insert(s, dist);
+                d += chrono::Duration::days(1);
+            }
+
+            conn.query_drop(format!(
+                "INSERT IGNORE INTO heatmap_cache (date, distance_nm) VALUES {}",
+                insert_values.join(", ")
+            )).map_err(|e| format!("Failed to write heatmap cache: {}", e))?;
+        }
+
+        // Step 4: Always recompute today fresh if it falls within the requested window
+        if end_dt >= today {
+            let today_str = today.format("%Y-%m-%d").to_string();
+            let query = format!(
+                "SELECT COALESCE(SUM(COALESCE(total_distance_nm, 0)), 0) as total_distance \
+                 FROM vessel_status \
+                 WHERE DATE(timestamp) = '{}' AND is_moored = 0",
+                today_str
+            );
+            let row: Option<mysql::Row> = conn.query_first(&query)
+                .map_err(|e| format!("Database query error (heatmap today): {}", e))?;
+            let dist: f64 = row
+                .and_then(|r| r.get_opt("total_distance").and_then(|v| v.ok()))
+                .unwrap_or(0.0);
+            day_distances.insert(today_str, dist);
+        }
+
+        // Step 5: Assemble sorted result over [start_dt, end_dt]; skip zero-distance days
+        let mut days: Vec<HeatmapDay> = Vec::new();
+        let mut d = start_dt;
+        while d <= end_dt {
+            let s = d.format("%Y-%m-%d").to_string();
+            if let Some(&dist) = day_distances.get(&s) {
+                if dist > 0.0 {
+                    days.push(HeatmapDay { date: s, distance_nm: dist });
+                }
+            }
+            d += chrono::Duration::days(1);
+        }
+
+        // Step 6: Compute aggregate statistics
         let mut min_distance: f64 = f64::MAX;
         let mut max_distance: f64 = 0.0;
         let mut total_distance: f64 = 0.0;
-
-        for row in results {
-            let date: String = row.get_opt("day")
-                .and_then(|v| v.ok())
-                .unwrap_or_default();
-            let distance: f64 = row.get_opt("total_distance")
-                .and_then(|v| v.ok())
-                .unwrap_or(0.0);
-            
-            days.push(HeatmapDay {
-                date,
-                distance_nm: distance,
-            });
-            
-            total_distance += distance;
-            if distance > 0.0 {
-                min_distance = min_distance.min(distance);
-                max_distance = max_distance.max(distance);
-            }
+        for day in &days {
+            total_distance += day.distance_nm;
+            min_distance = min_distance.min(day.distance_nm);
+            max_distance = max_distance.max(day.distance_nm);
         }
-
-        // If no days with distance data, set min_distance to 0
         if min_distance == f64::MAX {
             min_distance = 0.0;
         }
 
-        Ok(HeatmapData {
-            days,
-            min_distance,
-            max_distance,
-            total_distance,
-        })
+        Ok(HeatmapData { days, min_distance, max_distance, total_distance })
     }
 
     /// Get system status (tracking and metrics enabled/disabled state)
