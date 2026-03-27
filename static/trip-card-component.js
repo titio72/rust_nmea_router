@@ -130,21 +130,12 @@ class TripCard extends HTMLElement {
                 </div>
 
                 <div class="trip-line">
-                    <div class="voyage-bar-wrap">
-                        <div class="voyage-bar">
-                            <div class="vb-sail" style="width: ${sailing_percent}%"></div>
-                            <div class="vb-motor" style="width: ${motoring_percent}%"></div>
-                        </div>
-                        <div class="voyage-bar-legend">
-                            <div class="vbl-item">
-                                <div class="vbl-dot sail"></div>
-                                <span><span class="vbl-val">${trip_data.sailing_distance_nm.toFixed(1)} NM</span> sailing</span>
-                            </div>
-                            <div class="vbl-item">
-                                <div class="vbl-dot motor"></div>
-                                <span><span class="vbl-val">${trip_data.motoring_distance_nm.toFixed(1)} NM</span> motoring</span>
-                            </div>
-                        </div>
+                    <div style="width: 100%">
+                        <voyage-bar
+                            sailing-distance="${trip_data.sailing_distance_nm.toFixed(1)}"
+                            motoring-distance="${trip_data.motoring_distance_nm.toFixed(1)}"
+                            total-distance="${trip_data.total_distance_nm.toFixed(1)}">
+                        </voyage-bar>
                     </div>
                 </div>
 

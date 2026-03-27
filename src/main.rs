@@ -140,9 +140,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     // Initialize logging
     init_logging(&config.logging)?;
+    info!("==================================================================");
+    info!("NMEA2000 Router starting...");
     info!("Logging initialized");
     info!("Configuration {:#?}", config);
-    info!("NMEA2000 Router starting...");
     info!("Loaded configuration");
     
     // Open CAN socket with retry

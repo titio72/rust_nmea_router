@@ -8,6 +8,7 @@
     <link rel="icon" type="image/png" href="/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
     <script src="/shared-theme.js"></script>
+    <script src="/voyage-bar-component.js"></script>
     <script src="/trip-card-component.js"></script>
     <style>
         .tracking-toggle-container {
@@ -1193,7 +1194,7 @@
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        id: currentEditingTripId,
+                        id: parseInt(currentEditingTripId, 10),
                         description: newDescription
                     })
                 });
@@ -1205,8 +1206,9 @@
                 const result = await response.json();
                 if (result.status === 'ok') {
                     // Update the trip in the in-memory list
+                    const editId = parseInt(currentEditingTripId, 10);
                     if (window.allTrips) {
-                        const trip = window.allTrips.find(t => t.id === currentEditingTripId);
+                        const trip = window.allTrips.find(t => t.id === editId);
                         if (trip) {
                             trip.description = newDescription;
                         }

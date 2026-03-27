@@ -7,6 +7,7 @@
     <link rel="icon" type="image/png" href="/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
     <script src="/shared-theme.js"></script>
+        <script src="/voyage-bar-component.js"></script>
     <!-- Load Chart.js from local, fallback to CDN with error handling -->
     <script>
         function loadChartJS() {
@@ -144,10 +145,11 @@
         }
 
         .chartToolbar {
-            display: flex;
-            justify-content: flex-end;
-            gap: 10px;
+            position: absolute;
+            top: 5px;
+            right: 5px;
         }
+
         .chartToggleBtn {
             padding: 6px 12px;
             background-color: var(--bg-tertiary);
@@ -203,14 +205,12 @@
             justify-content: space-between;
             align-items: center;
             gap: 15px;
-            margin-bottom: 25px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 20px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 20px;
         }
         .tripDescription {
-            font-size: 18px;
+            font-size: 24px;
             font-weight: bold;
             color: var(--text-primary);
             flex: 1;
@@ -220,25 +220,6 @@
             gap: 10px;
             align-items: center;
         }
-        .navButton {
-            padding: 10px 20px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            color: var(--text-primary);
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            transition: all 0.2s;
-        }
-        .navButton:hover {
-            background: var(--link-color);
-            color: white;
-            border-color: var(--link-color);
-        }
-        .navButton:active {
-            transform: scale(0.95);
-        }
         .legDisplay {
             font-weight: bold;
             font-size: 16px;
@@ -247,16 +228,106 @@
             text-align: center;
             padding: 10px 20px;
             background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
         }
     </style>
 </head>
 <body>
     <div id="headerContainer"></div>
     <div id="tripContainer" class="level-1-container">
-        <div id="legSelectorContainer"></div>
-        <div id="tripDetails"></div>
+        <div id="tripDetails">
+            <div class="infoAndMapContainer">
+                <div class="app-card">
+                    <div id="legSelectorContainer">
+                        <div class="legNavigator">
+                            <div id="tripDescriptionLabel" class="tripDescription"></div>
+                            <div class="navButtons">
+                                <button class="app-btn" onclick="previousLeg()" title="Previous">&lt;&lt;</button>
+                                <div id="legDisplay" class="legDisplay"></div>
+                                <button class="app-btn" onclick="nextLeg()" title="Next">&gt;&gt;</button>
+                            </div>
+                        </div>
+                    </div>                
+                    <div class="card-stats">
+                        <div class="card-stat" id="startDateStat">
+                            <div class="card-stat-label">Start Date</div>
+                            <div id="startDateValue" class="card-stat-value"></div>
+                            <div id="startTimeValue" class="card-stat-detail"></div>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="card-stat" id="endDateStat">
+                            <div class="card-stat-label">End Date</div>
+                            <div id="endDateValue" class="card-stat-value"></div>
+                            <div id="endTimeValue" class="card-stat-detail"></div>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="card-stat" id="durationStat">
+                            <div class="card-stat-label">Duration</div>
+                            <div id="durationValue" class="card-stat-value"></div>
+                        </div>
+                    </div>
+                    <div class="card-stats">
+                        <div class="card-stat" id="navigationTimeStat">
+                            <div class="card-stat-label">Navigation Time</div>
+                            <div id="navigationTimeValue" class="card-stat-value"></div>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="card-stat" id="sailingTimeStat">
+                            <div class="card-stat-label">Sailing Time</div>
+                            <div id="sailingTimeValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="sailingTimePercentageValue" class="sailing-percentage"></span></div>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="card-stat" id="motoringTimeStat">
+                            <div class="card-stat-label">Motoring Time</div>
+                            <div id="motoringTimeValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="motoringTimePercentageValue" class="motoring-percentage"></span></div>
+                        </div>
+                    </div>
+                    <div class="card-stats">
+                        <div class="card-stat" id="totalDistanceStat">
+                            <div class="card-stat-label">Total Distance</div>
+                            <div id="totalDistanceValue" class="card-stat-value"></div>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="card-stat" id="sailingDistanceStat">
+                            <div class="card-stat-label">Sailing</div>
+                            <div id="sailingDistanceValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="sailingDistancePercentageValue" class="sailing-percentage"></span></div>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="card-stat" id="motoringDistanceStat">
+                            <div class="card-stat-label">Motoring</div>
+                            <div id="motoringDistanceValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="motoringDistancePercentageValue" class="motoring-percentage"></span></div>
+                        </div>
+                    </div>
+                    <voyage-bar id="voyageBar"></voyage-bar>
+                    <div class="card-stat fullWidth" style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 20px;">
+                        <div class="analyticsTitle" id="analyticsTitle">Performance Analytics</div>
+                        <div class="analyticsGrid" id="analyticsGrid">
+                        </div>
+                    </div>
+                </div>
+                <div class="app-card map-card">
+                    <div id="map"></div>
+                    <div id="mapLegend" class="mapLegend">
+                        <div class="legendItem">
+                            <div class="legendColor" style="background-color: #FFD700;"></div>
+                            <span>Unknown Engine Status</span>
+                        </div>
+                        <div class="legendItem">
+                            <div class="legendColor" style="background-color: #888888;"></div>
+                            <span>Engine On (Motoring)</span>
+                        </div>
+                        <div class="legendItem">
+                            <div class="legendColorGradient">●</div>
+                            <span>Sailing (Engine Off)</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="chartsContainer" id="chartsContainer"></div>
+        </div>
     </div>
     <script>
         document.getElementById('headerContainer').innerHTML = createHeaderBar('trips');
@@ -371,6 +442,27 @@
                 text: isDark ? '#e0e0e0' : '#333',
                 grid: isDark ? '#444' : '#e0e0e0',
                 background: isDark ? '#2d2d2d' : 'white'
+            };
+        }
+
+        function getTimeXScale(colors) {
+            return {
+                type: 'time',
+                time: {
+                    displayFormats: {
+                        millisecond: 'HH:mm',
+                        second: 'HH:mm',
+                        minute: 'HH:mm',
+                        hour: 'HH:mm',
+                        day: 'MM/dd HH:mm'
+                    }
+                },
+                ticks: {
+                    color: colors.text,
+                    maxRotation: 45,
+                    minRotation: 45
+                },
+                grid: { color: colors.grid }
             };
         }
 
@@ -497,7 +589,7 @@
                 }
 
                 // Display leg selector
-                displayLegSelector();
+                updateLegSelector();
 
                 // Load entire trip by default
                 await loadTripDetails(tripId, null);
@@ -507,7 +599,7 @@
             }
         }
 
-        function displayLegSelector() {
+        function updateLegSelector() {
             if (currentLegs.length === 0) {
                 // No legs, don't show selector
                 return;
@@ -516,21 +608,9 @@
             window.legNavigation = [null, ...currentLegs];
             window.currentLegIndex = 0;
             
-            const container = document.getElementById('legSelectorContainer');
-            if (container) {
-                const description = currentTrip.description || 'Trip ' + currentTrip.id;
-                
-                let html = '<div class="legNavigator">' +
-                    '<div class="tripDescription">' + description + '</div>' +
-                    '<div class="navButtons">' +
-                    '<button class="navButton" onclick="previousLeg()" title="Previous">← Prev</button>' +
-                    '<div class="legDisplay" id="legDisplay">Entire Trip (' + currentLegs.length + ' legs)</div>' +
-                    '<button class="navButton" onclick="nextLeg()" title="Next">Next →</button>' +
-                    '</div>' +
-                    '</div>';
-                
-                container.innerHTML = html;
-            }
+            const description = currentTrip.description || 'Trip ' + currentTrip.id;
+            document.getElementById('tripDescriptionLabel').textContent = description;
+            document.getElementById('legDisplay').textContent = 'Trip (' + currentLegs.length + ' legs)';
         }
 
         function previousLeg() {
@@ -548,7 +628,7 @@
             const displayEl = document.getElementById('legDisplay');
             
             if (leg === null) {
-                displayEl.textContent = 'Entire Trip (' + currentLegs.length + ' legs)';
+                displayEl.textContent = 'Trip (' + currentLegs.length + ' legs)';
                 selectLeg(null);
             } else {
                 const totalLegs = currentLegs.length;
@@ -604,7 +684,7 @@
         }
 
         async function loadTripDetails(tripId, selectedLeg) {
-            document.getElementById('tripDetails').innerHTML = '<div class="loading">Loading data...</div>';
+            //document.getElementById('tripDetails').innerHTML = '<div class="loading">Loading data...</div>';
             try {
                 // Prepare trip data and time range
                 let tripData;
@@ -682,103 +762,31 @@
             const motoringTime = trip.motoring_time_ms;
             const sailingTimePercent = totalTime > 0 ? (sailingTime / totalTime * 100) : 0;
 
-            content.innerHTML = '<div class="infoAndMapContainer"><div class="app-card">' +
-                '<div class="card-stats">' +
-                    '<div class="card-stat">' +
-                        '<div class="card-stat-label">Start Date</div>' +
-                        '<div class="card-stat-value">' + formatDate(trip.start_date) + '</div>' +
-                        '<div class="card-stat-detail">' + formatTime(trip.start_date) + '</div>' +
-                    '</div>' +
-                    '<div class="stat-divider"></div>' +
-                    '<div class="card-stat">' +
-                        '<div class="card-stat-label">End Date</div>' +
-                        '<div class="card-stat-value">' + formatDate(trip.end_date) + '</div>' +
-                        '<div class="card-stat-detail">' + formatTime(trip.end_date) + '</div>' +
-                    '</div>' +
-                    '<div class="stat-divider"></div>' +
-                    '<div class="card-stat">' +
-                        '<div class="card-stat-label">Duration</div>' +
-                        '<div class="card-stat-value">' + calculateDuration(trip.start_date, trip.end_date) + '</div>' +
-                    '</div>' +
-                '</div>' +
-                '<div class="card-stats">' +
-                    '<div class="card-stat">' +
-                        '<div class="card-stat-label">Navigation Time</div>' +
-                        '<div class="card-stat-value">' + formatDuration(totalTime) + '</div>' +
-                    '</div>' +
-                    '<div class="stat-divider"></div>' +
-                    '<div class="card-stat">' +
-                        '<div class="card-stat-label">Sailing Time</div>' +
-                        '<div class="card-stat-value">' + formatDuration(sailingTime) + ' (' + sailingTimePercent.toFixed(1) + '%)</div>' +
-                    '</div>' +
-                    '<div class="stat-divider"></div>' +
-                    '<div class="card-stat">' +
-                        '<div class="card-stat-label">Motoring Time</div>' +
-                        '<div class="card-stat-value">' + formatDuration(motoringTime) + ' (' + (100 - sailingTimePercent).toFixed(1) + '%)</div>' +
-                    '</div>' +
-                '</div>' +
-                '<div class="card-stats">' +
-                    '<div class="card-stat">' +
-                        '<div class="card-stat-label">Total Distance</div>' +
-                        '<div class="card-stat-value">' + totalDistance.toFixed(1) + ' NM</div>' +
-                    '</div>' +
-                    '<div class="stat-divider"></div>' +
-                    '<div class="card-stat">' +
-                        '<div class="card-stat-label">Sailing</div>' +
-                        '<div class="card-stat-value">' + sailingDistance.toFixed(1) + ' NM</div>' +
-                        '<div class="card-stat-detail"><span class="sailing-percentage">' + sailingPercent.toFixed(1) + '%</span></div>' +
-                    '</div>' +
-                    '<div class="stat-divider"></div>' +
-                    '<div class="card-stat">' +
-                        '<div class="card-stat-label">Motoring</div>' +
-                        '<div class="card-stat-value">' + motoringDistance.toFixed(1) + ' NM</div>' +
-                        '<div class="card-stat-detail"><span class="motoring-percentage">' + (100 - sailingPercent).toFixed(1) + '%</span></div>' +
-                    '</div>' +
-                '</div>' +
-                '<div class="voyage-bar-wrap">' +
-                    '<div class="voyage-bar">' +
-                        '<div class="vb-sail" style="width: ' + sailingPercent.toFixed(1) + '%"></div>' +
-                        '<div class="vb-motor" style="width: ' + (100 - sailingPercent).toFixed(1) + '%"></div>' +
-                    '</div>' +
-                    '<div class="voyage-bar-legend">' +
-                        '<div class="vbl-item">' +
-                            '<div class="vbl-dot sail"></div>' +
-                            '<span><span class="vbl-val">' + sailingDistance.toFixed(1) + ' NM</span> sailing</span>' +
-                        '</div>' +
-                        '<div class="vbl-item">' +
-                            '<div class="vbl-dot motor"></div>' +
-                            '<span><span class="vbl-val">' + motoringDistance.toFixed(1) + ' NM</span> motoring</span>' +
-                        '</div>' +
-                    '</div>' +
-                '</div>' +
-                '<div class="card-stat fullWidth" style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 20px;">' +
-                    '<div class="analyticsTitle" id="analyticsTitle">Performance Analytics</div>' +
-                    '<div class="analyticsGrid" id="analyticsGrid">' +
-                    '</div>' +
-                '</div>' +
-            '</div>' +
-            '<div class="app-card map-card">' +
-                '<div id="map"></div>' +
-                '<div id="mapLegend" class="mapLegend">' +
-                    '<div class="legendItem">' +
-                        '<div class="legendColor" style="background-color: #FFD700;"></div>' +
-                        '<span>Unknown Engine Status</span>' +
-                    '</div>' +
-                    '<div class="legendItem">' +
-                        '<div class="legendColor" style="background-color: #888888;"></div>' +
-                        '<span>Engine On (Motoring)</span>' +
-                    '</div>' +
-                    '<div class="legendItem">' +
-                        '<div class="legendColorGradient">●</div>' +
-                        '<span>Sailing (Engine Off)</span>' +
-                    '</div>' +
-                '</div>' +
-            '</div></div>' +
-            
-            '<div class="chartsContainer" id="chartsContainer"></div>';
+            document.getElementById('startDateValue').textContent = formatDate(trip.start_date);
+            document.getElementById('startTimeValue').textContent = formatTime(trip.start_date);
+            document.getElementById('endDateValue').textContent = formatDate(trip.end_date);
+            document.getElementById('endTimeValue').textContent = formatTime(trip.end_date);
+            document.getElementById('durationValue').textContent = calculateDuration(trip.start_date, trip.end_date);
+            document.getElementById('navigationTimeValue').textContent = formatDuration(totalTime);
+            document.getElementById('sailingTimeValue').textContent = formatDuration(sailingTime) + '%)';
+            document.getElementById('sailingTimePercentageValue').textContent = sailingTimePercent.toFixed(1) + '%';
+            document.getElementById('motoringTimeValue').textContent = formatDuration(motoringTime) + '%)';
+            document.getElementById('motoringTimePercentageValue').textContent = (100 - sailingTimePercent).toFixed(1) + '%';
+            document.getElementById('totalDistanceValue').textContent = totalDistance.toFixed(1) + ' NM';
+            document.getElementById('sailingDistanceValue').textContent = sailingDistance.toFixed(1) + ' NM';
+            document.getElementById('sailingDistancePercentageValue').textContent = sailingPercent.toFixed(1) + '%';
+            document.getElementById('motoringDistanceValue').textContent = motoringDistance.toFixed(1) + ' NM';
+            document.getElementById('motoringDistancePercentageValue').textContent = (100 - sailingPercent).toFixed(1) + '%';
+            const voyageBarEl = document.getElementById('voyageBar');
+            voyageBarEl.setAttribute('sailing-distance', sailingDistance.toFixed(1));
+            voyageBarEl.setAttribute('motoring-distance', motoringDistance.toFixed(1));
+            voyageBarEl.setAttribute('total-distance', totalDistance.toFixed(1));
 
             // Initialize the map
             initializeMap(trackData);
+
+            // reset charts
+            document.getElementById('chartsContainer').innerHTML = '';
 
             // Render time series charts only for non-full-trip views
             if (!isFullTrip) {
@@ -791,7 +799,8 @@
 
         function renderTimeSeriesCharts(trackData) {
             // Build HTML for time series charts
-            const chartsHTML = '<div class="app-card">' +
+            const chartsHTML = 
+                '<div class="app-card">' +
                     '<canvas id="speedChart"></canvas>' +
                 '</div>' +
                 '<div class="app-card">' +
@@ -833,8 +842,6 @@
                 let speedDistQuery, windStatsQuery, pressureQuery, analyticsQuery, absoluteWindQuery, windSpeedQuery, cabinTempQuery, humidityQuery, rollQuery;
                 
                 if (isFullTrip) {
-                    speedDistQuery = '/api/speed_distribution?id=' + trip.id;
-                    windStatsQuery = '/api/wind_statistics?id=' + trip.id;
                     pressureQuery = '/api/metrics?metric=1&trip_id=' + trip.id;
                     absoluteWindQuery = '/api/metrics?metric=6&trip_id=' + trip.id;
                     windSpeedQuery = '/api/metrics?metric=5&trip_id=' + trip.id;
@@ -858,8 +865,8 @@
 
                 // Fetch all secondary data in parallel
                 const [speedDistResponse, windStatsResponse, pressureResponse, absoluteWindResponse, windSpeedResponse, cabinTempResponse, humidityResponse, analyticsResponse] = await Promise.all([
-                    fetch(speedDistQuery),
-                    fetch(windStatsQuery),
+                    isFullTrip ? Promise.resolve(null) : fetch(speedDistQuery),
+                    isFullTrip ? Promise.resolve(null) : fetch(windStatsQuery),
                     fetch(pressureQuery),
                     fetch(absoluteWindQuery),
                     fetch(windSpeedQuery),
@@ -870,7 +877,7 @@
 
                 // Process speed distribution
                 let speedDistData = null;
-                if (speedDistResponse.ok) {
+                if (!isFullTrip && speedDistResponse && speedDistResponse.ok) {
                     const result = await speedDistResponse.json();
                     if (result.status === 'ok' && result.data) {
                         speedDistData = result.data;
@@ -879,7 +886,7 @@
 
                 // Process wind statistics
                 let windStatsData = null;
-                if (windStatsResponse.ok) {
+                if (!isFullTrip && windStatsResponse && windStatsResponse.ok) {
                     const result = await windStatsResponse.json();
                     if (result.status === 'ok' && result.data) {
                         windStatsData = result.data;
@@ -945,12 +952,12 @@
 
                 // Build charts container HTML for secondary charts
                 const chartsHTML = 
-                    '<div class="app-card">' +
+                    (!isFullTrip ? '<div class="app-card">' +
                         '<canvas id="speedDistributionChart"></canvas>' +
                     '</div>' +
                     '<div class="app-card">' +
                         '<canvas id="windStatisticsChart"></canvas>' +
-                    '</div>' +
+                    '</div>' : '') +
                     '<div class="app-card">' +
                         '<canvas id="atmosphericPressureChart"></canvas>' +
                     '</div>' +
@@ -983,8 +990,10 @@
                 allCharts.absoluteWindDirection = createAbsoluteWindDirectionChartFromMetric(absoluteWindData, windSpeedData, absoluteWindDirectionNormalized, legBands);
                 allCharts.cabinTemperature = createCabinTemperatureChart(cabinTempData, legBands);
                 allCharts.humidity = createHumidityChart(humidityData, legBands);
-                allCharts.speedDistribution = createSpeedDistributionChart(speedDistData);
-                allCharts.windStatistics = createWindStatisticsChart(windStatsData);
+                if (!isFullTrip) {
+                    allCharts.speedDistribution = createSpeedDistributionChart(speedDistData);
+                    allCharts.windStatistics = createWindStatisticsChart(windStatsData);
+                }
 
                 // Save analytics data globally for segment marker handling
                 currentAnalyticsData = analyticsData;
@@ -1311,6 +1320,7 @@
                         fill: true,
                         tension: 0.1,
                         pointRadius: 0,
+                        borderWidth: 1,
                         pointHoverRadius: 5
                     }]
                 },
@@ -1327,22 +1337,7 @@
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         },
-                        x: {
-                            type: 'time',
-                            time: {
-                                unit: 'minute',
-                                displayFormats: {
-                                    minute: 'HH:mm:ss'
-                                }
-                            },
-                            title: {
-                                display: true,
-                                text: 'Time',
-                                color: colors.text
-                            },
-                            ticks: { color: colors.text },
-                            grid: { color: colors.grid }
-                        }
+                        x: getTimeXScale(colors)
                     },
                     plugins: {
                         legend: {
@@ -1390,6 +1385,7 @@
                         fill: true,
                         tension: 0.1,
                         pointRadius: 0,
+                        borderWidth: 1,
                         pointHoverRadius: 5
                     }]
                 },
@@ -1422,24 +1418,7 @@
                             },
                             grid: { color: colors.grid }
                         },
-                        x: {
-                            type: 'time',
-                            time: {
-                                unit: 'minute',
-                                displayFormats: {
-                                    minute: 'HH:mm:ss'
-                                }
-                            },
-                            title: {
-                                display: true,
-                                text: 'Time',
-                                color: colors.text
-                            },
-                            ticks: {
-                                color: colors.text,
-                            },
-                            grid: { color: colors.grid }
-                        }
+                        x: getTimeXScale(colors)
                     },
                     plugins: {
                         legend: {
@@ -1480,6 +1459,7 @@
                         fill: true,
                         tension: 0.1,
                         pointRadius: 0,
+                        borderWidth: 1,
                         pointHoverRadius: 5
                     }]
                 },
@@ -1496,22 +1476,7 @@
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         },
-                        x: {
-                            type: 'time',
-                            time: {
-                                unit: 'minute',
-                                displayFormats: {
-                                    minute: 'HH:mm:ss'
-                                }
-                            },
-                            title: {
-                                display: true,
-                                text: 'Time',
-                                color: colors.text
-                            },
-                            ticks: { color: colors.text },
-                            grid: { color: colors.grid }
-                        }
+                        x: getTimeXScale(colors)
                     },
                     plugins: {
                         legend: {
@@ -1535,29 +1500,31 @@
             // Filter out data points where wind direction is not available
             const validData = trackData.filter(point => point.average_wind_angle_deg !== null && point.average_wind_angle_deg !== undefined);
 
-            const labels = validData.map(point => formatTime(point.timestamp));
-            // Transform wind direction to -180 to 180 scale if normalized
-            const windDirections = validData.map(point => {
+            // Convert data to time-scale format with proper Date objects
+            const chartData = validData.map(point => {
                 let direction = point.average_wind_angle_deg;
                 if (normalized && direction > 180) {
                     direction = direction - 360;
                 }
-                return direction;
+                return {
+                    x: new Date(point.timestamp),
+                    y: direction
+                };
             });
 
             return new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: labels,
                     datasets: [{
                         label: 'Wind Direction (degrees)',
-                        data: windDirections,
+                        data: chartData,
                         borderColor: '#f39c12',
                         backgroundColor: 'rgba(243, 156, 18, 0.1)',
                         fill: true,
                         tension: 0.1,
                         pointRadius: 0,
-                        pointHoverRadius: 5
+                        pointHoverRadius: 5,
+                        borderWidth: 1
                     }]
                 },
                 options: {
@@ -1589,15 +1556,7 @@
                             },
                             grid: { color: colors.grid }
                         },
-                        x: {
-                            title: {
-                                display: true,
-                                text: 'Time',
-                                color: colors.text
-                            },
-                            ticks: { color: colors.text },
-                            grid: { color: colors.grid }
-                        }
+                        x: getTimeXScale(colors)
                     },
                     plugins: {
                         legend: {
@@ -1649,7 +1608,8 @@
                         fill: true,
                         tension: 0.1,
                         pointRadius: 0,
-                        pointHoverRadius: 5
+                        pointHoverRadius: 5,
+                        borderWidth: 1
                     }]
                 },
                 options: {
@@ -1663,13 +1623,7 @@
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         },
-                        x: {
-                            type: 'time',
-                            time: { tooltipFormat: 'HH:mm dd/MM' },
-                            title: { display: true, text: 'Time', color: colors.text },
-                            ticks: { color: colors.text },
-                            grid: { color: colors.grid }
-                        }
+                        x: getTimeXScale(colors)
                     },
                     plugins: {
                         legBands: { bands },
@@ -1714,6 +1668,7 @@
                 tension: 0.1,
                 pointRadius: 0,
                 pointHoverRadius: 5,
+                borderWidth: 1,
                 yAxisID: 'y'
             }];
 
@@ -1728,6 +1683,7 @@
                     fill: true,
                     tension: 0.1,
                     pointRadius: 0,
+                    borderWidth: 1,
                     pointHoverRadius: 5,
                     yAxisID: 'y1'
                 });
@@ -1771,17 +1727,11 @@
                             grid: { display: false },
                             beginAtZero: true
                         } : undefined,
-                        x: {
-                            type: 'time',
-                            time: { tooltipFormat: 'HH:mm dd/MM' },
-                            title: { display: true, text: 'Time', color: colors.text },
-                            ticks: { color: colors.text },
-                            grid: { color: colors.grid }
-                        }
+                        x: getTimeXScale(colors)
                     },
                     plugins: {
                         legBands: { bands },
-                        legend: { display: true, labels: { color: colors.text }, position: 'top' },
+                        legend: { display: true, labels: { color: colors.text }, position: 'bottom' },
                         title: {
                             display: true,
                             text: (windSpeedData && windSpeedData.length > 0) ? 'Absolute Wind Direction & Speed' : 'Absolute Wind Direction',
@@ -1818,11 +1768,6 @@
                     maintainAspectRatio: false,
                     scales: {
                         x: {
-                            title: {
-                                display: true,
-                                text: 'Speed Range (knots)',
-                                color: colors.text
-                            },
                             ticks: {
                                 maxRotation: 45,
                                 minRotation: 45,
@@ -1844,7 +1789,7 @@
                     plugins: {
                         legend: {
                             display: true,
-                            position: 'top',
+                            position: 'bottom',
                             labels: { color: colors.text }
                         },
                         tooltip: {
@@ -1972,6 +1917,7 @@
                         fill: true,
                         tension: 0.1,
                         pointRadius: 0,
+                        borderWidth: 1,
                         pointHoverRadius: 5
                     }]
                 },
@@ -1983,13 +1929,7 @@
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         },
-                        x: {
-                            type: 'time',
-                            time: { tooltipFormat: 'HH:mm dd/MM' },
-                            title: { display: true, text: 'Time', color: colors.text },
-                            ticks: { color: colors.text },
-                            grid: { color: colors.grid }
-                        }
+                        x: getTimeXScale(colors)
                     },
                     plugins: {
                         legBands: { bands },
@@ -2031,6 +1971,7 @@
                         fill: true,
                         tension: 0.1,
                         pointRadius: 0,
+                        borderWidth: 1,
                         pointHoverRadius: 5
                     }]
                 },
@@ -2044,13 +1985,7 @@
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         },
-                        x: {
-                            type: 'time',
-                            time: { tooltipFormat: 'HH:mm dd/MM' },
-                            title: { display: true, text: 'Time', color: colors.text },
-                            ticks: { color: colors.text },
-                            grid: { color: colors.grid }
-                        }
+                        x: getTimeXScale(colors)
                     },
                     plugins: {
                         legBands: { bands },
@@ -2091,6 +2026,7 @@
                         fill: true,
                         tension: 0.1,
                         pointRadius: 0,
+                        borderWidth: 1,
                         pointHoverRadius: 5
                     }]
                 },
@@ -2102,13 +2038,7 @@
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         },
-                        x: {
-                            type: 'time',
-                            time: { tooltipFormat: 'HH:mm' },
-                            title: { display: true, text: 'Time', color: colors.text },
-                            ticks: { color: colors.text },
-                            grid: { color: colors.grid }
-                        }
+                        x: getTimeXScale(colors)
                     },
                     plugins: {
                         legend: { display: false, labels: { color: colors.text } },
@@ -2206,7 +2136,6 @@
                     maintainAspectRatio: false,
                     scales: {
                         x: {
-                            title: { display: true, text: 'Heel Angle Bucket (degrees)', color: colors.text },
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         },
@@ -2292,8 +2221,11 @@
             });            // Fit the map to show all track points
             map.fitBounds(bounds);
 
+            // Create shared hover info window for track tooltips
+            const hoverInfoWindow = new google.maps.InfoWindow();
+
             // Create colored track segments based on speed
-            createColoredTrack(map, validTrackPoints);
+            createColoredTrack(map, validTrackPoints, hoverInfoWindow);
 
             // Add markers for start and end points
             if (validTrackPoints.length > 0) {
@@ -2356,7 +2288,7 @@
             }
         }
 
-        function createColoredTrack(map, trackPoints) {
+        function createColoredTrack(map, trackPoints, hoverInfoWindow) {
             if (trackPoints.length < 2) return;
 
             // Create segments between consecutive points
@@ -2393,6 +2325,29 @@
                 });
 
                 segmentLine.setMap(map);
+
+                if (hoverInfoWindow) {
+                    const tooltipPoint = point2;
+                    segmentLine.addListener('mouseover', (event) => {
+                        const time = tooltipPoint.timestamp ? formatTime(tooltipPoint.timestamp) : 'N/A';
+                        const speed = tooltipPoint.avg_speed_kn != null ? tooltipPoint.avg_speed_kn.toFixed(1) + ' kn' : 'N/A';
+                        const heading = tooltipPoint.average_heading_deg != null ? tooltipPoint.average_heading_deg.toFixed(0) + '°' : 'N/A';
+                        const wind = tooltipPoint.average_wind_speed_kn != null ? tooltipPoint.average_wind_speed_kn.toFixed(1) + ' kn' : 'N/A';
+                        const windDir = tooltipPoint.average_wind_angle_deg != null ? tooltipPoint.average_wind_angle_deg.toFixed(0) + '°' : 'N/A';
+                        hoverInfoWindow.setContent(
+                            '<div class="map-track-tooltip">' +
+                            '<div class="tooltip-time">' + time + '</div>' +
+                            '<div><span class="tooltip-label">Speed </span><span class="tooltip-value">' + speed + ' ' + heading + '</span></div>' +
+                            '<div><span class="tooltip-label">Wind </span><span class="tooltip-value">' + wind + ' ' + windDir + '</span></div>' +
+                            '</div>'
+                        );
+                        hoverInfoWindow.setPosition(event.latLng);
+                        hoverInfoWindow.open(map);
+                    });
+                    segmentLine.addListener('mouseout', () => {
+                        hoverInfoWindow.close();
+                    });
+                }
             }
         }
 
