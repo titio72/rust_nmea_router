@@ -6,32 +6,26 @@
     <title>Trip Details - NMEA Router</title>
     <link rel="icon" type="image/png" href="/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
+    <link rel="preload" as="script" href="/libs/chart.min.js">
     <script src="/shared-theme.js"></script>
-        <script src="/voyage-bar-component.js"></script>
-    <!-- Load Chart.js from local, fallback to CDN with error handling -->
+    <!-- Load Chart.js and date-fns in parallel, then the adapter -->
     <script>
         function loadChartJS() {
-            // Try local Chart.js first
+            // Check local Chart.js availability, then load Chart.js and date-fns in parallel
             fetch('/libs/chart.min.js')
-                .then(r => r.ok ? loadScript('/libs/chart.min.js') : loadChartFromCDN())
-                .then(() => loadDateFnsLibraries())
-                .catch(() => loadChartFromCDN().then(() => loadDateFnsLibraries()));
-        }
-        
-        function loadChartFromCDN() {
-            return loadScript('https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js')
-                .catch(() => {
-                    console.warn('Chart.js unavailable - charts will not display');
-                    window.Chart = null;
-                });
-        }
-        
-        function loadDateFnsLibraries() {
-            // Try to load date-fns and the Chart.js adapter
-            return loadScript('https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js')
+                .then(r => {
+                    const chartSrc = r.ok
+                        ? '/libs/chart.min.js'
+                        : 'https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js';
+                    return Promise.all([
+                        loadScript(chartSrc),
+                        loadScript('https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js')
+                    ]);
+                })
                 .then(() => loadScript('https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js'))
-                .catch((err) => {
-                    console.warn('Date-fns adapter unavailable, time-based charts may not work:', err);
+                .catch(() => {
+                    console.warn('Chart.js or date-fns adapter unavailable - charts will not display');
+                    window.Chart = null;
                 });
         }
         
@@ -344,8 +338,16 @@
                     return true;
                 }
 
-                const response = await fetch('/api/config/google_maps_key', { timeout: 3000 });
-                
+                // fetch() does not support a timeout option — use AbortController
+                const abortController = new AbortController();
+                const fetchTimeout = setTimeout(() => abortController.abort(), 5000);
+                let response;
+                try {
+                    response = await fetch('/api/config/google_maps_key', { signal: abortController.signal });
+                } finally {
+                    clearTimeout(fetchTimeout);
+                }
+
                 if (!response.ok) {
                     console.warn('Google Maps API key endpoint unreachable');
                     showMapFallback('Google Maps API key unavailable');
@@ -360,32 +362,42 @@
                     return false;
                 }
 
-                // Load Google Maps API with timeout
+                // Load Google Maps script with timeout.
+                // Guard against a late onload firing after the timeout has already
+                // resolved the promise with false (script still in DOM but map container
+                // was already replaced with the fallback).
                 return new Promise((resolve) => {
+                    let settled = false;
                     const script = document.createElement('script');
                     script.src = `https://maps.googleapis.com/maps/api/js?key=${result.data}`;
                     script.async = true;
                     script.defer = true;
-                    
+
                     const timeout = setTimeout(() => {
+                        if (settled) return;
+                        settled = true;
                         console.warn('Google Maps API loading timeout');
                         showMapFallback('Google Maps loading timeout - map unavailable');
                         resolve(false);
-                    }, 5000);
-                    
+                    }, 10000);
+
                     script.onload = () => {
                         clearTimeout(timeout);
+                        if (settled) return;
+                        settled = true;
                         googleMapsLoaded = true;
                         resolve(true);
                     };
-                    
+
                     script.onerror = () => {
                         clearTimeout(timeout);
+                        if (settled) return;
+                        settled = true;
                         console.warn('Google Maps API failed to load');
                         showMapFallback('Google Maps failed to load');
                         resolve(false);
                     };
-                    
+
                     document.head.appendChild(script);
                 });
             } catch (error) {
@@ -417,12 +429,14 @@
             }
         }
 
-        // Register Service Worker for offline support and graceful degradation
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').catch(err => {
-                console.log('Service Worker registration failed (non-critical):', err);
-            });
-        }
+        // Register Service Worker after page load to avoid competing for bandwidth
+        window.addEventListener('load', () => {
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.register('/sw.js').catch(err => {
+                    console.log('Service Worker registration failed (non-critical):', err);
+                });
+            }
+        });
 
         // Theme management - override toggleTheme to reload charts when theme changes
         function toggleTheme() {
@@ -551,16 +565,26 @@
 
         async function loadTripAndLegs(tripId) {
             try {
-                // Load Google Maps API and wait for it to complete before loading trip details
-                await loadGoogleMapsAPI().catch(err => {
-                    console.warn('Google Maps loading failed, continuing without map');
-                });
+                // Kick off Google Maps load in the background — do NOT await it here
+                // so the data fetches can proceed in parallel
+                const mapsPromise = loadGoogleMapsAPI().catch(() => {});
 
-                // Load trip summary, trip legs, and full track data in parallel
+                // Restore legs from sessionStorage to save a round-trip on revisit
+                const cachedLegs = sessionStorage.getItem('trip_legs_' + tripId);
+                let legsPromise;
+                if (cachedLegs) {
+                    currentLegs = JSON.parse(cachedLegs);
+                    legsPromise = Promise.resolve(null);
+                } else {
+                    legsPromise = fetch('/api/trip_legs?id=' + tripId);
+                }
+
+                // Load trip summary and full track in parallel; use max_points=600 for
+                // the full-trip view — the map polyline does not need 1-second resolution
                 const [tripResponse, legsResponse, trackResponse] = await Promise.all([
                     fetch('/api/trip?id=' + tripId),
-                    fetch('/api/trip_legs?id=' + tripId),
-                    fetch('/api/track?trip_id=' + tripId)
+                    legsPromise,
+                    fetch('/api/track?trip_id=' + tripId + '&max_points=600', { priority: 'high' })
                 ]);
 
                 if (!tripResponse.ok) {
@@ -572,12 +596,15 @@
                 }
                 currentTrip = tripResult.data;
 
-                if (!legsResponse.ok) {
-                    throw new Error('HTTP ' + legsResponse.status + ': ' + legsResponse.statusText);
-                }
-                const legsResult = await legsResponse.json();
-                if (legsResult.status === 'ok' && legsResult.data.legs) {
-                    currentLegs = legsResult.data.legs;
+                if (legsResponse !== null) {
+                    if (!legsResponse.ok) {
+                        throw new Error('HTTP ' + legsResponse.status + ': ' + legsResponse.statusText);
+                    }
+                    const legsResult = await legsResponse.json();
+                    if (legsResult.status === 'ok' && legsResult.data.legs) {
+                        currentLegs = legsResult.data.legs;
+                        sessionStorage.setItem('trip_legs_' + tripId, JSON.stringify(currentLegs));
+                    }
                 }
 
                 if (!trackResponse.ok) {
@@ -588,11 +615,12 @@
                     fullTrackData = trackResult.data;
                 }
 
-                // Display leg selector
+                // Display leg selector and initial trip view immediately
                 updateLegSelector();
-
-                // Load entire trip by default
                 await loadTripDetails(tripId, null);
+
+                // Wait for Google Maps to finish (it may still be loading)
+                await mapsPromise;
             } catch (error) {
                 document.getElementById('tripDetails').innerHTML =
                     '<div class="error">Failed to load trip: ' + error.message + '</div>';
@@ -2334,11 +2362,19 @@
                         const heading = tooltipPoint.average_heading_deg != null ? tooltipPoint.average_heading_deg.toFixed(0) + '°' : 'N/A';
                         const wind = tooltipPoint.average_wind_speed_kn != null ? tooltipPoint.average_wind_speed_kn.toFixed(1) + ' kn' : 'N/A';
                         const windDir = tooltipPoint.average_wind_angle_deg != null ? tooltipPoint.average_wind_angle_deg.toFixed(0) + '°' : 'N/A';
+                        let absWindDir;
+                        if (tooltipPoint.absolute_wind_direction_deg != null && tooltipPoint.average_heading_deg != null) {
+                            let absWindDir_d = (tooltipPoint.absolute_wind_direction_deg + tooltipPoint.average_heading_deg) % 360;
+                            if (absWindDir_d < 0) absWindDir_d += 360;
+                            absWindDir = absWindDir_d.toFixed(0) + '°';
+                        } else {
+                            absWindDir = 'N/A';
+                        }
                         hoverInfoWindow.setContent(
                             '<div class="map-track-tooltip">' +
                             '<div class="tooltip-time">' + time + '</div>' +
                             '<div><span class="tooltip-label">Speed </span><span class="tooltip-value">' + speed + ' ' + heading + '</span></div>' +
-                            '<div><span class="tooltip-label">Wind </span><span class="tooltip-value">' + wind + ' ' + windDir + '</span></div>' +
+                            '<div><span class="tooltip-label">Wind </span><span class="tooltip-value">' + wind + ' ' + absWindDir + '</span></div>' +
                             '</div>'
                         );
                         hoverInfoWindow.setPosition(event.latLng);
@@ -2451,5 +2487,6 @@
             }
         }
     </script>
+    <script src="/voyage-bar-component.js" defer></script>
 </body>
 </html>

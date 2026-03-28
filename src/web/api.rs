@@ -16,6 +16,7 @@ use tower_http::trace::TraceLayer;
 use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData, SpeedDistributionData, WindStatisticsData, TripLegsData, TrackAnalytics, HeatmapData};
 use crate::config::Config;
 use crate::web::broadcast_manager::SignalKBroadcastChannels;
+use chrono::{DateTime, NaiveDate, Utc};
 
 const MAX_IMPORT_TRIP_UPLOAD_BYTES: usize = 100 * 1024 * 1024; // 100 MiB
 
@@ -75,6 +76,7 @@ pub struct TrackQuery {
     pub trip_id: Option<u32>,
     pub start: Option<String>,
     pub end: Option<String>,
+    pub max_points: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,6 +177,28 @@ pub struct DownloadBackupQuery {
     pub file: String,
 }
 
+fn parse_datetime_str(s: &str) -> Result<DateTime<Utc>, StatusCode> {
+    // Try RFC3339 first (e.g. "2026-01-20T10:00:00Z")
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    // Fall back to SQL-style UTC datetime (e.g. "2026-01-20 10:00:00")
+    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+        .map(|ndt| DateTime::from_naive_utc_and_offset(ndt, Utc))
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn parse_optional_datetime(s: &Option<String>) -> Result<Option<DateTime<Utc>>, StatusCode> {
+    match s {
+        None => Ok(None),
+        Some(s) => parse_datetime_str(s).map(Some),
+    }
+}
+
+fn parse_required_datetime(s: &str) -> Result<DateTime<Utc>, StatusCode> {
+    parse_datetime_str(s)
+}
+
 pub async fn get_trips(
     State(state): State<AppState>,
     Query(params): Query<TripsQuery>,
@@ -229,10 +253,13 @@ pub async fn get_track(
     State(state): State<AppState>,
     Query(params): Query<TrackQuery>,
 ) -> Result<Json<ApiResponse<Vec<TrackPoint>>>, StatusCode> {
+    let start = parse_optional_datetime(&params.start)?;
+    let end = parse_optional_datetime(&params.end)?;
     match state.db.fetch_track(
         params.trip_id,
-        params.start.as_deref(),
-        params.end.as_deref(),
+        start,
+        end,
+        params.max_points,
     ) {
         Ok(track) => Ok(Json(ApiResponse::ok(track))),
         Err(e) => {
@@ -250,11 +277,13 @@ pub async fn get_metrics(
     State(state): State<AppState>,
     Query(params): Query<MetricsQuery>,
 ) -> Result<Json<ApiResponse<Vec<WebMetricData>>>, StatusCode> {
+    let start = parse_optional_datetime(&params.start)?;
+    let end = parse_optional_datetime(&params.end)?;
     match state.db.fetch_metrics(
         &params.metric,
         params.trip_id,
-        params.start.as_deref(),
-        params.end.as_deref(),
+        start,
+        end,
     ) {
         Ok(metrics) => Ok(Json(ApiResponse::ok(metrics))),
         Err(e) => {
@@ -272,10 +301,12 @@ pub async fn get_speed_distribution(
     State(state): State<AppState>,
     Query(params): Query<TimeRangeQuery>,
 ) -> Result<Json<ApiResponse<SpeedDistributionData>>, StatusCode> {
+    let start = parse_optional_datetime(&params.start)?;
+    let end = parse_optional_datetime(&params.end)?;
     match state.db.fetch_speed_distribution(
         params.id,
-        params.start.as_deref(),
-        params.end.as_deref(),
+        start,
+        end,
     ) {
         Ok(distribution) => Ok(Json(ApiResponse::ok(distribution))),
         Err(e) => {
@@ -293,10 +324,12 @@ pub async fn get_wind_statistics(
     State(state): State<AppState>,
     Query(params): Query<TimeRangeQuery>,
 ) -> Result<Json<ApiResponse<WindStatisticsData>>, StatusCode> {
+    let start = parse_optional_datetime(&params.start)?;
+    let end = parse_optional_datetime(&params.end)?;
     match state.db.fetch_wind_statistics(
         params.id,
-        params.start.as_deref(),
-        params.end.as_deref(),
+        start,
+        end,
     ) {
         Ok(statistics) => Ok(Json(ApiResponse::ok(statistics))),
         Err(e) => {
@@ -331,7 +364,9 @@ pub async fn get_track_analytics(
     State(state): State<AppState>,
     Query(params): Query<TimeRangeRequiredQuery>,
 ) -> Result<Json<ApiResponse<TrackAnalytics>>, StatusCode> {
-    match state.db.fetch_track_analytics(&params.start, &params.end) {
+    let start = parse_required_datetime(&params.start)?;
+    let end = parse_required_datetime(&params.end)?;
+    match state.db.fetch_track_analytics(start, end) {
         Ok(analytics) => Ok(Json(ApiResponse::ok(analytics))),
         Err(e) => {
             error!(error = %e, "Failed to fetch track analytics");
@@ -597,7 +632,9 @@ pub async fn get_heatmap(
     State(state): State<AppState>,
     Query(params): Query<HeatmapQuery>,
 ) -> Result<Json<ApiResponse<HeatmapData>>, StatusCode> {
-    match state.db.fetch_heatmap(&params.date) {
+    let date = NaiveDate::parse_from_str(&params.date, "%Y-%m-%d")
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    match state.db.fetch_heatmap(date) {
         Ok(heatmap) => Ok(Json(ApiResponse::ok(heatmap))),
         Err(e) => {
             error!(error = %e, "Failed to fetch heatmap");
@@ -895,6 +932,29 @@ pub async fn post_backup(
     }
 }
 
+pub async fn system_shutdown() -> Result<Json<ApiResponse<String>>, StatusCode> {
+    info!("System shutdown requested via API");
+
+    // Spawn shutdown in background so we can return a response first
+    tokio::spawn(async {
+        // Brief delay to allow the HTTP response to be sent
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        let shutdown_script = std::path::Path::new("./shutdown.sh");
+        if shutdown_script.exists() {
+            info!("Executing shutdown.sh");
+            let _ = tokio::process::Command::new("./shutdown.sh").spawn();
+        } else {
+            info!("Executing system shutdown via systemctl");
+            let _ = tokio::process::Command::new("systemctl")
+                .arg("poweroff")
+                .spawn();
+        }
+    });
+
+    Ok(Json(ApiResponse::ok("Shutdown initiated".to_string())))
+}
+
 pub fn create_api_router(state: AppState) -> Router {
     Router::new()
         .route("/trip_description", post(update_trip_description))
@@ -928,6 +988,7 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/backup", post(post_backup))
         .route("/backup", delete(delete_backup))
         .route("/backup/download", get(download_backup))
+        .route("/system/shutdown", post(system_shutdown))
         .layer(
             TraceLayer::new_for_http()
                 .on_request(|request: &axum::http::Request<_>, _span: &Span| {

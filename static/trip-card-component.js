@@ -34,6 +34,7 @@ class TripCard extends HTMLElement {
 
         this.shadowRoot.innerHTML = `
             <link rel="stylesheet" href="/shared.css">
+            <script src="/shared-theme.js"></script>
             <style>
                 :host {
                     display: block;
@@ -82,10 +83,10 @@ class TripCard extends HTMLElement {
                         </div>
                     </div>
                     <div class="trip-buttons">
-                        <button class="app-btn" data-action="edit" title="Edit description">✎</button>
-                        <button class="app-btn" data-action="export" title="Export trip">⬇</button>
-                        <button class="app-btn" data-action="trim" title="Trim trip">✂</button>
-                        <button class="app-btn" data-action="delete" title="Delete trip">🗑</button>
+                        <button class="app-btn" data-action="edit" title="Edit description"><app-icon name="pencil"></app-icon></button>
+                        <button class="app-btn" data-action="export" title="Export trip"><app-icon name="download"></app-icon></button>
+                        <button class="app-btn" data-action="trim" title="Trim trip"><app-icon name="scissors"></app-icon></button>
+                        <button class="app-btn" data-action="delete" title="Delete trip"><app-icon name="trash"></app-icon></button>
                     </div>
                 </div>
 

@@ -82,7 +82,7 @@ impl TripSummary {
     }
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TrackPoint {
     pub timestamp: String,
     pub latitude: Option<f64>,

@@ -8,6 +8,7 @@ use std::error::Error;
 use crate::utilities::haversine_distance_nm;
 use mysql::params;
 use mysql::prelude::Queryable;
+use chrono::{DateTime, NaiveDate, Utc};
 
 impl VesselDatabase {
     pub fn fetch_trip(&self, trip_id: u32) -> Result<Option<TripSummary>, Box<dyn std::error::Error>> {
@@ -219,7 +220,7 @@ impl VesselDatabase {
     }
 
     /// Fetch vessel track data by trip_id or date range
-    pub fn fetch_track(&self, trip_id: Option<u32>, start: Option<&str>, end: Option<&str>) -> Result<Vec<TrackPoint>, Box<dyn std::error::Error>> {
+    pub fn fetch_track(&self, trip_id: Option<u32>, start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>, max_points: Option<usize>) -> Result<Vec<TrackPoint>, Box<dyn std::error::Error>> {
         let query = if let Some(trip_id) = trip_id {
             // Get trip date range and fetch vessel_status data for that period
             format!(
@@ -242,7 +243,8 @@ impl VesselDatabase {
                         average_wind_speed_kn, average_wind_angle_deg,
                         cog_deg, average_heading_deg
                  FROM vessel_status WHERE timestamp BETWEEN '{}' AND '{}' ORDER BY timestamp",
-                start, end
+                start.format("%Y-%m-%d %H:%M:%S"),
+                end.format("%Y-%m-%d %H:%M:%S")
             )
         } else {
             return Err("Either trip_id or both start and end timestamps are required".into());
@@ -254,7 +256,7 @@ impl VesselDatabase {
         let results: Vec<mysql::Row> = conn.query(&query)
             .map_err(|e| format!("Database query error: {}", e))?;
 
-        let track = results
+        let track: Vec<TrackPoint> = results
             .iter()
             .map(|row| TrackPoint {
                 timestamp: row.get_opt::<String, _>("timestamp")
@@ -291,11 +293,25 @@ impl VesselDatabase {
             })
             .collect();
 
+        // Subsample if max_points requested and result exceeds limit
+        let track = if let Some(max) = max_points {
+            if track.len() > max && max > 0 {
+                let step = track.len() as f64 / max as f64;
+                (0..max)
+                    .map(|i| track[(i as f64 * step) as usize].clone())
+                    .collect()
+            } else {
+                track
+            }
+        } else {
+            track
+        };
+
         Ok(track)
     }
 
     /// Fetch environmental metrics by metric_id with optional trip_id or date range
-    pub fn fetch_metrics(&self, metric: &str, trip_id: Option<u32>, start: Option<&str>, end: Option<&str>) -> Result<Vec<WebMetricData>, Box<dyn std::error::Error>> {
+    pub fn fetch_metrics(&self, metric: &str, trip_id: Option<u32>, start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) -> Result<Vec<WebMetricData>, Box<dyn std::error::Error>> {
         let query = if let Some(trip_id) = trip_id {
             format!(
                 "SELECT DATE_FORMAT(e.timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
@@ -313,7 +329,9 @@ impl VesselDatabase {
                  FROM environmental_data 
                  WHERE metric_id = '{}' AND timestamp BETWEEN '{}' AND '{}' 
                  ORDER BY timestamp",
-                metric, start, end
+                metric,
+                start.format("%Y-%m-%d %H:%M:%S"),
+                end.format("%Y-%m-%d %H:%M:%S")
             )
         } else {
             return Err("Either trip_id or both start and end timestamps are required".into());
@@ -347,7 +365,7 @@ impl VesselDatabase {
     }
 
     /// Fetch speed distribution data for a trip
-    pub fn fetch_speed_distribution(&self, trip_id: Option<u32>, start: Option<&str>, end: Option<&str>) -> Result<SpeedDistributionData, Box<dyn std::error::Error>> {
+    pub fn fetch_speed_distribution(&self, trip_id: Option<u32>, start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) -> Result<SpeedDistributionData, Box<dyn std::error::Error>> {
         // Create buckets for speeds from 0 to 10 knots in 0.5 knot increments
         let max_speed = 10.0;
         let bucket_size = 0.5;
@@ -380,7 +398,8 @@ impl VesselDatabase {
                  FROM vessel_status vs
                  WHERE vs.timestamp BETWEEN '{}' AND '{}'
                  ORDER BY vs.timestamp",
-                start, end
+                start.format("%Y-%m-%d %H:%M:%S"),
+                end.format("%Y-%m-%d %H:%M:%S")
             )
         } else {
             return Err("Either trip_id or both start and end timestamps are required".into());
@@ -422,7 +441,7 @@ impl VesselDatabase {
     }
 
     /// Fetch wind statistics data for a trip or time range
-    pub fn fetch_wind_statistics(&self, trip_id: Option<u32>, start: Option<&str>, end: Option<&str>) -> Result<WindStatisticsData, Box<dyn std::error::Error>> {
+    pub fn fetch_wind_statistics(&self, trip_id: Option<u32>, start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) -> Result<WindStatisticsData, Box<dyn std::error::Error>> {
         // Create 72 buckets for wind directions (360 degrees / 5 degrees = 72 buckets)
         let bucket_size = 5.0;
         let num_buckets = 72;
@@ -464,7 +483,8 @@ impl VesselDatabase {
                  AND vs.average_wind_speed_kn IS NOT NULL
                  AND vs.is_moored = false
                  ORDER BY vs.timestamp",
-                start, end
+                start.format("%Y-%m-%d %H:%M:%S"),
+                end.format("%Y-%m-%d %H:%M:%S")
             )
         } else {
             return Err("Either trip_id or both start and end timestamps are required".into());
@@ -633,7 +653,7 @@ impl VesselDatabase {
     }
 
     /// Fetch track analytics for a time range - calculates max speed and fastest segments
-    pub fn fetch_track_analytics(&self, start: &str, end: &str) -> Result<TrackAnalytics, Box<dyn std::error::Error>> {
+    pub fn fetch_track_analytics(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<TrackAnalytics, Box<dyn std::error::Error>> {
         let query = format!(
             r"SELECT 
                 DATE_FORMAT(vs.timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as timestamp,
@@ -648,7 +668,8 @@ impl VesselDatabase {
              WHERE vs.timestamp BETWEEN '{}' AND '{}'
              AND vs.average_speed_kn IS NOT NULL
              ORDER BY vs.timestamp",
-            start, end
+            start.format("%Y-%m-%d %H:%M:%S"),
+            end.format("%Y-%m-%d %H:%M:%S")
         );
 
         let mut conn = self.pool.get_conn()
@@ -750,10 +771,8 @@ impl VesselDatabase {
     /// Fetch heatmap data - distance traveled grouped by day for 365 days before the given date.
     /// Uses a per-day database cache (heatmap_cache) to avoid recomputing past days.
     /// Today is always recomputed fresh since vessel_status data for it is still being written.
-    pub fn fetch_heatmap(&self, end_date: &str) -> Result<HeatmapData, Box<dyn std::error::Error>> {
-        use chrono::NaiveDate;
-
-        let end_dt = NaiveDate::parse_from_str(end_date, "%Y-%m-%d")?;
+    pub fn fetch_heatmap(&self, end_date: NaiveDate) -> Result<HeatmapData, Box<dyn std::error::Error>> {
+        let end_dt = end_date;
         let start_dt = end_dt - chrono::Duration::days(365);
 
         // Today in UTC — never cache today since vessel_status data is still being written
@@ -1071,7 +1090,7 @@ mod tests {
         }
 
         // Fetch track by trip_id
-        let points = db.fetch_track(Some(trip_id), None, None)
+        let points = db.fetch_track(Some(trip_id), None, None, None)
             .expect("Failed to fetch track");
 
         // Verify track has multiple points

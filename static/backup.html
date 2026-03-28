@@ -6,7 +6,9 @@
     <title>Backup - NMEA Router</title>
     <link rel="icon" type="image/png" href="/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
+    <script src="/my-icons.js"></script>
     <script src="/shared-theme.js"></script>
+
     <style>
         .backup-table {
             width: 100%;
@@ -112,7 +114,13 @@
     <div id="headerContainer"></div>
 
     <div class="level-1-container">
-        <div class="trip-header"><h2>Database Backup</h2><div><button class="app-btn" id="btnGenerate" onclick="generateBackup()" title="Generate new backup">🖴</button><button class="app-btn" id="btnDeleteAll" onclick="deleteAllBackups()" title="Delete all backups">🗑</button></div></div>
+        <div class="trip-header">
+            <h2>Database Backup</h2>
+            <div>
+                <button class="app-btn" id="btnGenerate" onclick="generateBackup()" title="Generate new backup"><app-icon name="new"></app-icon></button>
+                <button class="app-btn" id="btnDeleteAll" onclick="deleteAllBackups()" title="Delete all backups"><app-icon name="trash"></app-icon></button>
+            </div>
+        </div>
 
         <div id="statusBar" class="status-bar"></div>
 
@@ -205,8 +213,8 @@
                     <td class="file-size">${formatBytes(f.size)}</td>
                     <td class="file-size">${escapeHtml(f.modified)}</td>
                     <td style="text-align:right; white-space:nowrap;">
-                        <a class="app-btn" href="/api/backup/download?file=${encodeURIComponent(f.name)}" download="${escapeHtml(f.name)}" title="Download backup" style="text-decoration:none;">⬇</a>
-                        <button class="app-btn btn-delete-one" onclick="deleteBackup('${escapeHtml(f.name)}')" title="Delete backup">🗑</button>
+                        <a class="app-btn" href="/api/backup/download?file=${encodeURIComponent(f.name)}" download="${escapeHtml(f.name)}" title="Download backup" style="text-decoration:none;"><app-icon name="download"></app-icon></a>
+                        <button class="app-btn btn-delete-one" onclick="deleteBackup('${escapeHtml(f.name)}')" title="Delete backup"><app-icon name="trash"></app-icon></button>
                     </td>`;
                 tbody.appendChild(tr);
             });
@@ -239,38 +247,52 @@
             }
         }
 
-        async function deleteBackup(filename) {
-            if (!confirm('Delete backup "' + filename + '"?')) return;
-            hideStatus();
-            setButtonsDisabled(true);
-            try {
-                const resp = await fetch('/api/backup?file=' + encodeURIComponent(filename), { method: 'DELETE' });
-                const result = await resp.json();
-                if (result.status !== 'ok') throw new Error(result.error || 'Delete failed');
-                showStatus('Deleted: ' + filename, 'success');
-                await loadBackups();
-            } catch (e) {
-                showStatus('Delete failed: ' + e.message, 'error');
-            } finally {
-                setButtonsDisabled(false);
-            }
+        function deleteBackup(filename) {
+            showConfirm({
+                icon: 'trash',
+                title: 'Delete Backup?',
+                message: `Delete backup "${filename}"?\n\nThis action cannot be undone.`,
+                confirmLabel: 'Delete',
+                onConfirm: async () => {
+                    hideStatus();
+                    setButtonsDisabled(true);
+                    try {
+                        const resp = await fetch('/api/backup?file=' + encodeURIComponent(filename), { method: 'DELETE' });
+                        const result = await resp.json();
+                        if (result.status !== 'ok') throw new Error(result.error || 'Delete failed');
+                        showStatus('Deleted: ' + filename, 'success');
+                        await loadBackups();
+                    } catch (e) {
+                        showStatus('Delete failed: ' + e.message, 'error');
+                    } finally {
+                        setButtonsDisabled(false);
+                    }
+                }
+            });
         }
 
-        async function deleteAllBackups() {
-            if (!confirm('Delete ALL backups? This cannot be undone.')) return;
-            hideStatus();
-            setButtonsDisabled(true);
-            try {
-                const resp = await fetch('/api/backup?all=true', { method: 'DELETE' });
-                const result = await resp.json();
-                if (result.status !== 'ok') throw new Error(result.error || 'Delete failed');
-                showStatus('All backups deleted.', 'success');
-                await loadBackups();
-            } catch (e) {
-                showStatus('Delete failed: ' + e.message, 'error');
-            } finally {
-                setButtonsDisabled(false);
-            }
+        function deleteAllBackups() {
+            showConfirm({
+                icon: 'trash',
+                title: 'Delete All Backups?',
+                message: 'This will permanently delete all backup files.\n\nThis action cannot be undone.',
+                confirmLabel: 'Delete All',
+                onConfirm: async () => {
+                    hideStatus();
+                    setButtonsDisabled(true);
+                    try {
+                        const resp = await fetch('/api/backup?all=true', { method: 'DELETE' });
+                        const result = await resp.json();
+                        if (result.status !== 'ok') throw new Error(result.error || 'Delete failed');
+                        showStatus('All backups deleted.', 'success');
+                        await loadBackups();
+                    } catch (e) {
+                        showStatus('Delete failed: ' + e.message, 'error');
+                    } finally {
+                        setButtonsDisabled(false);
+                    }
+                }
+            });
         }
 
         // Load on startup

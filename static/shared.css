@@ -130,11 +130,30 @@ h2 {
     font-size: 14px;
     color: var(--text-primary);
     transition: all 0.3s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.theme-toggle svg {
+    vertical-align: middle;
+    flex-shrink: 0;
 }
 
 .theme-toggle:hover {
     background: var(--btn-hover);
     opacity: 0.8;
+}
+
+.shutdown-btn {
+    color: #e74c3c;
+    padding: 8px 12px;
+}
+
+.shutdown-btn:hover {
+    background: rgba(231, 76, 60, 0.12);
+    border-color: #e74c3c;
+    opacity: 1;
 }
 
 .app-btn {

@@ -518,7 +518,7 @@
 
     <!-- Trips Section -->
     <div id="tripsSection" class="level-1-container">
-        <div class="trip-header"><h2 id="tripsTitle">Trips</h2><button class="app-btn" onclick="triggerImportDialog()" title="Import trip">⬆</button></div>
+        <div class="trip-header"><h2 id="tripsTitle">Trips</h2><button class="app-btn" onclick="triggerImportDialog()" title="Import trip"><app-icon name="upload"></app-icon></button></div>
         <div id="content">
             <div class="loading">Loading trips...</div>
         </div>
@@ -1282,9 +1282,13 @@
             const tripCard = event.target.closest('.trip-card');
             const tripTitle = tripCard ? tripCard.querySelector('.trip-title').textContent : 'Trip ' + tripId;
 
-            if (confirm(`Are you sure you want to trim this trip?\n\n"${tripTitle}"\n\nThis will remove idle periods before the boat starts moving and after it moors.\n\nThe operation will:\n1. Find when the boat starts moving (is_moored = 0)\n2. Find when the boat gets moored (is_moored = 1) after final movement\n3. Apply 1-hour safety buffers before/after\n4. Delete data outside the trimmed period\n\nThis action cannot be undone.`)) {
-                trimTrip_Confirmed(tripId);
-            }
+            showConfirm({
+                icon: 'scissors',
+                title: 'Trim Trip?',
+                message: `"${tripTitle}"\n\nThis will remove idle periods before the boat starts moving and after it moors. Safety buffers of 1 hour are applied before and after.\n\nThis action cannot be undone.`,
+                confirmLabel: 'Trim',
+                onConfirm: () => trimTrip_Confirmed(tripId)
+            });
         }
 
         function trimTrip_Confirmed(tripId) {
@@ -1313,9 +1317,13 @@
             const tripCard = event.target.closest('.trip-card');
             const tripTitle = tripCard ? tripCard.querySelector('.trip-title').textContent : 'Trip ' + tripId;
 
-            if (confirm(`Are you sure you want to delete this trip?\n\n"${tripTitle}"\n\nThis will also delete all associated environmental and vessel status data.\n\nThis action cannot be undone.`)) {
-                deleteTrip_Confirmed(tripId);
-            }
+            showConfirm({
+                icon: 'trash',
+                title: 'Delete Trip?',
+                message: `"${tripTitle}"\n\nThis will also delete all associated environmental and vessel status data.\n\nThis action cannot be undone.`,
+                confirmLabel: 'Delete',
+                onConfirm: () => deleteTrip_Confirmed(tripId)
+            });
         }
 
         function deleteTrip_Confirmed(tripId) {
