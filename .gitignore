@@ -1,3 +1,4 @@
 /target
 logs/*
 /nmea2k/target
+/static/libs/

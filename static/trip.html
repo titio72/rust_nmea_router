@@ -73,6 +73,11 @@
             gap: 30px;
             margin-bottom: 30px;
         }
+        @media (max-width: 900px) {
+            .infoAndMapContainer {
+                grid-template-columns: 1fr;
+            }
+        }
         #map {
             flex: 1;
             min-height: 300px;
@@ -131,9 +136,15 @@
             grid-template-columns: repeat(2, 1fr);
             gap: 30px;
         }
+        @media (max-width: 900px) {
+            .chartsContainer {
+                grid-template-columns: 1fr;
+            }
+        }
 
         .chartWrapper {
             min-height: 400px;
+            max-height: 500px;
         }
 
         .chartToolbar {
@@ -555,8 +566,8 @@
         let currentWindSpeedData = null; // Metric data for wind speed (for chart toggling)
 
         if (!tripId) {
-            document.getElementById('tripDetails').innerHTML =
-                '<div class="error">No trip ID specified</div>';
+            //document.getElementById('tripDetails').innerHTML =
+            //    '<div class="error">No trip ID specified</div>';
         } else {
             loadTripAndLegs(tripId);
         }
@@ -626,8 +637,8 @@
                     initializeMap(currentTrackData);
                 }
             } catch (error) {
-                document.getElementById('tripDetails').innerHTML =
-                    '<div class="error">Failed to load trip: ' + error.message + '</div>';
+                //document.getElementById('tripDetails').innerHTML =
+                //    '<div class="error">Failed to load trip: ' + error.message + '</div>';
             }
         }
 
@@ -767,8 +778,8 @@
                 // Fetch secondary charts in parallel
                 await fetchAndRenderSecondaryCharts(tripData, trackData, startTime, endTime, selectedLeg === null);
             } catch (error) {
-                document.getElementById('tripDetails').innerHTML =
-                    '<div class="error">Failed to load trip details: ' + error.message + '</div>';
+                //document.getElementById('tripDetails').innerHTML =
+                //    '<div class="error">Failed to load trip details: ' + error.message + '</div>';
             }
         }
 
@@ -781,7 +792,7 @@
             });
             allCharts = {};
 
-            const content = document.getElementById('tripDetails');
+            //const content = document.getElementById('tripDetails');
 
             // Calculate percentages
             const totalDistance = trip.total_distance_nm;
@@ -833,7 +844,9 @@
             // Build HTML for time series charts
             const chartsHTML = 
                 '<div class="app-card">' +
-                    '<canvas id="speedChart"></canvas>' +
+                    '<div class="chartWrapper">' +
+                        '<canvas id="speedChart"></canvas>' +
+                    '</div>' +
                 '</div>' +
                 '<div class="app-card">' +
                     '<div class="chartToolbar">' +
@@ -844,7 +857,9 @@
                     '</div>' +
                 '</div>' +
                 '<div class="app-card">' +
-                    '<canvas id="windSpeedChart"></canvas>' +
+                    '<div class="chartWrapper">' +
+                        '<canvas id="windSpeedChart"></canvas>' +
+                    '</div>' +
                 '</div>' +
                 '<div class="app-card">' +
                     '<div class="chartToolbar">' +
@@ -984,14 +999,21 @@
 
                 // Build charts container HTML for secondary charts
                 const chartsHTML = 
-                    (!isFullTrip ? '<div class="app-card">' +
-                        '<canvas id="speedDistributionChart"></canvas>' +
+                    (!isFullTrip ? 
+                    '<div class="app-card">' +
+                        '<div class="chartWrapper">' +
+                            '<canvas id="speedDistributionChart"></canvas>' +
+                        '</div>' +
                     '</div>' +
                     '<div class="app-card">' +
-                        '<canvas id="windStatisticsChart"></canvas>' +
+                        '<div class="chartWrapper">' +
+                            '<canvas id="windStatisticsChart"></canvas>' +
+                        '</div>' +
                     '</div>' : '') +
                     '<div class="app-card">' +
-                        '<canvas id="atmosphericPressureChart"></canvas>' +
+                        '<div class="chartWrapper">' +
+                            '<canvas id="atmosphericPressureChart"></canvas>' +
+                        '</div>' +
                     '</div>' +
                     '<div class="app-card">' +
                         '<div class="chartToolbar">' +
@@ -1002,10 +1024,14 @@
                         '</div>' +
                     '</div>' +
                     '<div class="app-card">' +
-                        '<canvas id="cabinTemperatureChart"></canvas>' +
+                        '<div class="chartWrapper">' +
+                            '<canvas id="cabinTemperatureChart"></canvas>' +
+                        '</div>' +
                     '</div>' +
                     '<div class="app-card">' +
-                        '<canvas id="humidityChart"></canvas>' +
+                        '<div class="chartWrapper">' +
+                            '<canvas id="humidityChart"></canvas>' +
+                        '</div>' +
                     '</div>';
 
                 const container = document.getElementById('chartsContainer');
@@ -1133,11 +1159,6 @@
             }
 
             analyticsGrid.innerHTML = html;
-        }
-
-        function displayTripDetails(trip, trackData, speedDistData, windStatsData, analyticsData, pressureData) {
-            // Legacy function - kept for backward compatibility if needed
-            // This function is no longer called in the optimized flow
         }
 
         function handleSegmentClick(event, segmentType) {
