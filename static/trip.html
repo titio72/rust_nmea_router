@@ -6,23 +6,21 @@
     <title>Trip Details - NMEA Router</title>
     <link rel="icon" type="image/png" href="/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
-    <link rel="preload" as="script" href="/libs/chart.min.js">
     <script src="/shared-theme.js"></script>
     <!-- Load Chart.js and date-fns in parallel, then the adapter -->
     <script>
         function loadChartJS() {
-            // Check local Chart.js availability, then load Chart.js and date-fns in parallel
+            // Try local copies first, fall back to CDN if unavailable
             fetch('/libs/chart.min.js')
                 .then(r => {
-                    const chartSrc = r.ok
-                        ? '/libs/chart.min.js'
-                        : 'https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js';
+                    const local = r.ok;
                     return Promise.all([
-                        loadScript(chartSrc),
-                        loadScript('https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js')
-                    ]);
+                        loadScript(local ? '/libs/chart.min.js' : 'https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js'),
+                        loadScript(local ? '/libs/date-fns.min.js' : 'https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js')
+                    ]).then(() => loadScript(local
+                        ? '/libs/chartjs-adapter-date-fns.bundle.min.js'
+                        : 'https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js'));
                 })
-                .then(() => loadScript('https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js'))
                 .catch(() => {
                     console.warn('Chart.js or date-fns adapter unavailable - charts will not display');
                     window.Chart = null;
@@ -567,7 +565,7 @@
             try {
                 // Kick off Google Maps load in the background — do NOT await it here
                 // so the data fetches can proceed in parallel
-                const mapsPromise = loadGoogleMapsAPI().catch(() => {});
+                const mapsPromise = loadGoogleMapsAPI().catch(() => false);
 
                 // Restore legs from sessionStorage to save a round-trip on revisit
                 const cachedLegs = sessionStorage.getItem('trip_legs_' + tripId);
@@ -620,7 +618,13 @@
                 await loadTripDetails(tripId, null);
 
                 // Wait for Google Maps to finish (it may still be loading)
-                await mapsPromise;
+                const mapsLoaded = await mapsPromise;
+
+                // If Maps finished loading after initializeMap() already ran (and showed
+                // the fallback), render the map now with the track data we already have.
+                if (mapsLoaded && !currentMap && currentTrackData) {
+                    initializeMap(currentTrackData);
+                }
             } catch (error) {
                 document.getElementById('tripDetails').innerHTML =
                     '<div class="error">Failed to load trip: ' + error.message + '</div>';

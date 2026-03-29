@@ -61,6 +61,9 @@ else
     echo -e "${YELLOW}⚠ static directory not found, skipping UI installation${NC}"
 fi
 
+# Download JavaScript libraries
+bash "$(dirname "$0")/download_libs.sh" "$WORK_DIR/static/libs"
+
 # Copy configuration files
 echo -e "${YELLOW}Installing configuration files...${NC}"
 if [ -f "$CONFIG_DIR/$CONFIG_FILE" ]; then
