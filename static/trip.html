@@ -578,15 +578,7 @@
                 // so the data fetches can proceed in parallel
                 const mapsPromise = loadGoogleMapsAPI().catch(() => false);
 
-                // Restore legs from sessionStorage to save a round-trip on revisit
-                const cachedLegs = sessionStorage.getItem('trip_legs_' + tripId);
-                let legsPromise;
-                if (cachedLegs) {
-                    currentLegs = JSON.parse(cachedLegs);
-                    legsPromise = Promise.resolve(null);
-                } else {
-                    legsPromise = fetch('/api/trip_legs?id=' + tripId);
-                }
+                const legsPromise = fetch('/api/trip_legs?id=' + tripId);
 
                 // Load trip summary and full track in parallel; use max_points=600 for
                 // the full-trip view — the map polyline does not need 1-second resolution
@@ -1192,15 +1184,19 @@
 
             let startPoint = null;
             let endPoint = null;
+            let startDelta = Infinity;
+            let endDelta = Infinity;
 
             for (let point of currentTrackData) {
                 const pointTime = new Date(point.timestamp).getTime();
-                // Find closest start point (within 1 second tolerance)
-                if (!startPoint && Math.abs(pointTime - startTime) < 1000) {
+                const dStart = Math.abs(pointTime - startTime);
+                const dEnd = Math.abs(pointTime - endTime);
+                if (dStart < startDelta) {
+                    startDelta = dStart;
                     startPoint = point;
                 }
-                // Find closest end point (within 1 second tolerance)
-                if (Math.abs(pointTime - endTime) < 1000) {
+                if (dEnd < endDelta) {
+                    endDelta = dEnd;
                     endPoint = point;
                 }
             }
