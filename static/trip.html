@@ -143,8 +143,8 @@
         }
 
         .chartWrapper {
-            min-height: 400px;
-            max-height: 500px;
+            min-height: 500px;
+            height: 100%;
         }
 
         .chartToolbar {
@@ -239,7 +239,7 @@
     <div id="tripContainer" class="level-1-container">
         <div id="tripDetails">
             <div class="infoAndMapContainer">
-                <div class="app-card">
+                <div class="app-card"> <!-- trip info, stats, and legs navigation -->
                     <div id="legSelectorContainer">
                         <div class="legNavigator">
                             <div id="tripDescriptionLabel" class="tripDescription"></div>
@@ -311,7 +311,7 @@
                         </div>
                     </div>
                 </div>
-                <div class="app-card map-card">
+                <div class="app-card map-card"> <!-- map and legend -->
                     <div id="map"></div>
                     <div id="mapLegend" class="mapLegend">
                         <div class="legendItem">
@@ -329,7 +329,8 @@
                     </div>
                 </div>
             </div>
-            <div class="chartsContainer" id="chartsContainer"></div>
+            <div class="chartsContainer" id="chartsContainerLeg"> <!-- leg specific charts here --> </div>
+            <div class="chartsContainer" id="chartsContainerTrip"> <!-- full trip charts here --> </div>
         </div>
     </div>
     <script>
@@ -457,6 +458,57 @@
                     console.error('Failed to reload charts:', error);
                 });
             }
+        }
+
+        function addChart(container, id, switchAngleBtnId, toggleFunction) {
+            const appCard = document.createElement('div');
+            appCard.className = 'app-card';
+
+            const chartWrapper = document.createElement('div');
+            chartWrapper.className = 'chartWrapper';
+            const canvas = document.createElement('canvas');
+            canvas.id = id;
+            chartWrapper.appendChild(canvas);
+
+            if (switchAngleBtnId && toggleFunction) {
+                const toolbar = document.createElement('div');
+                toolbar.className = 'chartToolbar';
+                const button = document.createElement('button');
+                button.id = switchAngleBtnId;
+                button.className = 'chartToggleBtn';
+                button.textContent = 'Switch to −180…180';
+                button.onclick = toggleFunction;
+                toolbar.appendChild(button);
+                chartWrapper.appendChild(toolbar);
+            }
+
+            appCard.appendChild(chartWrapper);
+            container.appendChild(appCard);
+            return canvas.getContext('2d');
+        }
+
+        function initializeChartsLeg(isVisible) {
+            const legChartsContainer = document.getElementById('chartsContainerLeg');
+            legChartsContainer.innerHTML = ''; // Clear any existing charts
+            if (!isVisible) return;
+            addChart(legChartsContainer, 'speedChart');
+            addChart(legChartsContainer, 'headingChart', 'headingScaleBtn', toggleHeadingScale);
+            addChart(legChartsContainer, 'windSpeedChart');
+            addChart(legChartsContainer, 'windDirectionChart', 'windDirectionScaleBtn', toggleWindDirectionScale);
+            addChart(legChartsContainer, 'rollAngleChart');
+            addChart(legChartsContainer, 'heelDistributionChart');
+            addChart(legChartsContainer, 'speedDistributionChart');
+            addChart(legChartsContainer, 'windStatisticsChart'); 
+        }   
+
+        function initializeChartsTrip(isVisible) {
+            chartsContainer = document.getElementById('chartsContainerTrip');
+            chartsContainer.innerHTML = ''; // Clear any existing charts
+            if (!isVisible) return;
+            addChart(chartsContainer, 'atmosphericPressureChart');
+            addChart(chartsContainer, 'absoluteWindDirectionChart', 'absoluteWindDirectionScaleBtn', toggleAbsoluteWindDirectionScale);
+            addChart(chartsContainer, 'cabinTemperatureChart');
+            addChart(chartsContainer, 'humidityChart');
         }
 
         function getChartColors() {
@@ -719,13 +771,13 @@
         }
 
         async function loadTripDetails(tripId, selectedLeg) {
-            //document.getElementById('tripDetails').innerHTML = '<div class="loading">Loading data...</div>';
             try {
                 // Prepare trip data and time range
                 let tripData;
                 let startTime, endTime;
+                let isFullTrip = selectedLeg === null;
                 
-                if (selectedLeg === null) {
+                if (isFullTrip) {
                     // Entire trip
                     tripData = {
                         ...currentTrip,
@@ -755,7 +807,7 @@
                 let trackData = fullTrackData;
                 
                 // Filter track data to the selected leg if needed
-                if (selectedLeg !== null) {
+                if (!isFullTrip) {
                     const legStartMs = new Date(startTime).getTime();
                     const legEndMs = new Date(endTime).getTime();
                     trackData = fullTrackData.filter(pt => {
@@ -765,27 +817,41 @@
                 }
 
                 // Render basic UI with map and trip info
-                displayTripInfo(tripData, trackData, selectedLeg === null);
+                displayTripInfoAndMap(tripData, trackData, isFullTrip);
+
+                // Destroy existing charts
+                Object.values(allCharts).forEach(chart => {
+                    if (chart && typeof chart.destroy === 'function') {
+                        chart.destroy();
+                    }
+                });
+                allCharts = {};
+
+                renderAnalytics(startTime, endTime).catch(error => {
+                    console.error('Failed to load analytics:', error);
+                });
+
+                // reset charts
+                initializeChartsLeg(!isFullTrip);
+                initializeChartsTrip(true);
+
+                // Render time series charts only for non-full-trip views
+                if (!isFullTrip) {
+                    await renderLegCharts(trackData, startTime, endTime).catch(error => {
+                        console.error('Failed to load leg charts:', error);
+                    });
+                }
 
                 // Fetch secondary charts in parallel
-                await fetchAndRenderSecondaryCharts(tripData, trackData, startTime, endTime, selectedLeg === null);
+                await renderTripCharts(tripData, trackData, startTime, endTime, isFullTrip).catch(error => {
+                    console.error('Failed to load trip charts:', error);
+                });
             } catch (error) {
-                //document.getElementById('tripDetails').innerHTML =
-                //    '<div class="error">Failed to load trip details: ' + error.message + '</div>';
+                console.error('Failed to load trip details:', error);
             }
         }
 
-        function displayTripInfo(trip, trackData, isFullTrip) {
-            // Destroy existing charts
-            Object.values(allCharts).forEach(chart => {
-                if (chart && typeof chart.destroy === 'function') {
-                    chart.destroy();
-                }
-            });
-            allCharts = {};
-
-            //const content = document.getElementById('tripDetails');
-
+        function displayTripInfoAndMap(trip, trackData, isFullTrip) {
             // Calculate percentages
             const totalDistance = trip.total_distance_nm;
             const sailingDistance = trip.sailing_distance_nm;
@@ -820,117 +886,104 @@
             // Initialize the map
             initializeMap(trackData);
 
-            // reset charts
-            document.getElementById('chartsContainer').innerHTML = '';
-
-            // Render time series charts only for non-full-trip views
-            if (!isFullTrip) {
-                renderTimeSeriesCharts(trackData);
-            }
-
             // Save track data globally for segment marker handling
             currentTrackData = trackData;
         }
 
-        function renderTimeSeriesCharts(trackData) {
-            // Build HTML for time series charts
-            const chartsHTML = 
-                '<div class="app-card">' +
-                    '<div class="chartWrapper">' +
-                        '<canvas id="speedChart"></canvas>' +
-                    '</div>' +
-                '</div>' +
-                '<div class="app-card">' +
-                    '<div class="chartToolbar">' +
-                        '<button id="headingScaleBtn" class="chartToggleBtn" onclick="toggleHeadingScale()">Switch to −180…180</button>' +
-                    '</div>' +
-                    '<div class="chartWrapper">' +
-                        '<canvas id="headingChart"></canvas>' +
-                    '</div>' +
-                '</div>' +
-                '<div class="app-card">' +
-                    '<div class="chartWrapper">' +
-                        '<canvas id="windSpeedChart"></canvas>' +
-                    '</div>' +
-                '</div>' +
-                '<div class="app-card">' +
-                    '<div class="chartToolbar">' +
-                        '<button id="windDirectionScaleBtn" class="chartToggleBtn" onclick="toggleWindDirectionScale()">Switch to −180…180</button>' +
-                    '</div>' +
-                    '<div class="chartWrapper">' +
-                        '<canvas id="windDirectionChart"></canvas>' +
-                    '</div>' +
-                '</div>';
-
-            const container = document.getElementById('chartsContainer');
-            if (container) {
-                // Use insertAdjacentHTML to avoid destroying existing DOM elements
-                container.insertAdjacentHTML('beforeend', chartsHTML);
-            }
-
+        async function renderLegCharts(trackData, startTime, endTime) {
             // Create time series charts
             allCharts.speed = createSpeedChart(trackData);
             allCharts.heading = createHeadingChart(trackData, headingScaleNormalized);
             allCharts.windSpeed = createWindSpeedChart(trackData);
             allCharts.windDirection = createWindDirectionChart(trackData, windDirectionNormalized);
+
+            const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
+            const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
+            speedDistQuery = '/api/speed_distribution?start=' + formattedStart + '&end=' + formattedEnd;
+            windStatsQuery = '/api/wind_statistics?start=' + formattedStart + '&end=' + formattedEnd;
+            rollQuery = '/api/metrics?metric=7&start=' + formattedStart + '&end=' + formattedEnd;
+
+            const [speedDistResponse, windStatsResponse, rollResponse] = await Promise.all([
+                fetch(speedDistQuery),
+                fetch(windStatsQuery),
+                fetch(rollQuery)
+            ]);
+
+            // Process speed distribution
+            let speedDistData = null;
+            if (speedDistResponse && speedDistResponse.ok) {
+                const result = await speedDistResponse.json();
+                if (result.status === 'ok' && result.data) {
+                    speedDistData = result.data;
+                }
+            }
+
+            // Process wind statistics
+            let windStatsData = null;
+            if (windStatsResponse && windStatsResponse.ok) {
+                const result = await windStatsResponse.json();
+                if (result.status === 'ok' && result.data) {
+                    windStatsData = result.data;
+                }
+            }
+
+            let rollData = null;
+            if (rollResponse && rollResponse.ok) {
+                const result = await rollResponse.json();
+                if (result.status === 'ok' && result.data) {
+                    rollData = result.data;
+                }
+            }
+
+            allCharts.speedDistribution = createSpeedDistributionChart(speedDistData);
+            allCharts.windStatistics = createWindStatisticsChart(windStatsData);
+            allCharts.rollAngle = createRollAngleChart(rollData);
+            allCharts.heelDistribution = createHeelDistributionChart(rollData);
         }
 
-        async function fetchAndRenderSecondaryCharts(trip, trackData, startTime, endTime, isFullTrip) {
+        async function renderAnalytics(startTime, endTime) {
+            let analyticsQuery;
+            const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
+            const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
+            analyticsQuery = '/api/track_analytics?start=' + formattedStart + '&end=' + formattedEnd;
+            try {
+                const analyticsResponse = await fetch(analyticsQuery);
+                let analyticsData = null;
+                if (analyticsResponse.ok) {
+                    const result = await analyticsResponse.json();
+                    if (result.status === 'ok' && result.data) {
+                        analyticsData = result.data;
+                    }
+                }
+                // Save analytics data globally for segment marker handling
+                currentAnalyticsData = analyticsData;
+                renderAnalyticsCards(analyticsData);
+            } catch (error) {
+                console.error('Failed to fetch analytics data:', error);
+            }            
+        }
+
+        async function renderTripCharts(trip, trackData, startTime, endTime, isFullTrip) {
             try {
                 // Build query parameters
-                let speedDistQuery, windStatsQuery, pressureQuery, analyticsQuery, absoluteWindQuery, windSpeedQuery, cabinTempQuery, humidityQuery, rollQuery;
-                
-                if (isFullTrip) {
-                    pressureQuery = '/api/metrics?metric=1&trip_id=' + trip.id;
-                    absoluteWindQuery = '/api/metrics?metric=6&trip_id=' + trip.id;
-                    windSpeedQuery = '/api/metrics?metric=5&trip_id=' + trip.id;
-                    cabinTempQuery = '/api/metrics?metric=2&trip_id=' + trip.id;
-                    humidityQuery = '/api/metrics?metric=4&trip_id=' + trip.id;
-                    analyticsQuery = '/api/track_analytics?start=' + encodeURIComponent(startTime.split('.')[0].replace('T', ' ')) + 
-                                     '&end=' + encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
-                } else {
-                    const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
-                    const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
-                    speedDistQuery = '/api/speed_distribution?start=' + formattedStart + '&end=' + formattedEnd;
-                    windStatsQuery = '/api/wind_statistics?start=' + formattedStart + '&end=' + formattedEnd;
-                    pressureQuery = '/api/metrics?metric=1&start=' + formattedStart + '&end=' + formattedEnd;
-                    absoluteWindQuery = '/api/metrics?metric=6&start=' + formattedStart + '&end=' + formattedEnd;
-                    windSpeedQuery = '/api/metrics?metric=5&start=' + formattedStart + '&end=' + formattedEnd;
-                    cabinTempQuery = '/api/metrics?metric=2&start=' + formattedStart + '&end=' + formattedEnd;
-                    humidityQuery = '/api/metrics?metric=4&start=' + formattedStart + '&end=' + formattedEnd;
-                    rollQuery = '/api/metrics?metric=7&start=' + formattedStart + '&end=' + formattedEnd;
-                    analyticsQuery = '/api/track_analytics?start=' + formattedStart + '&end=' + formattedEnd;
-                }
+                let pressureQuery, analyticsQuery, absoluteWindQuery, windSpeedQuery, cabinTempQuery, humidityQuery;
+            
+                const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
+                const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
+                pressureQuery = '/api/metrics?metric=1&start=' + formattedStart + '&end=' + formattedEnd;
+                absoluteWindQuery = '/api/metrics?metric=6&start=' + formattedStart + '&end=' + formattedEnd;
+                windSpeedQuery = '/api/metrics?metric=5&start=' + formattedStart + '&end=' + formattedEnd;
+                cabinTempQuery = '/api/metrics?metric=2&start=' + formattedStart + '&end=' + formattedEnd;
+                humidityQuery = '/api/metrics?metric=4&start=' + formattedStart + '&end=' + formattedEnd;
 
                 // Fetch all secondary data in parallel
-                const [speedDistResponse, windStatsResponse, pressureResponse, absoluteWindResponse, windSpeedResponse, cabinTempResponse, humidityResponse, analyticsResponse] = await Promise.all([
-                    isFullTrip ? Promise.resolve(null) : fetch(speedDistQuery),
-                    isFullTrip ? Promise.resolve(null) : fetch(windStatsQuery),
+                const [pressureResponse, absoluteWindResponse, windSpeedResponse, cabinTempResponse, humidityResponse, analyticsResponse] = await Promise.all([
                     fetch(pressureQuery),
                     fetch(absoluteWindQuery),
                     fetch(windSpeedQuery),
                     fetch(cabinTempQuery),
                     fetch(humidityQuery),
-                    fetch(analyticsQuery)
                 ]);
-
-                // Process speed distribution
-                let speedDistData = null;
-                if (!isFullTrip && speedDistResponse && speedDistResponse.ok) {
-                    const result = await speedDistResponse.json();
-                    if (result.status === 'ok' && result.data) {
-                        speedDistData = result.data;
-                    }
-                }
-
-                // Process wind statistics
-                let windStatsData = null;
-                if (!isFullTrip && windStatsResponse && windStatsResponse.ok) {
-                    const result = await windStatsResponse.json();
-                    if (result.status === 'ok' && result.data) {
-                        windStatsData = result.data;
-                    }
-                }
 
                 // Process pressure data
                 let pressureData = null;
@@ -977,61 +1030,6 @@
                     }
                 }
 
-                // Process analytics
-                let analyticsData = null;
-                if (analyticsResponse.ok) {
-                    const result = await analyticsResponse.json();
-                    if (result.status === 'ok' && result.data) {
-                        analyticsData = result.data;
-                    }
-                }
-
-                // Render analytics cards
-                renderAnalyticsCards(analyticsData);
-
-                // Build charts container HTML for secondary charts
-                const chartsHTML = 
-                    (!isFullTrip ? 
-                    '<div class="app-card">' +
-                        '<div class="chartWrapper">' +
-                            '<canvas id="speedDistributionChart"></canvas>' +
-                        '</div>' +
-                    '</div>' +
-                    '<div class="app-card">' +
-                        '<div class="chartWrapper">' +
-                            '<canvas id="windStatisticsChart"></canvas>' +
-                        '</div>' +
-                    '</div>' : '') +
-                    '<div class="app-card">' +
-                        '<div class="chartWrapper">' +
-                            '<canvas id="atmosphericPressureChart"></canvas>' +
-                        '</div>' +
-                    '</div>' +
-                    '<div class="app-card">' +
-                        '<div class="chartToolbar">' +
-                            '<button id="absoluteWindDirectionScaleBtn" class="chartToggleBtn" onclick="toggleAbsoluteWindDirectionScale()">Switch to −180…180</button>' +
-                        '</div>' +
-                        '<div class="chartWrapper">' +
-                            '<canvas id="absoluteWindDirectionChart"></canvas>' +
-                        '</div>' +
-                    '</div>' +
-                    '<div class="app-card">' +
-                        '<div class="chartWrapper">' +
-                            '<canvas id="cabinTemperatureChart"></canvas>' +
-                        '</div>' +
-                    '</div>' +
-                    '<div class="app-card">' +
-                        '<div class="chartWrapper">' +
-                            '<canvas id="humidityChart"></canvas>' +
-                        '</div>' +
-                    '</div>';
-
-                const container = document.getElementById('chartsContainer');
-                if (container) {
-                    // Use insertAdjacentHTML to avoid destroying existing Chart.js instances
-                    container.insertAdjacentHTML('beforeend', chartsHTML);
-                }
-
                 // Compute leg bands for full-trip view
                 const legBands = isFullTrip ? build_leg_bands(startTime, endTime) : [];
 
@@ -1040,42 +1038,12 @@
                 allCharts.absoluteWindDirection = createAbsoluteWindDirectionChartFromMetric(absoluteWindData, windSpeedData, absoluteWindDirectionNormalized, legBands);
                 allCharts.cabinTemperature = createCabinTemperatureChart(cabinTempData, legBands);
                 allCharts.humidity = createHumidityChart(humidityData, legBands);
-                if (!isFullTrip) {
-                    allCharts.speedDistribution = createSpeedDistributionChart(speedDistData);
-                    allCharts.windStatistics = createWindStatisticsChart(windStatsData);
-                }
 
-                // Save analytics data globally for segment marker handling
-                currentAnalyticsData = analyticsData;
                 // Save absolute wind data globally for scale toggling
                 currentAbsoluteWindData = absoluteWindData;
                 // Save wind speed data globally for chart toggling
                 currentWindSpeedData = windSpeedData;
 
-                // Fetch and render roll angle charts (leg view only)
-                if (!isFullTrip && rollQuery) {
-                    const rollResponse = await fetch(rollQuery);
-                    let rollData = null;
-                    if (rollResponse.ok) {
-                        const result = await rollResponse.json();
-                        if (result.status === 'ok' && result.data) {
-                            rollData = result.data;
-                        }
-                    }
-                    const rollChartsHTML =
-                        '<div class="app-card">' +
-                            '<canvas id="rollAngleChart"></canvas>' +
-                        '</div>' +
-                        '<div class="app-card">' +
-                            '<canvas id="heelDistributionChart"></canvas>' +
-                        '</div>';
-                    const rollContainer = document.getElementById('chartsContainer');
-                    if (rollContainer) {
-                        rollContainer.insertAdjacentHTML('beforeend', rollChartsHTML);
-                    }
-                    allCharts.rollAngle = createRollAngleChart(rollData);
-                    allCharts.heelDistribution = createHeelDistributionChart(rollData);
-                }
 
             } catch (error) {
                 console.error('Failed to fetch secondary charts:', error);
