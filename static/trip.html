@@ -901,7 +901,7 @@
             const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
             speedDistQuery = '/api/speed_distribution?start=' + formattedStart + '&end=' + formattedEnd;
             windStatsQuery = '/api/wind_statistics?start=' + formattedStart + '&end=' + formattedEnd;
-            rollQuery = '/api/metrics?metric=7&start=' + formattedStart + '&end=' + formattedEnd;
+            rollQuery = '/api/metrics?metric=7&start=' + formattedStart + '&end=' + formattedEnd + '&max_points=1000';
 
             const [speedDistResponse, windStatsResponse, rollResponse] = await Promise.all([
                 fetch(speedDistQuery),
@@ -965,68 +965,27 @@
 
         async function renderTripCharts(trip, trackData, startTime, endTime, isFullTrip) {
             try {
-                // Build query parameters
-                let pressureQuery, analyticsQuery, absoluteWindQuery, windSpeedQuery, cabinTempQuery, humidityQuery;
-            
                 const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
                 const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
-                pressureQuery = '/api/metrics?metric=1&start=' + formattedStart + '&end=' + formattedEnd;
-                absoluteWindQuery = '/api/metrics?metric=6&start=' + formattedStart + '&end=' + formattedEnd;
-                windSpeedQuery = '/api/metrics?metric=5&start=' + formattedStart + '&end=' + formattedEnd;
-                cabinTempQuery = '/api/metrics?metric=2&start=' + formattedStart + '&end=' + formattedEnd;
-                humidityQuery = '/api/metrics?metric=4&start=' + formattedStart + '&end=' + formattedEnd;
 
-                // Fetch all secondary data in parallel
-                const [pressureResponse, absoluteWindResponse, windSpeedResponse, cabinTempResponse, humidityResponse, analyticsResponse] = await Promise.all([
-                    fetch(pressureQuery),
-                    fetch(absoluteWindQuery),
-                    fetch(windSpeedQuery),
-                    fetch(cabinTempQuery),
-                    fetch(humidityQuery),
-                ]);
+                // Fetch all trip-level environmental metrics in a single batch request
+                const batchQuery = '/api/metrics/batch?metrics=1,2,4,5,6&start=' + formattedStart + '&end=' + formattedEnd + '&max_points=1000';
+                const batchResponse = await fetch(batchQuery);
 
-                // Process pressure data
                 let pressureData = null;
-                if (pressureResponse.ok) {
-                    const result = await pressureResponse.json();
-                    if (result.status === 'ok' && result.data) {
-                        pressureData = result.data;
-                    }
-                }
-
-                // Process absolute wind direction data
                 let absoluteWindData = null;
-                if (absoluteWindResponse.ok) {
-                    const result = await absoluteWindResponse.json();
-                    if (result.status === 'ok' && result.data) {
-                        absoluteWindData = result.data;
-                    }
-                }
-
-                // Process wind speed data
                 let windSpeedData = null;
-                if (windSpeedResponse.ok) {
-                    const result = await windSpeedResponse.json();
-                    if (result.status === 'ok' && result.data) {
-                        windSpeedData = result.data;
-                    }
-                }
-
-                // Process cabin temperature data
                 let cabinTempData = null;
-                if (cabinTempResponse.ok) {
-                    const result = await cabinTempResponse.json();
-                    if (result.status === 'ok' && result.data) {
-                        cabinTempData = result.data;
-                    }
-                }
-
-                // Process humidity data
                 let humidityData = null;
-                if (humidityResponse.ok) {
-                    const result = await humidityResponse.json();
-                    if (result.status === 'ok' && result.data) {
-                        humidityData = result.data;
+
+                if (batchResponse.ok) {
+                    const result = await batchResponse.json();
+                    if (result.status === 'ok' && result.data && result.data.metrics) {
+                        pressureData = result.data.metrics['1'] || null;
+                        cabinTempData = result.data.metrics['2'] || null;
+                        humidityData = result.data.metrics['4'] || null;
+                        windSpeedData = result.data.metrics['5'] || null;
+                        absoluteWindData = result.data.metrics['6'] || null;
                     }
                 }
 
@@ -1043,7 +1002,6 @@
                 currentAbsoluteWindData = absoluteWindData;
                 // Save wind speed data globally for chart toggling
                 currentWindSpeedData = windSpeedData;
-
 
             } catch (error) {
                 console.error('Failed to fetch secondary charts:', error);

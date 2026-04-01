@@ -1,5 +1,5 @@
 use crate::db::types::{
-    VesselDatabase, TripSummary, TrackPoint, WebMetricData, SpeedDistributionData,
+    VesselDatabase, TripSummary, TrackPoint, WebMetricData, MultiMetricData, SpeedDistributionData,
     WindStatisticsData, TripLeg, TripLegsData, HeatmapDay, HeatmapData, 
     FastestSegment, TrackAnalytics, MonthlyStatistic, MonthlyStatistics, 
     format_duration_ms,
@@ -224,15 +224,16 @@ impl VesselDatabase {
         let query = if let Some(trip_id) = trip_id {
             // Get trip date range and fetch vessel_status data for that period
             format!(
-                "SELECT DATE_FORMAT(vs.timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
-                        vs.latitude, vs.longitude, vs.average_speed_kn, vs.max_speed_kn, 
-                        vs.is_moored, vs.engine_on, vs.total_distance_nm, vs.total_time_ms,
-                        vs.average_wind_speed_kn, vs.average_wind_angle_deg,
-                        vs.cog_deg, vs.average_heading_deg
-                 FROM vessel_status vs
-                 JOIN trips t ON vs.timestamp BETWEEN t.start_timestamp AND COALESCE(t.end_timestamp, NOW())
-                 WHERE t.id = {}
-                 ORDER BY vs.timestamp",
+                "SELECT DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
+                        latitude, longitude, average_speed_kn, max_speed_kn,
+                        is_moored, engine_on, total_distance_nm, total_time_ms,
+                        average_wind_speed_kn, average_wind_angle_deg,
+                        cog_deg, average_heading_deg
+                 FROM vessel_status
+                 WHERE timestamp BETWEEN
+                     (SELECT start_timestamp FROM trips WHERE id = {0})
+                     AND COALESCE((SELECT end_timestamp FROM trips WHERE id = {0}), NOW())
+                 ORDER BY timestamp",
                 trip_id
             )
         } else if let (Some(start), Some(end)) = (start, end) {
@@ -311,7 +312,7 @@ impl VesselDatabase {
     }
 
     /// Fetch environmental metrics by metric_id with optional trip_id or date range
-    pub fn fetch_metrics(&self, metric: &str, trip_id: Option<u32>, start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) -> Result<Vec<WebMetricData>, Box<dyn std::error::Error>> {
+    pub fn fetch_metrics(&self, metric: &str, trip_id: Option<u32>, start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>, max_points: Option<usize>) -> Result<Vec<WebMetricData>, Box<dyn std::error::Error>> {
         let query = if let Some(trip_id) = trip_id {
             format!(
                 "SELECT DATE_FORMAT(e.timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
@@ -343,7 +344,7 @@ impl VesselDatabase {
         let results: Vec<mysql::Row> = conn.query(&query)
             .map_err(|e| format!("Database query error: {}", e))?;
 
-        let metrics = results
+        let metrics: Vec<WebMetricData> = results
             .iter()
             .map(|row| WebMetricData {
                 timestamp: row.get_opt::<String, _>("timestamp")
@@ -361,7 +362,155 @@ impl VesselDatabase {
             })
             .collect();
 
+        // Downsample if max_points is requested and result exceeds the limit
+        let metrics = if let Some(max) = max_points {
+            if metrics.len() > max && max > 0 {
+                let bucket_size = (metrics.len() + max - 1) / max; // ceil division
+                metrics
+                    .chunks(bucket_size)
+                    .map(|chunk| {
+                        let timestamp = chunk[0].timestamp.clone();
+                        let metric_id = chunk[0].metric_id.clone();
+                        let avg_values: Vec<f64> = chunk.iter().filter_map(|p| p.avg_value).collect();
+                        let max_values: Vec<f64> = chunk.iter().filter_map(|p| p.max_value).collect();
+                        let min_values: Vec<f64> = chunk.iter().filter_map(|p| p.min_value).collect();
+                        let avg_value = if avg_values.is_empty() { None } else {
+                            Some(avg_values.iter().sum::<f64>() / avg_values.len() as f64)
+                        };
+                        let max_value = if max_values.is_empty() { None } else {
+                            max_values.iter().cloned().reduce(f64::max)
+                        };
+                        let min_value = if min_values.is_empty() { None } else {
+                            min_values.iter().cloned().reduce(f64::min)
+                        };
+                        WebMetricData { timestamp, metric_id, avg_value, max_value, min_value }
+                    })
+                    .collect()
+            } else {
+                metrics
+            }
+        } else {
+            metrics
+        };
+
         Ok(metrics)
+    }
+
+    /// Fetch multiple environmental metrics in a single query and return them as a map of metric_id → time series.
+    /// This is more efficient than calling fetch_metrics repeatedly for the same time range.
+    pub fn fetch_metrics_batch(
+        &self,
+        metrics: &[u8],
+        trip_id: Option<u32>,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
+        max_points: Option<usize>,
+    ) -> Result<MultiMetricData, Box<dyn std::error::Error>> {
+        if metrics.is_empty() {
+            return Err("At least one metric_id is required".into());
+        }
+
+        let in_clause = metrics.iter().map(|m| m.to_string()).collect::<Vec<_>>().join(",");
+
+        let query = if let Some(trip_id) = trip_id {
+            format!(
+                "SELECT DATE_FORMAT(e.timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp, \
+                        e.metric_id, e.value_avg, e.value_max, e.value_min \
+                 FROM environmental_data e \
+                 WHERE e.timestamp >= (SELECT COALESCE(start_timestamp, NOW()) FROM trips WHERE id = {tid}) \
+                   AND e.timestamp <= (SELECT COALESCE(end_timestamp, NOW()) FROM trips WHERE id = {tid}) \
+                   AND e.metric_id IN ({in_clause}) \
+                 ORDER BY e.timestamp",
+                tid = trip_id,
+                in_clause = in_clause
+            )
+        } else if let (Some(start), Some(end)) = (start, end) {
+            format!(
+                "SELECT DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp, \
+                        metric_id, value_avg, value_max, value_min \
+                 FROM environmental_data \
+                 WHERE metric_id IN ({in_clause}) \
+                   AND timestamp BETWEEN '{}' AND '{}' \
+                 ORDER BY timestamp",
+                start.format("%Y-%m-%d %H:%M:%S"),
+                end.format("%Y-%m-%d %H:%M:%S"),
+                in_clause = in_clause
+            )
+        } else {
+            return Err("Either trip_id or both start and end timestamps are required".into());
+        };
+
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+
+        let results: Vec<mysql::Row> = conn.query(&query)
+            .map_err(|e| format!("Database query error: {}", e))?;
+
+        // Partition rows into per-metric Vecs
+        let mut map: std::collections::HashMap<String, Vec<WebMetricData>> = std::collections::HashMap::new();
+        for row in &results {
+            // metric_id is TINYINT UNSIGNED — read as u8 then convert to string key.
+            // get_opt::<String, _> silently fails on integer columns in the mysql crate.
+            let metric_id = row.get_opt::<u8, _>("metric_id")
+                .and_then(|v| v.ok())
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            let entry = map.entry(metric_id.clone()).or_default();
+            entry.push(WebMetricData {
+                timestamp: row.get_opt::<String, _>("timestamp")
+                    .and_then(|v| v.ok())
+                    .unwrap_or_default(),
+                metric_id,
+                avg_value: row.get_opt::<f64, _>("value_avg").and_then(|v| v.ok()),
+                max_value: row.get_opt::<f64, _>("value_max").and_then(|v| v.ok()),
+                min_value: row.get_opt::<f64, _>("value_min").and_then(|v| v.ok()),
+            });
+        }
+
+        // Downsample each metric series independently
+        let map = if let Some(max) = max_points {
+            if max > 0 {
+                map.into_iter()
+                    .map(|(key, series)| {
+                        let downsampled = if series.len() > max {
+                            let bucket_size = (series.len() + max - 1) / max;
+                            series
+                                .chunks(bucket_size)
+                                .map(|chunk| {
+                                    let timestamp = chunk[0].timestamp.clone();
+                                    let metric_id = chunk[0].metric_id.clone();
+                                    let avg_values: Vec<f64> = chunk.iter().filter_map(|p| p.avg_value).collect();
+                                    let max_values: Vec<f64> = chunk.iter().filter_map(|p| p.max_value).collect();
+                                    let min_values: Vec<f64> = chunk.iter().filter_map(|p| p.min_value).collect();
+                                    WebMetricData {
+                                        timestamp,
+                                        metric_id,
+                                        avg_value: if avg_values.is_empty() { None } else {
+                                            Some(avg_values.iter().sum::<f64>() / avg_values.len() as f64)
+                                        },
+                                        max_value: if max_values.is_empty() { None } else {
+                                            max_values.iter().cloned().reduce(f64::max)
+                                        },
+                                        min_value: if min_values.is_empty() { None } else {
+                                            min_values.iter().cloned().reduce(f64::min)
+                                        },
+                                    }
+                                })
+                                .collect()
+                        } else {
+                            series
+                        };
+                        (key, downsampled)
+                    })
+                    .collect()
+            } else {
+                map
+            }
+        } else {
+            map
+        };
+
+        Ok(MultiMetricData { metrics: map })
     }
 
     /// Fetch speed distribution data for a trip
@@ -385,11 +534,12 @@ impl VesselDatabase {
         // Build query based on parameters
         let query = if let Some(trip_id) = trip_id {
             format!(
-                "SELECT vs.average_speed_kn, vs.total_distance_nm, vs.engine_on
-                 FROM vessel_status vs
-                 JOIN trips t ON vs.timestamp BETWEEN t.start_timestamp AND COALESCE(t.end_timestamp, NOW())
-                 WHERE t.id = {}
-                 ORDER BY vs.timestamp",
+                "SELECT average_speed_kn, total_distance_nm, engine_on
+                 FROM vessel_status
+                 WHERE timestamp BETWEEN
+                     (SELECT start_timestamp FROM trips WHERE id = {0})
+                     AND COALESCE((SELECT end_timestamp FROM trips WHERE id = {0}), NOW())
+                 ORDER BY timestamp",
                 trip_id
             )
         } else if let (Some(start), Some(end)) = (start, end) {
@@ -459,16 +609,17 @@ impl VesselDatabase {
         let query = if let Some(trip_id) = trip_id {
             format!(
                 r"SELECT 
-                    vs.average_wind_angle_deg, 
-                    vs.average_wind_speed_kn,
-                    vs.timestamp
-                 FROM vessel_status vs
-                 JOIN trips t ON vs.timestamp BETWEEN t.start_timestamp AND COALESCE(t.end_timestamp, NOW())
-                 WHERE t.id = {}
-                 AND vs.average_wind_angle_deg IS NOT NULL 
-                 AND vs.average_wind_speed_kn IS NOT NULL
-                 AND vs.is_moored = false
-                 ORDER BY vs.timestamp",
+                    average_wind_angle_deg,
+                    average_wind_speed_kn,
+                    timestamp
+                 FROM vessel_status
+                 WHERE timestamp BETWEEN
+                     (SELECT start_timestamp FROM trips WHERE id = {0})
+                     AND COALESCE((SELECT end_timestamp FROM trips WHERE id = {0}), NOW())
+                 AND average_wind_angle_deg IS NOT NULL
+                 AND average_wind_speed_kn IS NOT NULL
+                 AND is_moored = false
+                 ORDER BY timestamp",
                 trip_id
             )
         } else if let (Some(start), Some(end)) = (start, end) {
@@ -546,15 +697,16 @@ impl VesselDatabase {
     pub fn fetch_trip_legs(&self, trip_id: u32) -> Result<TripLegsData, Box<dyn std::error::Error>> {
         let query = format!(
             r"SELECT 
-                DATE_FORMAT(vs.timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as timestamp,
-                vs.is_moored,
-                vs.engine_on,
-                vs.total_distance_nm,
-                vs.total_time_ms
-             FROM vessel_status vs
-             JOIN trips t ON vs.timestamp BETWEEN t.start_timestamp AND COALESCE(t.end_timestamp, NOW())
-             WHERE t.id = {}
-             ORDER BY vs.timestamp",
+                DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as timestamp,
+                is_moored,
+                engine_on,
+                total_distance_nm,
+                total_time_ms
+             FROM vessel_status
+             WHERE timestamp BETWEEN
+                 (SELECT start_timestamp FROM trips WHERE id = {0})
+                 AND COALESCE((SELECT end_timestamp FROM trips WHERE id = {0}), NOW())
+             ORDER BY timestamp",
             trip_id
         );
 

@@ -16,7 +16,7 @@ mod test_examples;
 pub use types::{
     VesselDatabase, VesselStatusOperation, TripOperation, HealthCheckManager,
     // Response types
-    TripSummary, TrackPoint, WebMetricData, SpeedDistributionData, WindStatisticsData,
+    TripSummary, TrackPoint, WebMetricData, MultiMetricData, SpeedDistributionData, WindStatisticsData,
     TripLegsData, HeatmapData, TrackAnalytics, MonthlyStatistics,
 };
 

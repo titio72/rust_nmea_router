@@ -13,7 +13,7 @@ use tracing::{info, error, Span};
 use std::{backtrace::Backtrace, sync::Arc, sync::atomic::{AtomicBool, Ordering}, time::Duration};
 use tower_http::trace::TraceLayer;
 
-use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData, SpeedDistributionData, WindStatisticsData, TripLegsData, TrackAnalytics, HeatmapData};
+use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData, MultiMetricData, SpeedDistributionData, WindStatisticsData, TripLegsData, TrackAnalytics, HeatmapData};
 use crate::config::Config;
 use crate::web::broadcast_manager::SignalKBroadcastChannels;
 use chrono::{DateTime, NaiveDate, Utc};
@@ -85,6 +85,16 @@ pub struct MetricsQuery {
     pub trip_id: Option<u32>,
     pub start: Option<String>,
     pub end: Option<String>,
+    pub max_points: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchMetricsQuery {
+    pub metrics: String,  // comma-separated metric_id values, e.g. "1,2,4,5,6"
+    pub trip_id: Option<u32>,
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub max_points: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -284,6 +294,7 @@ pub async fn get_metrics(
         params.trip_id,
         start,
         end,
+        params.max_points,
     ) {
         Ok(metrics) => Ok(Json(ApiResponse::ok(metrics))),
         Err(e) => {
@@ -293,6 +304,36 @@ pub async fn get_metrics(
                 error!(?bt, "Backtrace for error");
                 Ok(Json(ApiResponse::error(e.to_string())))
             }
+        }
+    }
+}
+
+pub async fn get_metrics_batch(
+    State(state): State<AppState>,
+    Query(params): Query<BatchMetricsQuery>,
+) -> Result<Json<ApiResponse<MultiMetricData>>, StatusCode> {
+    // Parse comma-separated metric ids into u8 values
+    let metric_ids: Result<Vec<u8>, _> = params.metrics
+        .split(',')
+        .map(|s| s.trim().parse::<u8>())
+        .collect();
+    let metric_ids = match metric_ids {
+        Ok(ids) if !ids.is_empty() => ids,
+        _ => return Ok(Json(ApiResponse::error("Invalid or empty metrics parameter".to_string()))),
+    };
+    let start = parse_optional_datetime(&params.start)?;
+    let end = parse_optional_datetime(&params.end)?;
+    match state.db.fetch_metrics_batch(
+        &metric_ids,
+        params.trip_id,
+        start,
+        end,
+        params.max_points,
+    ) {
+        Ok(data) => Ok(Json(ApiResponse::ok(data))),
+        Err(e) => {
+            error!(error = %e, "Failed to fetch metrics batch");
+            Ok(Json(ApiResponse::error(e.to_string())))
         }
     }
 }
@@ -971,6 +1012,7 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/trip_by_uuid", get(get_trip_by_uuid))
         .route("/track", get(get_track))
         .route("/metrics", get(get_metrics))
+        .route("/metrics/batch", get(get_metrics_batch))
         .route("/speed_distribution", get(get_speed_distribution))
         .route("/wind_statistics", get(get_wind_statistics))
         .route("/trip_legs", get(get_trip_legs))

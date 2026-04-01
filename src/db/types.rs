@@ -109,6 +109,11 @@ pub struct WebMetricData {
 }
 
 #[derive(Debug, serde::Serialize)]
+pub struct MultiMetricData {
+    pub metrics: std::collections::HashMap<String, Vec<WebMetricData>>,
+}
+
+#[derive(Debug, serde::Serialize)]
 pub struct SpeedDistributionData {
     pub labels: Vec<String>,
     pub sailing: Vec<f64>,
