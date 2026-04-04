@@ -222,7 +222,7 @@
                 this.name = '';
                 this.callsign = '';
                 this.type = '';
-                this.aiClass = '';
+                this.aisClass = '';
                 this.latitude = null;
                 this.longitude = null;
                 this.sog = null;
@@ -245,7 +245,7 @@
                 if (path === 'name') this.name = value || '';
                 else if (path === 'communication.callsignVhf') this.callsign = value || '';
                 else if (path === 'design.aisShipType') this.type = value || '';
-                else if (path === 'sensors.ais.class') this.aiClass = value || '';
+                else if (path === 'sensors.ais.class') this.aisClass = value || '';
                 else if (path === 'navigation.position') {
                     if (value && value.latitude !== undefined) this.latitude = value.latitude;
                     if (value && value.longitude !== undefined) this.longitude = value.longitude;
@@ -407,7 +407,7 @@
                         break;
                     case 'mmsi': aVal = a.mmsi; bVal = b.mmsi; break;
                     case 'name': aVal = a.name || a.mmsi; bVal = b.name || b.mmsi; break;
-                    case 'class': aVal = a.aiClass; bVal = b.aiClass; break;
+                    case 'class': aVal = a.aisClass; bVal = b.aisClass; break;
                     case 'lat': aVal = a.latitude || 0; bVal = b.latitude || 0; break;
                     case 'lon': aVal = a.longitude || 0; bVal = b.longitude || 0; break;
                     case 'sog': aVal = a.sog || 0; bVal = b.sog || 0; break;
@@ -430,8 +430,8 @@
             } else {
                 tableBody.innerHTML = filteredTargets.map(t => {
                     const rowClass = t.isVeryStale() ? 'very-stale' : (t.isStale() ? 'stale' : '');
-                    const classLabel = t.aiClass ? t.aiClass.toLowerCase() : 'unknown';
-                    const classHtml = `<span class="ais-class ${classLabel === 'a' ? '' : classLabel}">${t.aiClass}</span>`;
+                    const classLabel = t.aisClass ? t.aisClass.toLowerCase() : 'unknown';
+                    const classHtml = `<span class="ais-class ${classLabel === 'a' ? '' : classLabel}">${t.aisClass}</span>`;
                     const distance = t.getDistance();
                     const distanceHtml = distance !== null ? distance.toFixed(1) : '-';
                     

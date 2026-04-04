@@ -102,6 +102,8 @@ pub struct VesselMonitor {
     headings: TimedQueue<f64>,
     last_event_time: Instant,
     engine_on: EngineStatus,
+    engine_pending_status: Option<EngineStatus>,
+    engine_pending_since: Option<Instant>,
     status_report_ready: bool,
     first_report: bool,
     mooring_status: Option<bool>, // None = unknown, Some(true) = moored, Some(false) = underway
@@ -123,6 +125,8 @@ impl VesselMonitor {
             headings: TimedQueue::new(sample_age_window),
             last_event_time: now,
             engine_on: EngineStatus::Unknown,
+            engine_pending_status: None,
+            engine_pending_since: None,
             status_report_ready: false,
             first_report: true,
             mooring_status: None,
@@ -207,13 +211,34 @@ impl VesselMonitor {
 
     /// Process engine rapid update to determine engine status
     /// Expected maximum rate is 1 Hz
-    pub fn process_engine(&mut self, engine_msg: &nmea2k::pgns::EngineRapidUpdate, _timestamp: Instant) {
-        // Determine engine status from RPM: > 100 = on, <= 100 = off, missing/invalid = unknown
-        self.engine_on = match engine_msg.engine_speed {
-            Some(rpm) if rpm > 100.0 => EngineStatus::On,
-            Some(rpm) if rpm <= 100.0 => EngineStatus::Off,
+    pub fn process_engine(&mut self, engine_msg: &nmea2k::pgns::EngineRapidUpdate, timestamp: Instant) {
+        // Determine engine status from RPM: > 50 = on, <= 50 = off, missing/invalid = unknown
+        let new_status = match engine_msg.engine_speed {
+            Some(rpm) if rpm > 50.0 => EngineStatus::On,
+            Some(rpm) if rpm <= 50.0 => EngineStatus::Off,
             _ => EngineStatus::Unknown,
         };
+        if new_status == self.engine_on {
+            // Stable — clear any pending transition
+            self.engine_pending_status = None;
+            self.engine_pending_since = None;
+        } else {
+            // Status differs from current — apply 5-second hysteresis
+            if self.engine_pending_status == Some(new_status) {
+                // Pending transition has been consistent long enough
+                if self.engine_pending_since
+                    .map_or(false, |t| timestamp.duration_since(t) >= Duration::from_secs(5))
+                {
+                    self.engine_on = new_status;
+                    self.engine_pending_status = None;
+                    self.engine_pending_since = None;
+                }
+            } else {
+                // Start tracking a new candidate transition
+                self.engine_pending_status = Some(new_status);
+                self.engine_pending_since = Some(timestamp);
+            }
+        }
     }
 
     /// Process vessel heading message

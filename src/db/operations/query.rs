@@ -257,56 +257,74 @@ impl VesselDatabase {
         let results: Vec<mysql::Row> = conn.query(&query)
             .map_err(|e| format!("Database query error: {}", e))?;
 
-        let track: Vec<TrackPoint> = results
-            .iter()
-            .map(|row| TrackPoint {
-                timestamp: row.get_opt::<String, _>("timestamp")
-                    .and_then(|v| v.ok())
-                    .unwrap_or_default(),
-                latitude: row.get_opt::<f64, _>("latitude")
-                    .and_then(|v| v.ok()),
-                longitude: row.get_opt::<f64, _>("longitude")
-                    .and_then(|v| v.ok()),
-                avg_speed_kn: row.get_opt::<f64, _>("average_speed_kn")
-                    .and_then(|v| v.ok()),
-                max_speed_kn: row.get_opt::<f64, _>("max_speed_kn")
-                    .and_then(|v| v.ok()),
-                moored: row.get_opt::<i32, _>("is_moored")
-                    .and_then(|v| v.ok())
-                    .map(|v| v != 0)
-                    .unwrap_or(false),
-                engine_on: row.get_opt::<u8, _>("engine_on")
-                    .and_then(|v| v.ok())
-                    .unwrap_or(2),  // Default to unknown if not available
-                total_distance_nm: row.get_opt::<f64, _>("total_distance_nm")
-                    .and_then(|v| v.ok()),
-                total_time_ms: row.get_opt::<u64, _>("total_time_ms")
-                    .and_then(|v| v.ok())
-                    .unwrap_or(0),
-                average_wind_speed_kn: row.get_opt::<f64, _>("average_wind_speed_kn")
-                    .and_then(|v| v.ok()),
-                average_wind_angle_deg: row.get_opt::<f64, _>("average_wind_angle_deg")
-                    .and_then(|v| v.ok()),
-                cog_deg: row.get_opt::<f64, _>("cog_deg")
-                    .and_then(|v| v.ok()),
-                average_heading_deg: row.get_opt::<f64, _>("average_heading_deg")
-                    .and_then(|v| v.ok()),
-            })
-            .collect();
+        // min_interval_ms derived from max_points interpreted as max samples per hour.
+        // e.g. max_points=60 → one sample per minute (3_600_000ms / 60 = 60_000ms).
+        // 0 or None means no filtering.
+        let min_interval_ms: Option<i64> = max_points
+            .filter(|&m| m > 0)
+            .map(|m| 3_600_000_i64 / m as i64);
 
-        // Subsample if max_points requested and result exceeds limit
-        let track = if let Some(max) = max_points {
-            if track.len() > max && max > 0 {
-                let step = track.len() as f64 / max as f64;
-                (0..max)
-                    .map(|i| track[(i as f64 * step) as usize].clone())
-                    .collect()
+        let mut track: Vec<TrackPoint> = Vec::new();
+        let mut last_included_ts: Option<DateTime<Utc>> = None;
+
+        for row in &results {
+            let timestamp_str = row.get_opt::<String, _>("timestamp")
+                .and_then(|v| v.ok())
+                .unwrap_or_default();
+
+            // Apply time-based filter when max_points_per_hour is set
+            let include = if let Some(min_ms) = min_interval_ms {
+                match chrono::DateTime::parse_from_rfc3339(&timestamp_str) {
+                    Ok(parsed_ts) => {
+                        let parsed_utc = parsed_ts.with_timezone(&Utc);
+                        let include = last_included_ts
+                            .map(|last| (parsed_utc - last).num_milliseconds() >= min_ms)
+                            .unwrap_or(true);
+                        if include {
+                            last_included_ts = Some(parsed_utc);
+                        }
+                        include
+                    }
+                    Err(_) => true, // Unparseable timestamp: include to avoid data loss
+                }
             } else {
-                track
+                true
+            };
+
+            if include {
+                track.push(TrackPoint {
+                    timestamp: timestamp_str,
+                    latitude: row.get_opt::<f64, _>("latitude")
+                        .and_then(|v| v.ok()),
+                    longitude: row.get_opt::<f64, _>("longitude")
+                        .and_then(|v| v.ok()),
+                    avg_speed_kn: row.get_opt::<f64, _>("average_speed_kn")
+                        .and_then(|v| v.ok()),
+                    max_speed_kn: row.get_opt::<f64, _>("max_speed_kn")
+                        .and_then(|v| v.ok()),
+                    moored: row.get_opt::<i32, _>("is_moored")
+                        .and_then(|v| v.ok())
+                        .map(|v| v != 0)
+                        .unwrap_or(false),
+                    engine_on: row.get_opt::<u8, _>("engine_on")
+                        .and_then(|v| v.ok())
+                        .unwrap_or(2),  // Default to unknown if not available
+                    total_distance_nm: row.get_opt::<f64, _>("total_distance_nm")
+                        .and_then(|v| v.ok()),
+                    total_time_ms: row.get_opt::<u64, _>("total_time_ms")
+                        .and_then(|v| v.ok())
+                        .unwrap_or(0),
+                    average_wind_speed_kn: row.get_opt::<f64, _>("average_wind_speed_kn")
+                        .and_then(|v| v.ok()),
+                    average_wind_angle_deg: row.get_opt::<f64, _>("average_wind_angle_deg")
+                        .and_then(|v| v.ok()),
+                    cog_deg: row.get_opt::<f64, _>("cog_deg")
+                        .and_then(|v| v.ok()),
+                    average_heading_deg: row.get_opt::<f64, _>("average_heading_deg")
+                        .and_then(|v| v.ok()),
+                });
             }
-        } else {
-            track
-        };
+        }
 
         Ok(track)
     }
@@ -519,35 +537,42 @@ impl VesselDatabase {
         let max_speed = 10.0;
         let bucket_size = 0.5;
         let num_buckets = ((max_speed / bucket_size) as f64).ceil() as usize;
-        
+
         let mut sailing_buckets = vec![0.0; num_buckets];
         let mut motoring_buckets = vec![0.0; num_buckets];
         let mut labels = Vec::with_capacity(num_buckets);
-        
-        // Initialize labels
+
         for i in 0..num_buckets {
             let min_speed = i as f64 * bucket_size;
-            let max_speed = (i + 1) as f64 * bucket_size;
-            labels.push(format!("{:.1}-{:.1}", min_speed, max_speed));
+            let max_speed_label = (i + 1) as f64 * bucket_size;
+            labels.push(format!("{:.1}-{:.1}", min_speed, max_speed_label));
         }
-        
-        // Build query based on parameters
+
+        // Aggregate on the database side: one row per 0.5-kn speed bucket
         let query = if let Some(trip_id) = trip_id {
             format!(
-                "SELECT average_speed_kn, total_distance_nm, engine_on
+                "SELECT FLOOR(average_speed_kn / 0.5) * 0.5 AS speed,
+                        SUM(total_distance_nm * IF(engine_on = 1, 0, 1)) AS dist_sail,
+                        SUM(total_distance_nm * IF(engine_on = 1, 1, 0)) AS dist_engine
                  FROM vessel_status
                  WHERE timestamp BETWEEN
                      (SELECT start_timestamp FROM trips WHERE id = {0})
                      AND COALESCE((SELECT end_timestamp FROM trips WHERE id = {0}), NOW())
-                 ORDER BY timestamp",
+                 AND is_moored = 0
+                 AND average_speed_kn IS NOT NULL
+                 GROUP BY FLOOR(average_speed_kn / 0.5) * 0.5",
                 trip_id
             )
         } else if let (Some(start), Some(end)) = (start, end) {
             format!(
-                "SELECT vs.average_speed_kn, vs.total_distance_nm, vs.engine_on
-                 FROM vessel_status vs
-                 WHERE vs.timestamp BETWEEN '{}' AND '{}'
-                 ORDER BY vs.timestamp",
+                "SELECT FLOOR(average_speed_kn / 0.5) * 0.5 AS speed,
+                        SUM(total_distance_nm * IF(engine_on = 1, 0, 1)) AS dist_sail,
+                        SUM(total_distance_nm * IF(engine_on = 1, 1, 0)) AS dist_engine
+                 FROM vessel_status
+                 WHERE timestamp BETWEEN '{}' AND '{}'
+                 AND is_moored = 0
+                 AND average_speed_kn IS NOT NULL
+                 GROUP BY FLOOR(average_speed_kn / 0.5) * 0.5",
                 start.format("%Y-%m-%d %H:%M:%S"),
                 end.format("%Y-%m-%d %H:%M:%S")
             )
@@ -557,30 +582,24 @@ impl VesselDatabase {
 
         let mut conn = self.pool.get_conn()
             .map_err(|e| format!("Database connection error: {}", e))?;
-        
+
         let results: Vec<mysql::Row> = conn.query(&query)
             .map_err(|e| format!("Database query error: {}", e))?;
 
-        // Process each row and accumulate distances in buckets
         for row in results {
-            let speed: Option<f64> = row.get_opt("average_speed_kn")
-                .and_then(|v| v.ok());
-            let distance: Option<f64> = row.get_opt("total_distance_nm")
-                .and_then(|v| v.ok());
-            let engine_on: u8 = row.get_opt("engine_on")
+            let speed: f64 = row.get_opt::<f64, _>("speed")
                 .and_then(|v| v.ok())
-                .unwrap_or(2);  // Default to unknown
-            
-            if let (Some(speed), Some(distance)) = (speed, distance) {
-                let bucket_index = ((speed / bucket_size).floor() as usize).min(num_buckets - 1);
-                
-                // Only count as motoring if engine_on == 1, treat unknown (2) as sailing
-                if engine_on == 1 {
-                    motoring_buckets[bucket_index] += distance;
-                } else {
-                    sailing_buckets[bucket_index] += distance;
-                }
-            }
+                .unwrap_or(0.0);
+            let dist_sail: f64 = row.get_opt::<f64, _>("dist_sail")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let dist_engine: f64 = row.get_opt::<f64, _>("dist_engine")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+
+            let bucket_index = ((speed / bucket_size).round() as usize).min(num_buckets - 1);
+            sailing_buckets[bucket_index] += dist_sail;
+            motoring_buckets[bucket_index] += dist_engine;
         }
 
         Ok(SpeedDistributionData {
@@ -594,46 +613,44 @@ impl VesselDatabase {
     pub fn fetch_wind_statistics(&self, trip_id: Option<u32>, start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) -> Result<WindStatisticsData, Box<dyn std::error::Error>> {
         // Create 72 buckets for wind directions (360 degrees / 5 degrees = 72 buckets)
         let bucket_size = 5.0;
-        let num_buckets = 72;
-        
+        let num_buckets = 72usize;
+
         let mut wind_distances = vec![0.0; num_buckets];
         let mut max_wind_speeds = vec![0.0; num_buckets];
         let mut directions = Vec::with_capacity(num_buckets);
-        
-        // Initialize directions (0, 5, 10, ..., 355)
+
         for i in 0..num_buckets {
             directions.push(i as f64 * bucket_size);
         }
-        
-        // Build query based on parameters
+
+        // Aggregate on the database side: one row per 5-degree wind-angle bucket.
+        // Wind distance = speed (kn) * period duration (h) = speed * total_time_ms / 3_600_000
         let query = if let Some(trip_id) = trip_id {
             format!(
-                r"SELECT 
-                    average_wind_angle_deg,
-                    average_wind_speed_kn,
-                    timestamp
+                "SELECT FLOOR(average_wind_angle_deg / 5.0) * 5.0 AS angle,
+                        SUM(average_wind_speed_kn * total_time_ms / 3600000) AS dist_wind,
+                        MAX(average_wind_speed_kn) AS max_wind_speed
                  FROM vessel_status
                  WHERE timestamp BETWEEN
                      (SELECT start_timestamp FROM trips WHERE id = {0})
                      AND COALESCE((SELECT end_timestamp FROM trips WHERE id = {0}), NOW())
+                 AND is_moored = 0
                  AND average_wind_angle_deg IS NOT NULL
                  AND average_wind_speed_kn IS NOT NULL
-                 AND is_moored = false
-                 ORDER BY timestamp",
+                 GROUP BY FLOOR(average_wind_angle_deg / 5.0) * 5.0",
                 trip_id
             )
         } else if let (Some(start), Some(end)) = (start, end) {
             format!(
-                r"SELECT 
-                    vs.average_wind_angle_deg, 
-                    vs.average_wind_speed_kn,
-                    vs.timestamp
-                 FROM vessel_status vs
-                 WHERE vs.timestamp BETWEEN '{}' AND '{}'
-                 AND vs.average_wind_angle_deg IS NOT NULL 
-                 AND vs.average_wind_speed_kn IS NOT NULL
-                 AND vs.is_moored = false
-                 ORDER BY vs.timestamp",
+                "SELECT FLOOR(average_wind_angle_deg / 5.0) * 5.0 AS angle,
+                        SUM(average_wind_speed_kn * total_time_ms / 3600000) AS dist_wind,
+                        MAX(average_wind_speed_kn) AS max_wind_speed
+                 FROM vessel_status
+                 WHERE timestamp BETWEEN '{}' AND '{}'
+                 AND is_moored = 0
+                 AND average_wind_angle_deg IS NOT NULL
+                 AND average_wind_speed_kn IS NOT NULL
+                 GROUP BY FLOOR(average_wind_angle_deg / 5.0) * 5.0",
                 start.format("%Y-%m-%d %H:%M:%S"),
                 end.format("%Y-%m-%d %H:%M:%S")
             )
@@ -643,47 +660,25 @@ impl VesselDatabase {
 
         let mut conn = self.pool.get_conn()
             .map_err(|e| format!("Database connection error: {}", e))?;
-        
+
         let results: Vec<mysql::Row> = conn.query(&query)
             .map_err(|e| format!("Database query error: {}", e))?;
 
-        // Collect all data points first
-        let mut data_points = Vec::new();
         for row in results {
-            let wind_direction: Option<f64> = row.get_opt("average_wind_angle_deg")
-                .and_then(|v| v.ok());
-            let wind_speed: Option<f64> = row.get_opt("average_wind_speed_kn")
-                .and_then(|v| v.ok());
-            let timestamp: Option<String> = row.get_opt("timestamp")
-                .and_then(|v| v.ok());
-            
-            if let (Some(direction), Some(speed), Some(ts)) = (wind_direction, wind_speed, timestamp) {
-                let dt = chrono::NaiveDateTime::parse_from_str(&ts, "%Y-%m-%d %H:%M:%S%.f")
-                    .or_else(|_| chrono::NaiveDateTime::parse_from_str(&ts, "%Y-%m-%d %H:%M:%S"))
-                    .map_err(|e| format!("Timestamp parse error for '{}': {}", ts, e))?;
-                data_points.push((direction, speed, dt));
-            }
-        }
+            let angle: f64 = row.get_opt::<f64, _>("angle")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let dist_wind: f64 = row.get_opt::<f64, _>("dist_wind")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let max_wind: f64 = row.get_opt::<f64, _>("max_wind_speed")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
 
-        // Process consecutive data points to calculate time intervals
-        for i in 0..data_points.len().saturating_sub(1) {
-            let (direction, speed, curr_dt) = data_points[i];
-            let (_, _, next_dt) = data_points[i + 1];
-            
-            let time_hours = (next_dt - curr_dt).num_seconds() as f64 / 3600.0;
-            
-            if time_hours > 0.0 {
-                // Calculate bucket index (normalize direction to 0-359, then divide by 5)
-                let normalized_direction = direction % 360.0;
-                let bucket_index = ((normalized_direction / bucket_size).floor() as usize).min(num_buckets - 1);
-                
-                // Add wind distance (speed * time)
-                let wind_distance = speed * time_hours;
-                wind_distances[bucket_index] += wind_distance;
-                
-                // Update max wind speed for this bucket
-                max_wind_speeds[bucket_index] = f64::max(max_wind_speeds[bucket_index], speed);
-            }
+            let normalized = angle % 360.0;
+            let bucket_index = ((normalized / bucket_size).floor() as usize).min(num_buckets - 1);
+            wind_distances[bucket_index] += dist_wind;
+            max_wind_speeds[bucket_index] = f64::max(max_wind_speeds[bucket_index], max_wind);
         }
 
         Ok(WindStatisticsData {

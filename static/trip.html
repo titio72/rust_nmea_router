@@ -637,7 +637,7 @@
                 const [tripResponse, legsResponse, trackResponse] = await Promise.all([
                     fetch('/api/trip?id=' + tripId),
                     legsPromise,
-                    fetch('/api/track?trip_id=' + tripId + '&max_points=600', { priority: 'high' })
+                    fetch('/api/track?trip_id=' + tripId + '&max_points=60', { priority: 'high' })
                 ]);
 
                 if (!tripResponse.ok) {
