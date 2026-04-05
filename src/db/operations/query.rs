@@ -1054,6 +1054,21 @@ impl VesselDatabase {
         Ok(HeatmapData { days, min_distance, max_distance, total_distance })
     }
 
+    /// Delete heatmap_cache rows that overlap [start_date, end_date] so they are
+    /// recomputed fresh on the next fetch_heatmap() call.
+    pub fn invalidate_heatmap_cache(&self, start_date: NaiveDate, end_date: NaiveDate) -> Result<(), Box<dyn Error>> {
+        let mut conn = self.pool.get_conn()
+            .map_err(|e| format!("Database connection error (invalidate heatmap cache): {}", e))?;
+        conn.exec_drop(
+            "DELETE FROM heatmap_cache WHERE date BETWEEN :start AND :end",
+            mysql::params! {
+                "start" => start_date.format("%Y-%m-%d").to_string(),
+                "end"   => end_date.format("%Y-%m-%d").to_string(),
+            },
+        ).map_err(|e| format!("Failed to invalidate heatmap cache: {}", e))?;
+        Ok(())
+    }
+
     /// Get system status (tracking and metrics enabled/disabled state)
     pub fn get_system_status(&self, key: &str) -> Result<bool, Box<dyn Error>> {
         let cache = self.system_status_cache.lock().unwrap();

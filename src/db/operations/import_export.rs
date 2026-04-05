@@ -426,7 +426,15 @@ impl VesselDatabase {
         }
         
         tx.commit()?;
-        
+
+        // Invalidate the heatmap cache for every day the imported trip spans so that
+        // fetch_heatmap() recomputes those days from the newly inserted vessel_status rows.
+        let trip_start_date = new_trip_start.date_naive();
+        let trip_end_date = chrono::DateTime::parse_from_rfc3339(end_ts_str)
+            .map_err(|e| format!("Invalid end_timestamp format: {}", e))?
+            .date_naive();
+        self.invalidate_heatmap_cache(trip_start_date, trip_end_date)?;
+
         info!("Trip imported successfully with ID: {}", new_trip_id);
         Ok(new_trip_id)
     }

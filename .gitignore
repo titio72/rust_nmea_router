@@ -1,4 +1,8 @@
+*.log
 /target
-logs/*
+logs/
 /nmea2k/target
 /static/libs/
+/static/exports/
+/backups/
+package-lock.json
