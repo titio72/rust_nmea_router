@@ -15,54 +15,85 @@ use mysql::prelude::Queryable;
 struct ExportTrip {
     id: i64,
     uuid: Option<String>,
+    #[serde(rename = "desc")]
     description: String,
+    #[serde(rename = "start")]
     start_timestamp: String,
+    #[serde(rename = "end")]
     end_timestamp: String,
+    #[serde(rename = "dist_sail")]
     total_distance_sailed: f64,
+    #[serde(rename = "dist_motor")]
     total_distance_motoring: f64,
+    #[serde(rename = "t_sail")]
     total_time_sailing: u64,
+    #[serde(rename = "t_motor")]
     total_time_motoring: u64,
+    #[serde(rename = "t_moor")]
     total_time_moored: u64,
 }
 
 #[derive(serde::Serialize)]
 struct ExportVesselStatus {
+    #[serde(rename = "ts")]
     timestamp: String,
+    #[serde(rename = "lat")]
     latitude: Option<f64>,
+    #[serde(rename = "lon")]
     longitude: Option<f64>,
+    #[serde(rename = "sog")]
     average_speed_kn: Option<f64>,
+    #[serde(rename = "sog_max")]
     max_speed_kn: Option<f64>,
+    #[serde(rename = "moor")]
     is_moored: bool,
+    #[serde(rename = "eng")]
     engine_on: u8,
+    #[serde(rename = "dist")]
     total_distance_nm: Option<f64>,
+    #[serde(rename = "dur")]
     total_time_ms: Option<u64>,
+    #[serde(rename = "tws")]
     average_wind_speed_kn: Option<f64>,
+    #[serde(rename = "twa")]
     average_wind_angle_deg: Option<f64>,
+    #[serde(rename = "cog")]
     cog_deg: Option<f64>,
+    #[serde(rename = "hdg")]
     average_heading_deg: Option<f64>,
 }
 
 #[derive(serde::Serialize)]
 struct ExportEnvMetric {
+    #[serde(rename = "ts")]
     timestamp: String,
+    #[serde(rename = "mid")]
     metric_id: u8,
+    #[serde(rename = "avg")]
     value_avg: Option<f32>,
+    #[serde(rename = "max")]
     value_max: Option<f32>,
+    #[serde(rename = "min")]
     value_min: Option<f32>,
     unit: Option<String>,
 }
 
 #[derive(serde::Serialize)]
 struct ExportMetadata {
+    #[serde(rename = "at")]
     generated_at: String,
+    #[serde(rename = "tid")]
     trip_id: i64,
 }
 
 #[derive(serde::Serialize)]
 struct ExportData {
     trip: ExportTrip,
+    #[serde(rename = "vs")]
     vessel_statuses: Vec<ExportVesselStatus>,
+    #[serde(rename = "em")]
     environmental_metrics: Vec<ExportEnvMetric>,
+    #[serde(rename = "meta")]
     export_metadata: ExportMetadata,
 }
 
@@ -248,36 +279,26 @@ impl VesselDatabase {
         
         let json: Value = serde_json::from_str(json_data)?;
         
-        // Parse trip data
         let trip = &json["trip"];
-        let vessel_statuses = &json["vessel_statuses"];
-        let env_metrics = &json["environmental_metrics"];
+        let vessel_statuses = &json["vs"];
+        let env_metrics = &json["em"];
         
-        // Extract trip fields
-        let description = trip["description"]
-            .as_str()
-            .ok_or("Missing or invalid trip.description")?;
-        let start_ts_str = trip["start_timestamp"]
-            .as_str()
-            .ok_or("Missing or invalid trip.start_timestamp")?;
-        let end_ts_str = trip["end_timestamp"]
-            .as_str()
-            .ok_or("Missing or invalid trip.end_timestamp")?;
-        let total_distance_sailed = trip["total_distance_sailed"]
-            .as_f64()
-            .ok_or("Missing or invalid trip.total_distance_sailed")?;
-        let total_distance_motoring = trip["total_distance_motoring"]
-            .as_f64()
-            .ok_or("Missing or invalid trip.total_distance_motoring")?;
-        let total_time_sailing = trip["total_time_sailing"]
-            .as_u64()
-            .ok_or("Missing or invalid trip.total_time_sailing")?;
-        let total_time_motoring = trip["total_time_motoring"]
-            .as_u64()
-            .ok_or("Missing or invalid trip.total_time_motoring")?;
-        let total_time_moored = trip["total_time_moored"]
-            .as_u64()
-            .ok_or("Missing or invalid trip.total_time_moored")?;
+        let description = trip["desc"].as_str()
+            .ok_or("Missing or invalid trip.desc")?;
+        let start_ts_str = trip["start"].as_str()
+            .ok_or("Missing or invalid trip.start")?;
+        let end_ts_str = trip["end"].as_str()
+            .ok_or("Missing or invalid trip.end")?;
+        let total_distance_sailed = trip["dist_sail"].as_f64()
+            .ok_or("Missing or invalid trip.dist_sail")?;
+        let total_distance_motoring = trip["dist_motor"].as_f64()
+            .ok_or("Missing or invalid trip.dist_motor")?;
+        let total_time_sailing = trip["t_sail"].as_u64()
+            .ok_or("Missing or invalid trip.t_sail")?;
+        let total_time_motoring = trip["t_motor"].as_u64()
+            .ok_or("Missing or invalid trip.t_motor")?;
+        let total_time_moored = trip["t_moor"].as_u64()
+            .ok_or("Missing or invalid trip.t_moor")?;
         let import_uuid: Option<&str> = trip["uuid"].as_str();
         
         let mut conn = self.pool.get_conn()?;
@@ -345,28 +366,25 @@ impl VesselDatabase {
         // Insert vessel statuses
         if let Some(statuses) = vessel_statuses.as_array() {
             for status in statuses {
-                let timestamp = status["timestamp"]
-                    .as_str()
-                    .ok_or("Missing timestamp in vessel_status")?;
-                let latitude = status["latitude"].as_f64();
-                let longitude = status["longitude"].as_f64();
-                let avg_speed = status["average_speed_kn"].as_f64();
-                let max_speed = status["max_speed_kn"].as_f64();
-                let is_moored = status["is_moored"]
-                    .as_bool()
-                    .ok_or("Missing is_moored in vessel_status")?;
-                // Handle both old boolean format and new u8 format for engine_on
-                let engine_on: u8 = match &status["engine_on"] {
+                let timestamp = status["ts"].as_str()
+                    .ok_or("Missing ts in vessel_status")?;
+                let latitude = status["lat"].as_f64();
+                let longitude = status["lon"].as_f64();
+                let avg_speed = status["sog"].as_f64();
+                let max_speed = status["sog_max"].as_f64();
+                let is_moored = status["moor"].as_bool()
+                    .ok_or("Missing moor in vessel_status")?;
+                let engine_on: u8 = match &status["eng"] {
                     v if v.is_boolean() => if v.as_bool().unwrap_or(false) { 1 } else { 0 },
                     v if v.is_u64() => v.as_u64().unwrap_or(2) as u8,
-                    _ => 2,  // Default to unknown
+                    _ => 2,
                 };
-                let total_dist = status["total_distance_nm"].as_f64();
-                let total_time = status["total_time_ms"].as_u64();
-                let wind_speed = status["average_wind_speed_kn"].as_f64();
-                let wind_angle = status["average_wind_angle_deg"].as_f64();
-                let cog = status["cog_deg"].as_f64();
-                let heading = status["average_heading_deg"].as_f64();
+                let total_dist = status["dist"].as_f64();
+                let total_time = status["dur"].as_u64();
+                let wind_speed = status["tws"].as_f64();
+                let wind_angle = status["twa"].as_f64();
+                let cog = status["cog"].as_f64();
+                let heading = status["hdg"].as_f64();
                 
                 let ts_datetime = chrono::DateTime::parse_from_rfc3339(timestamp)?
                     .format("%Y-%m-%d %H:%M:%S%.3f").to_string();
@@ -396,15 +414,13 @@ impl VesselDatabase {
         // Insert environmental metrics
         if let Some(metrics) = env_metrics.as_array() {
             for metric in metrics {
-                let timestamp = metric["timestamp"]
-                    .as_str()
-                    .ok_or("Missing timestamp in environmental_data")?;
-                let metric_id = metric["metric_id"]
-                    .as_u64()
-                    .ok_or("Missing metric_id in environmental_data")? as u8;
-                let value_avg = metric["value_avg"].as_f64().map(|v| v as f32);
-                let value_max = metric["value_max"].as_f64().map(|v| v as f32);
-                let value_min = metric["value_min"].as_f64().map(|v| v as f32);
+                let timestamp = metric["ts"].as_str()
+                    .ok_or("Missing ts in environmental_data")?;
+                let metric_id = metric["mid"].as_u64()
+                    .ok_or("Missing mid in environmental_data")? as u8;
+                let value_avg = metric["avg"].as_f64().map(|v| v as f32);
+                let value_max = metric["max"].as_f64().map(|v| v as f32);
+                let value_min = metric["min"].as_f64().map(|v| v as f32);
                 let unit = metric["unit"].as_str();
                 
                 let ts_datetime = chrono::DateTime::parse_from_rfc3339(timestamp)?

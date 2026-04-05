@@ -1059,6 +1059,13 @@ impl VesselDatabase {
     pub fn invalidate_heatmap_cache(&self, start_date: NaiveDate, end_date: NaiveDate) -> Result<(), Box<dyn Error>> {
         let mut conn = self.pool.get_conn()
             .map_err(|e| format!("Database connection error (invalidate heatmap cache): {}", e))?;
+        conn.query_drop(
+            r"CREATE TABLE IF NOT EXISTS heatmap_cache (
+                date DATE NOT NULL,
+                distance_nm DOUBLE NOT NULL DEFAULT 0,
+                PRIMARY KEY (date)
+              ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        ).map_err(|e| format!("Failed to ensure heatmap_cache table: {}", e))?;
         conn.exec_drop(
             "DELETE FROM heatmap_cache WHERE date BETWEEN :start AND :end",
             mysql::params! {
