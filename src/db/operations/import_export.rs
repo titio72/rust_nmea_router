@@ -4,170 +4,241 @@ use mysql::params;
 use tracing::info;
 use mysql::prelude::Queryable;
 
+// ---------------------------------------------------------------------------
+// Typed structs for export serialization.
+// Using #[derive(serde::Serialize)] avoids building a serde_json::Value tree
+// (~100 K heap-allocated nodes for a long trip), which was the primary
+// performance bottleneck on low-power hardware.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct ExportTrip {
+    id: i64,
+    uuid: Option<String>,
+    description: String,
+    start_timestamp: String,
+    end_timestamp: String,
+    total_distance_sailed: f64,
+    total_distance_motoring: f64,
+    total_time_sailing: u64,
+    total_time_motoring: u64,
+    total_time_moored: u64,
+}
+
+#[derive(serde::Serialize)]
+struct ExportVesselStatus {
+    timestamp: String,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    average_speed_kn: Option<f64>,
+    max_speed_kn: Option<f64>,
+    is_moored: bool,
+    engine_on: u8,
+    total_distance_nm: Option<f64>,
+    total_time_ms: Option<u64>,
+    average_wind_speed_kn: Option<f64>,
+    average_wind_angle_deg: Option<f64>,
+    cog_deg: Option<f64>,
+    average_heading_deg: Option<f64>,
+}
+
+#[derive(serde::Serialize)]
+struct ExportEnvMetric {
+    timestamp: String,
+    metric_id: u8,
+    value_avg: Option<f32>,
+    value_max: Option<f32>,
+    value_min: Option<f32>,
+    unit: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct ExportMetadata {
+    generated_at: String,
+    trip_id: i64,
+}
+
+#[derive(serde::Serialize)]
+struct ExportData {
+    trip: ExportTrip,
+    vessel_statuses: Vec<ExportVesselStatus>,
+    environmental_metrics: Vec<ExportEnvMetric>,
+    export_metadata: ExportMetadata,
+}
+
+// Converts a mysql::Value::Date (returned for DATETIME(3) columns via prepared
+// statements) to an ISO-8601 UTC string without calling DATE_FORMAT in SQL.
+// Also handles Value::Bytes for the text-protocol fallback path.
+fn mysql_datetime_to_iso(val: &mysql::Value) -> Result<String, Box<dyn Error>> {
+    match val {
+        mysql::Value::Date(year, month, day, hour, minute, second, micros) => {
+            let millis = *micros / 1000;
+            Ok(format!(
+                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                year, month, day, hour, minute, second, millis
+            ))
+        }
+        mysql::Value::Bytes(b) => {
+            // Text-protocol path: "YYYY-MM-DD HH:MM:SS.mmm" → ISO 8601
+            let s = std::str::from_utf8(b)?;
+            Ok(s.replacen(' ', "T", 1) + "Z")
+        }
+        other => Err(format!("Unexpected MySQL value type for timestamp: {:?}", other).into()),
+    }
+}
+
 impl VesselDatabase {
-    /// Export a trip and its associated data to a portable SQL script
-    /// 
-    /// This function creates a SQL script containing:
-    /// 1. The trip record
-    /// 2. All vessel status records within the trip's time range
-    /// 3. All environmental metrics records within the trip's time range
-    /// 
-    /// Before exporting, it checks if there's an overlapping trip in the database
-    /// and fails if one is found.
-    /// 
-    /// # Arguments
-    /// * `trip_id` - The ID of the trip to export
-    /// * `output_path` - Path where the SQL script will be written
-    /// 
-    /// # Returns
-    /// Result indicating success or error
-    #[allow(dead_code)]
     pub fn export_trip<P: AsRef<std::path::Path>>(&self, trip_id: i64, output_path: P) -> Result<(), Box<dyn Error>> {
-        use serde_json::{json, Value};
         use std::fs::File;
-        
+        use std::io::BufWriter;
+
         let mut conn = self.pool.get_conn()?;
-        
-        // Step 1: Fetch the trip to export with formatted timestamps
+
+        // Step 1: Fetch the trip record.
+        // Raw DATETIME(3) columns are read directly; mysql_datetime_to_iso formats
+        // them in Rust, avoiding DATE_FORMAT() calls on the server side.
         let trip_row: Option<mysql::Row> = conn.exec_first(
-            "SELECT id, 
-                    DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as start_ts,
-                    DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
-                    description, total_distance_sailed, 
-                    total_distance_motoring, total_time_sailing, total_time_motoring, 
-                    total_time_moored, uuid,
-                    start_timestamp as start_ts_raw, end_timestamp as end_ts_raw
+            "SELECT id, start_timestamp, end_timestamp,
+                    description, total_distance_sailed,
+                    total_distance_motoring, total_time_sailing, total_time_motoring,
+                    total_time_moored, uuid
              FROM trips WHERE id = :id",
             params! { "id" => trip_id },
         )?;
-        
-        let trip_row = trip_row.ok_or("Trip not found")?;
-        let trip_id_fetched: i64 = trip_row.get(0).ok_or("Missing id")?;
-        let start_ts_str: String = trip_row.get(1).ok_or("Missing start_timestamp")?;
-        let end_ts_str: String = trip_row.get(2).ok_or("Missing end_timestamp")?;
-        let description: String = trip_row.get(3).ok_or("Missing description")?;
-        let total_distance_sailed: f64 = trip_row.get(4).ok_or("Missing total_distance_sailed")?;
-        let total_distance_motoring: f64 = trip_row.get(5).ok_or("Missing total_distance_motoring")?;
-        let total_time_sailing: u64 = trip_row.get(6).ok_or("Missing total_time_sailing")?;
-        let total_time_motoring: u64 = trip_row.get(7).ok_or("Missing total_time_motoring")?;
-        let total_time_moored: u64 = trip_row.get(8).ok_or("Missing total_time_moored")?;
-        let trip_uuid: Option<String> = trip_row.get(9).unwrap_or(None);
-        let start_ts: mysql::Value = trip_row.get(10).ok_or("Missing start_timestamp_raw")?;
-        let end_ts: mysql::Value = trip_row.get(11).ok_or("Missing end_timestamp_raw")?;
 
-        // Step 2: Fetch vessel status records within time range with formatted timestamps
-        let vessel_statuses: Vec<mysql::Row> = conn.exec(
-            "SELECT DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as ts_formatted, 
-                    latitude, longitude, average_speed_kn, max_speed_kn, 
-                    is_moored, engine_on, total_distance_nm, total_time_ms, 
-                    average_wind_speed_kn, average_wind_angle_deg, cog_deg, 
-                    average_heading_deg 
-             FROM vessel_status 
-             WHERE timestamp >= :start_ts AND timestamp <= :end_ts
-             ORDER BY timestamp ASC",
-            params! {
-                "start_ts" => &start_ts,
-                "end_ts" => &end_ts,
-            },
-        )?;
-        
-        // Step 3: Fetch environmental metrics within time range with formatted timestamps
-        let env_metrics: Vec<mysql::Row> = conn.exec(
-            "SELECT DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as ts_formatted, 
-                    metric_id, value_avg, value_max, value_min, unit 
-             FROM environmental_data 
-             WHERE timestamp >= :start_ts AND timestamp <= :end_ts
-             ORDER BY timestamp ASC",
-            params! {
-                "start_ts" => &start_ts,
-                "end_ts" => &end_ts,
-            },
-        )?;
-        
-        // Step 4: Build JSON structure
-        let mut vessel_statuses_json: Vec<Value> = Vec::new();
-        for row in vessel_statuses {
-            let timestamp: String = row.get(0).ok_or("Missing timestamp")?;
-            let latitude: Option<f64> = row.get_opt(1).and_then(|v| v.ok()).flatten();
-            let longitude: Option<f64> = row.get_opt(2).and_then(|v| v.ok()).flatten();
-            let avg_speed: Option<f64> = row.get_opt(3).and_then(|v| v.ok()).flatten();
-            let max_speed: Option<f64> = row.get_opt(4).and_then(|v| v.ok()).flatten();
-            let is_moored: bool = row.get(5).ok_or("Missing is_moored")?;
-            let engine_on: u8 = row.get(6).ok_or("Missing engine_on")?;  // 0=off, 1=on, 2=unknown
-            let total_dist: Option<f64> = row.get_opt(7).and_then(|v| v.ok()).flatten();
-            let total_time: Option<u64> = row.get_opt(8).and_then(|v| v.ok()).flatten();
-            let wind_speed: Option<f64> = row.get_opt(9).and_then(|v| v.ok()).flatten();
-            let wind_angle: Option<f64> = row.get_opt(10).and_then(|v| v.ok()).flatten();
-            let cog: Option<f64> = row.get_opt(11).and_then(|v| v.ok()).flatten();
-            let heading: Option<f64> = row.get_opt(12).and_then(|v| v.ok()).flatten();
-            
-            vessel_statuses_json.push(json!({
-                "timestamp": timestamp,
-                "latitude": latitude,
-                "longitude": longitude,
-                "average_speed_kn": avg_speed,
-                "max_speed_kn": max_speed,
-                "is_moored": is_moored,
-                "engine_on": engine_on,
-                "total_distance_nm": total_dist,
-                "total_time_ms": total_time,
-                "average_wind_speed_kn": wind_speed,
-                "average_wind_angle_deg": wind_angle,
-                "cog_deg": cog,
-                "average_heading_deg": heading,
-            }));
-        }
-        
-        let mut env_metrics_json: Vec<Value> = Vec::new();
-        for row in env_metrics {
-            let timestamp: String = row.get(0).ok_or("Missing timestamp")?;
-            let metric_id: u8 = row.get(1).ok_or("Missing metric_id")?;
-            let value_avg: Option<f32> = row.get_opt(2).and_then(|v| v.ok()).flatten();
-            let value_max: Option<f32> = row.get_opt(3).and_then(|v| v.ok()).flatten();
-            let value_min: Option<f32> = row.get_opt(4).and_then(|v| v.ok()).flatten();
-            let unit: Option<String> = row.get_opt(5).and_then(|v| v.ok()).flatten();
-            
-            env_metrics_json.push(json!({
-                "timestamp": timestamp,
-                "metric_id": metric_id,
-                "value_avg": value_avg,
-                "value_max": value_max,
-                "value_min": value_min,
-                "unit": unit,
-            }));
-        }
-        
-        let export_data = json!({
-            "trip": {
-                "id": trip_id_fetched,
-                "uuid": trip_uuid,
-                "description": description,
-                "start_timestamp": start_ts_str,
-                "end_timestamp": end_ts_str,
-                "total_distance_sailed": total_distance_sailed,
-                "total_distance_motoring": total_distance_motoring,
-                "total_time_sailing": total_time_sailing,
-                "total_time_motoring": total_time_motoring,
-                "total_time_moored": total_time_moored,
-            },
-            "vessel_statuses": vessel_statuses_json,
-            "environmental_metrics": env_metrics_json,
-            "export_metadata": {
-                "generated_at": chrono::Local::now().to_rfc3339(),
-                "trip_id": trip_id,
-            }
+        let trip_row = trip_row.ok_or("Trip not found")?;
+
+        let trip_id_fetched: i64    = trip_row.get(0).ok_or("Missing id")?;
+        let start_ts: mysql::Value  = trip_row.get(1).ok_or("Missing start_timestamp")?;
+        let end_ts: mysql::Value    = trip_row.get(2).ok_or("Missing end_timestamp")?;
+        let description: String     = trip_row.get(3).ok_or("Missing description")?;
+        let total_distance_sailed:   f64 = trip_row.get(4).ok_or("Missing total_distance_sailed")?;
+        let total_distance_motoring: f64 = trip_row.get(5).ok_or("Missing total_distance_motoring")?;
+        let total_time_sailing:  u64 = trip_row.get(6).ok_or("Missing total_time_sailing")?;
+        let total_time_motoring: u64 = trip_row.get(7).ok_or("Missing total_time_motoring")?;
+        let total_time_moored:   u64 = trip_row.get(8).ok_or("Missing total_time_moored")?;
+        let trip_uuid: Option<String> = trip_row.get(9).unwrap_or(None);
+
+        let start_ts_str = mysql_datetime_to_iso(&start_ts)?;
+        let end_ts_str   = mysql_datetime_to_iso(&end_ts)?;
+
+        // Release the first connection before acquiring two more for parallel queries.
+        drop(conn);
+
+        // Steps 2 & 3: Fetch vessel_status and environmental_data concurrently.
+        // Each thread gets its own connection from the pool so both queries run
+        // simultaneously instead of sequentially.
+        let pool_vs  = self.pool.clone();
+        let pool_em  = self.pool.clone();
+        let start_vs = start_ts.clone();
+        let end_vs   = end_ts.clone();
+        let start_em = start_ts.clone();
+        let end_em   = end_ts.clone();
+
+        let (vs_result, em_result) = std::thread::scope(|s| {
+            let vs = s.spawn(move || -> Result<Vec<mysql::Row>, Box<dyn std::error::Error + Send + Sync>> {
+                let mut conn = pool_vs.get_conn()?;
+                Ok(conn.exec(
+                    "SELECT timestamp, latitude, longitude, average_speed_kn, max_speed_kn,
+                             is_moored, engine_on, total_distance_nm, total_time_ms,
+                             average_wind_speed_kn, average_wind_angle_deg, cog_deg,
+                             average_heading_deg
+                     FROM vessel_status
+                     WHERE timestamp >= :start_ts AND timestamp <= :end_ts
+                     ORDER BY timestamp ASC",
+                    params! { "start_ts" => start_vs, "end_ts" => end_vs },
+                )?)
+            });
+
+            let em = s.spawn(move || -> Result<Vec<mysql::Row>, Box<dyn std::error::Error + Send + Sync>> {
+                let mut conn = pool_em.get_conn()?;
+                Ok(conn.exec(
+                    "SELECT timestamp, metric_id, value_avg, value_max, value_min, unit
+                     FROM environmental_data
+                     WHERE timestamp >= :start_ts AND timestamp <= :end_ts
+                     ORDER BY timestamp ASC",
+                    params! { "start_ts" => start_em, "end_ts" => end_em },
+                )?)
+            });
+
+            (vs.join(), em.join())
         });
-        
-        // Create parent directories if they don't exist
+
+        let vessel_rows = vs_result
+            .map_err(|_| -> Box<dyn Error> { "vessel_status query thread panicked".into() })?
+            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+        let env_rows = em_result
+            .map_err(|_| -> Box<dyn Error> { "environmental_data query thread panicked".into() })?
+            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+
+        // Step 4: Map raw rows into typed structs.
+        // Struct serialization via serde avoids allocating a serde_json::Value
+        // node for every field of every row.
+        let mut vessel_statuses: Vec<ExportVesselStatus> = Vec::with_capacity(vessel_rows.len());
+        for row in vessel_rows {
+            let ts_val: mysql::Value = row.get(0).ok_or("Missing timestamp in vessel_status")?;
+            vessel_statuses.push(ExportVesselStatus {
+                timestamp:              mysql_datetime_to_iso(&ts_val)?,
+                latitude:               row.get_opt(1).and_then(|v| v.ok()).flatten(),
+                longitude:              row.get_opt(2).and_then(|v| v.ok()).flatten(),
+                average_speed_kn:       row.get_opt(3).and_then(|v| v.ok()).flatten(),
+                max_speed_kn:           row.get_opt(4).and_then(|v| v.ok()).flatten(),
+                is_moored:              row.get(5).ok_or("Missing is_moored")?,
+                engine_on:              row.get(6).ok_or("Missing engine_on")?,
+                total_distance_nm:      row.get_opt(7).and_then(|v| v.ok()).flatten(),
+                total_time_ms:          row.get_opt(8).and_then(|v| v.ok()).flatten(),
+                average_wind_speed_kn:  row.get_opt(9).and_then(|v| v.ok()).flatten(),
+                average_wind_angle_deg: row.get_opt(10).and_then(|v| v.ok()).flatten(),
+                cog_deg:                row.get_opt(11).and_then(|v| v.ok()).flatten(),
+                average_heading_deg:    row.get_opt(12).and_then(|v| v.ok()).flatten(),
+            });
+        }
+
+        let mut env_metrics: Vec<ExportEnvMetric> = Vec::with_capacity(env_rows.len());
+        for row in env_rows {
+            let ts_val: mysql::Value = row.get(0).ok_or("Missing timestamp in environmental_data")?;
+            env_metrics.push(ExportEnvMetric {
+                timestamp: mysql_datetime_to_iso(&ts_val)?,
+                metric_id: row.get(1).ok_or("Missing metric_id")?,
+                value_avg: row.get_opt(2).and_then(|v| v.ok()).flatten(),
+                value_max: row.get_opt(3).and_then(|v| v.ok()).flatten(),
+                value_min: row.get_opt(4).and_then(|v| v.ok()).flatten(),
+                unit:      row.get_opt(5).and_then(|v| v.ok()).flatten(),
+            });
+        }
+
+        let export_data = ExportData {
+            trip: ExportTrip {
+                id: trip_id_fetched,
+                uuid: trip_uuid,
+                description,
+                start_timestamp: start_ts_str,
+                end_timestamp: end_ts_str,
+                total_distance_sailed,
+                total_distance_motoring,
+                total_time_sailing,
+                total_time_motoring,
+                total_time_moored,
+            },
+            vessel_statuses,
+            environmental_metrics: env_metrics,
+            export_metadata: ExportMetadata {
+                generated_at: chrono::Utc::now().to_rfc3339(),
+                trip_id,
+            },
+        };
+
         if let Some(parent) = std::path::Path::new(output_path.as_ref()).parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)?;
             }
         }
-        
+
+        // BufWriter batches small writes into fewer syscalls; compact JSON
+        // (to_writer vs to_writer_pretty) skips indentation computation entirely.
         let file = File::create(&output_path)?;
-        serde_json::to_writer_pretty(file, &export_data)?;
-        
+        serde_json::to_writer(BufWriter::new(file), &export_data)?;
+
         info!("Trip {} exported successfully to: {}", trip_id, output_path.as_ref().display());
         Ok(())
     }
