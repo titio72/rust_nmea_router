@@ -43,7 +43,7 @@ function initializeTheme() {
 function updateBrandLogo(isDark) {
     const brandLogo = document.getElementById('brandLogo');
     if (brandLogo) {
-        brandLogo.src = isDark ? '/Itaca_v3_dark.svg' : '/Itaca_v3.svg';
+        brandLogo.src = isDark ? '/images/Itaca_v3_dark.svg' : '/images/Itaca_v3.svg';
     }
 }
 
@@ -94,7 +94,7 @@ function createHeaderBar(currentPage) {
     let headerHTML = `
         <div class="header-bar">
             <div style="display: flex; align-items: center; gap: 15px;">
-                <img id="brandLogo" src="/Itaca_v3.svg" alt="Logo" style="height: 80px; margin-right: 15px;">
+                <img id="brandLogo" src="/images/Itaca_v3.svg" alt="Logo" style="height: 80px; margin-right: 15px;">
                 <div>
                     <h2 style="margin: 0; color: var(--text-primary);">NMEA Router</h2>
                     <nav class="navigation-links" style="margin-top: 8px;">`;
@@ -125,6 +125,126 @@ function createHeaderBar(currentPage) {
 
     return headerHTML;
 }
+
+// ----------------------- General purpose functions ----------------------
+
+function hslToRgb(h, s, l) {
+    h /= 360;
+    s /= 100;
+    l /= 100;
+
+    const hue2rgb = (p, q, t) => {
+        if (t < 0) t += 1;
+        if (t > 1) t -= 1;
+        if (t < 1/6) return p + (q - p) * 6 * t;
+        if (t < 1/2) return q;
+        if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+        return p;
+    };
+
+    let r, g, b;
+
+    if (s === 0) {
+        r = g = b = l; // achromatic
+    } else {
+        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        const p = 2 * l - q;
+        r = hue2rgb(p, q, h + 1/3);
+        g = hue2rgb(p, q, h);
+        b = hue2rgb(p, q, h - 1/3);
+    }
+
+    const toHex = c => {
+        const hex = Math.round(c * 255).toString(16);
+        return hex.length === 1 ? '0' + hex : hex;
+    };
+
+    return '#' + toHex(r) + toHex(g) + toHex(b);
+}
+
+function formatDateTime(dateStr) {
+    if (!dateStr) return 'Unknown';
+    try {
+        const date = new Date(dateStr);
+        return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+    } catch (e) {
+        return dateStr;
+    }
+}
+
+function formatDate(dateStr) {
+    if (!dateStr) return 'Unknown';
+    try {
+        const date = new Date(dateStr);
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+        // return date.toLocaleDateString();
+    } catch (e) {
+        return dateStr;
+    }
+}
+
+function formatTime(dateStr) {
+    if (!dateStr) return '';
+    try {
+        const date = new Date(dateStr);
+        return date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+    } catch (e) {
+        return dateStr;
+    }
+}
+
+function formatDuration(ms) {
+    if (!ms) return '0h 0m';
+    const totalMinutes = Math.floor(ms / (1000 * 60));
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return hours + 'h ' + minutes + 'm';
+}
+
+function formatDateTime(dateStr) {
+    if (!dateStr) return '';
+    try {
+        const date = new Date(dateStr);
+        return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+    } catch (e) {
+        return dateStr;
+    }
+}
+
+function formatDateForAPI(dateStr) {
+    if (!dateStr) return '';
+    // Handle both ISO format (with or without timezone/milliseconds)
+    // Expected format: 2026-02-02T05:55:12.895000Z or 2026-02-02 05:55:12
+    if (typeof dateStr !== 'string') return '';
+    return dateStr.split('.')[0].replace('T', ' ');
+}
+
+function formatDuration(startDateStr, endDateStr) {
+    if (!startDateStr || !endDateStr) return 'N/A';
+    try {
+        const startDate = new Date(startDateStr);
+        const endDate = new Date(endDateStr);
+        const durationMs = endDate - startDate;
+        
+        if (durationMs < 0) return 'N/A';
+        
+        const totalSeconds = Math.floor(durationMs / 1000);
+        const days = Math.floor(totalSeconds / 86400);
+        const hours = Math.floor((totalSeconds % 86400) / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        
+        const parts = [];
+        if (days > 0) parts.push(days + 'd');
+        if (hours > 0) parts.push(hours + 'h');
+        if (minutes > 0) parts.push(minutes + 'm');
+        
+        return parts.length > 0 ? parts.join(' ') : '0m';
+    } catch (e) {
+        return 'N/A';
+    }
+}
+
+// ----------------------- System Actions & Dialogs -----------------------
 
 /**
  * Show a styled confirmation dialog

@@ -5,11 +5,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NMEA Router Dashboard</title>
-    <link rel="icon" type="image/png" href="/nmeasail.png">
+    <link rel="icon" type="image/png" href="/images/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
     <script src="/shared-theme.js"></script>
-    <script src="/voyage-bar-component.js"></script>
-    <script src="/trip-card-component.js"></script>
+    <script src="/components/voyage-bar-component.js"></script> 
+    <script src="/components/trip-card-component.js"></script>
     <style>
         .tracking-toggle-container {
             display: flex;
@@ -286,11 +286,50 @@
         }
 
         .heatmap-cell {
+            position: relative;
+            overflow: visible;
             border: 1px solid var(--border-color);
             border-radius: 2px;
             cursor: pointer;
             transition: all 0.2s ease;
             background-color: var(--cell-color, var(--heatmap-empty));
+        }
+
+        .trip-line-top {
+            position: absolute;
+            width: 2px;
+            background-color: #e74c3c;
+            left: 50%;
+            transform: translateX(-50%);
+            pointer-events: none;
+            z-index: 1;
+            top: -3px;
+            height: calc(50% + 3px);
+        }
+
+        .trip-line-bottom {
+            position: absolute;
+            width: 2px;
+            background-color: #e74c3c;
+            left: 50%;
+            transform: translateX(-50%);
+            pointer-events: none;
+            z-index: 1;
+            top: 50%;
+            height: calc(50% + 3px);
+        }
+
+        .trip-dot {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            background-color: #e74c3c;
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 2;
         }
 
         .heatmap-cell:hover {
@@ -730,6 +769,28 @@
             }
         }
 
+        function buildTripDateMap() {
+            if (!window.allTrips || window.allTrips.length === 0) return {};
+            const dateMap = {};
+            window.allTrips.forEach(trip => {
+                const startStr = trip.start_date.split('T')[0];
+                const endStr = trip.end_date.split('T')[0];
+                const start = new Date(startStr + 'T00:00:00Z');
+                const end = new Date(endStr + 'T00:00:00Z');
+                let cur = new Date(start);
+                while (cur <= end) {
+                    const ds = cur.toISOString().split('T')[0];
+                    if (!dateMap[ds]) {
+                        dateMap[ds] = { isStart: false, isEnd: false };
+                    }
+                    if (ds === startStr) dateMap[ds].isStart = true;
+                    if (ds === endStr) dateMap[ds].isEnd = true;
+                    cur.setUTCDate(cur.getUTCDate() + 1);
+                }
+            });
+            return dateMap;
+        }
+
         async function loadHeatmap() {
             const endDate = getHeatmapEndDate();
             const dateString = endDate.toISOString().split('T')[0];
@@ -842,6 +903,8 @@
                     currentMonday.setDate(currentMonday.getDate() + 7);
                 }
 
+                const tripDateMap = buildTripDateMap();
+
                 let lastMonth = null;
                 const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -879,6 +942,38 @@
 
                         const dayName = dayDate.toLocaleDateString('en-US', { weekday: 'short' });
                         cell.title = `${dateStr} (${dayName})\n${distance.toFixed(2)} nm`;
+
+                        // Add trip line indicators (vertical red segments connecting consecutive trip days)
+                        const tripEntry = tripDateMap[dateStr];
+                        if (tripEntry) {
+                            const prevDayDate = new Date(dayDate);
+                            prevDayDate.setDate(prevDayDate.getDate() - 1);
+                            const prevDateStr = prevDayDate.toISOString().split('T')[0];
+                            const nextDayDate = new Date(dayDate);
+                            nextDayDate.setDate(nextDayDate.getDate() + 1);
+                            const nextDateStr = nextDayDate.toISOString().split('T')[0];
+
+                            // Top half: continues from row above (or from column border if this is Mon and trip didn't start here)
+                            const showTop = dayIdx === 0 ? !tripEntry.isStart : !!tripDateMap[prevDateStr];
+                            if (showTop) {
+                                const line = document.createElement('div');
+                                line.className = 'trip-line-top';
+                                cell.appendChild(line);
+                            }
+                            // Bottom half: continues into row below (or to column border if this is Sun and trip doesn't end here)
+                            const showBottom = dayIdx === 6 ? !tripEntry.isEnd : !!tripDateMap[nextDateStr];
+                            if (showBottom) {
+                                const line = document.createElement('div');
+                                line.className = 'trip-line-bottom';
+                                cell.appendChild(line);
+                            }
+                            // Red dot on trip start/end days
+                            if (tripEntry.isStart || tripEntry.isEnd) {
+                                const dot = document.createElement('div');
+                                dot.className = 'trip-dot';
+                                cell.appendChild(dot);
+                            }
+                        }
 
                         // Add click handler to navigate to trip details if cell has activity
                         if (distance > 0) {
@@ -989,14 +1084,14 @@
 
         // Register Service Worker for offline support and graceful degradation
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').catch(() => {
+            navigator.serviceWorker.register('/sw.js').catch((err) => {
                 // Service Worker registration failed (non-critical)
+                console.log('Some assets could not be cached:', err);
             });
         }
 
-        // Load trips and heatmap when page loads
-        loadTrips();
-        loadHeatmap();
+        // Load trips first so trip dots are available when heatmap renders
+        loadTrips().then(() => loadHeatmap());
 
         // Load tracking status when page loads
         async function initializeTracking() {
