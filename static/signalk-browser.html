@@ -156,17 +156,11 @@
         <div class="signalk-header">
             <h2>SignalK Stream Browser</h2>
             <div class="signalk-controls">
-                <button id="connectBtn" class="app-btn" title="Connect">🗸</button>
-                <button id="disconnectBtn" class="app-btn" disabled title="Disconnect">🗴</button>
                 <button id="clearBtn" class="app-btn" title="Clear">🗑</button>
             </div>
         </div>
         
         <div class="connection-info">
-            <div class="connection-status">
-                <span id="statusIndicator" class="status-indicator status-disconnected"></span>
-                <span id="statusText">Disconnected</span>
-            </div>
             <div class="stats">
                 <div class="stats-item">
                     <div class="stats-value" id="messageCount">0</div>
@@ -192,7 +186,7 @@
 
     <script>
         // Initialize header and theme
-        document.getElementById('headerContainer').innerHTML = createHeaderBar('signalk-browser');
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('signalk-browser', true);
         initializeTheme();
         
         let ws = null;
@@ -212,19 +206,14 @@
         initializeTheme();
 
         // DOM elements
-        const connectBtn = document.getElementById('connectBtn');
-        const disconnectBtn = document.getElementById('disconnectBtn');
         const clearBtn = document.getElementById('clearBtn');
         const cardsGrid = document.getElementById('cardsGrid');
-        const statusIndicator = document.getElementById('statusIndicator');
         const statusText = document.getElementById('statusText');
         const messageCountEl = document.getElementById('messageCount');
         const updateCountEl = document.getElementById('updateCount');
         const pathCountEl = document.getElementById('pathCount');
 
         // Event listeners
-        connectBtn.addEventListener('click', connect);
-        disconnectBtn.addEventListener('click', disconnect);
         clearBtn.addEventListener('click', clearMessages);
 
         // Start cleanup interval
@@ -234,15 +223,11 @@
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}/signalk/v1/stream`;
             
-            updateStatus('connecting', 'Connecting...');
-            connectBtn.disabled = true;
-            
             ws = new WebSocket(wsUrl);
             
             ws.onopen = () => {
-                updateStatus('connected', 'Connected');
-                disconnectBtn.disabled = false;
                 addSystemMessage('Connected to SignalK stream', 'success');
+                updateConnectionStatus(true);
             };
             
             ws.onmessage = (event) => {
@@ -263,13 +248,12 @@
             
             ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
+                updateConnectionStatus(false);
                 addSystemMessage('WebSocket error occurred', 'error');
             };
             
             ws.onclose = () => {
-                updateStatus('disconnected', 'Disconnected');
-                connectBtn.disabled = false;
-                disconnectBtn.disabled = true;
+                updateConnectionStatus(false);
                 addSystemMessage('Disconnected from SignalK stream');
             };
         }
@@ -288,11 +272,6 @@
             updateCount = 0;
             renderCards();
             updateStats();
-        }
-
-        function updateStatus(status, text) {
-            statusIndicator.className = `status-indicator status-${status}`;
-            statusText.textContent = text;
         }
 
         function handleDelta(delta) {
@@ -493,6 +472,8 @@
                 ws.close();
             }
         });
+
+        connect(); // Auto-connect on page load
     </script>
 </body>
 </html>

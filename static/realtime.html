@@ -10,22 +10,6 @@
     <script src="/shared-theme.js"></script>
     <script src="/components/dial-component.js"></script>
     <style>
-        .status-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background-color: #999;
-            transition: background-color 0.3s ease;
-        }
-
-        .status-dot.connected {
-            background-color: #27ae60;
-        }
-
-        .status-dot.disconnected {
-            background-color: #e74c3c;
-        }
-
         .cards-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
@@ -117,20 +101,15 @@
 <body>
     <div id="headerContainer"></div>
 
-    <div class="level-1-container">
-        <!--div class="realtime-header">
-            <h2>Realtime Data</h2>
-            <div class="status-indicator">
-                <div class="status-dot" id="connectionStatus"></div>
-                <span id="statusText">Connecting...</span>
-            </div>
-        </div-->
-        
+    <div class="level-1-container">        
         <div class="cards-grid">
             <!-- GNSS & Time Information Card -->
             <div class="app-card">
                 <div class="card-title">GNSS</div>
-
+                <div class="data-row">
+                    <span class="data-label">Connection</span>
+                    <span class="data-value" id="gnssConnection" style="font-family: monospace; font-size: 13px;">--</span>
+                </div>
                 <div class="data-row">
                     <span class="data-label">Latitude</span>
                     <span class="data-value" id="latitude">--<span class="data-unit">°</span></span>
@@ -149,6 +128,22 @@
                 <div class="data-row">
                     <span class="data-label">Speed Over Ground</span>
                     <span class="data-value" id="sog">--<span class="data-unit">kn</span></span>
+                </div>
+                <div class="data-row">
+                    <span class="data-label">Connection Type</span>
+                    <span class="data-value" id="gnssConnectionType" style="font-family: monospace; font-size: 13px;">--</span>
+                </div>
+                <div class="data-row">
+                    <span class="data-label">HDOP</span>
+                    <span class="data-value" id="gnssHdop" style="font-family: monospace; font-size: 13px;">--</span>
+                </div>
+                <div class="data-row">
+                    <span class="data-label">VDOP</span>
+                    <span class="data-value" id="gnssVdop" style="font-family: monospace; font-size: 13px;">--</span>
+                </div>
+                <div class="data-row">
+                    <span class="data-label">TDOP</span>
+                    <span class="data-value" id="gnssTdop" style="font-family: monospace; font-size: 13px;">--</span>
                 </div>
 
                 <div class="last-update" id="gnssLastUpdate">No data received</div>
@@ -256,11 +251,6 @@
                 <div class="card-title">System Status</div>
 
                 <div class="data-row">
-                    <span class="data-label">Connection</span>
-                    <span class="data-value status-dot" id="connectionStatus"></span>
-                </div>
-
-                <div class="data-row">
                     <span class="data-label">GNSS Time</span>
                     <span class="data-value" id="gnssTime"
                         style="font-family: monospace; font-size: 13px;">--</span>
@@ -283,7 +273,7 @@
 
     <script>
         // Initialize header and theme
-        document.getElementById('headerContainer').innerHTML = createHeaderBar('monitor');
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('monitor', true);
         initializeTheme();
         
         let ws = null;
@@ -331,7 +321,7 @@
                     
                     // Process delta messages (have 'context' and 'updates')
                     if (message.context && message.updates) {
-                        console.log('Received SignalK delta with', message.updates[0]?.values?.length || 0, 'values');
+                        //console.log('Received SignalK delta with', message.updates[0]?.values?.length || 0, 'values');
                         
                         for (const update of message.updates) {
                             for (const value of update.values) {
@@ -354,18 +344,6 @@
                 updateConnectionStatus(false);
                 setTimeout(connectWebSocket, 3000);
             };
-        }
-
-        function updateConnectionStatus(connected) {
-            const statusDot = document.getElementById('connectionStatus');
-
-            if (connected) {
-                statusDot.classList.add('connected');
-                statusDot.classList.remove('disconnected');
-            } else {
-                statusDot.classList.remove('connected');
-                statusDot.classList.add('disconnected');
-            }
         }
 
         function formatValue(value, decimals = 2) {
@@ -557,6 +535,27 @@
                         }
                         lastUpdate.attitude = new Date();
                         updateLastUpdateTime('attitudeLastUpdate', lastUpdate.attitude);
+                        break;
+                    case 'navigation.gnss.methodQuality':
+                        const gnssConnection = document.getElementById('gnssConnection');
+                        gnssConnection.textContent = value;
+                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        break;
+                    case 'navigation.gnss.horizontalDilution':
+                        document.getElementById('gnssHdop').textContent = formatValue(value, 1);
+                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        break;
+                    case 'navigation.gnss.verticalDilution':
+                        document.getElementById('gnssVdop').textContent = formatValue(value, 1);
+                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        break;
+                    case 'navigation.gnss.timeDilution':
+                        document.getElementById('gnssTdop').textContent = formatValue(value, 1);
+                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
+                        break;
+                    case 'navigation.gnss.mode':
+                        document.getElementById('gnssConnectionType').textContent = value;
+                        updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
                         break;
                 }
             } catch (error) {

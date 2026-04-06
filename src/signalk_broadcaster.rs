@@ -51,6 +51,7 @@ pub struct SignalKBroadcaster {
     last_datetime_broadcast: Option<Instant>,
     last_timesync_broadcast: Option<Instant>,
     last_roll_broadcast: Option<Instant>,
+    last_gnss_dop_broadcast: Option<Instant>,
 
     last_position: Option<Position>,
 }
@@ -80,6 +81,7 @@ impl SignalKBroadcaster {
             last_datetime_broadcast: None,
             last_timesync_broadcast: None,
             last_roll_broadcast: None,
+            last_gnss_dop_broadcast: None,
             last_position: None,
         }
     }
@@ -169,7 +171,59 @@ impl MessageHandler for SignalKBroadcaster {
                     self.last_position_broadcast = Some(now);
                 }
             },
-            
+
+            // GNSS position data - PGN 129029
+            // SignalK: navigation.gnss.methodQuality
+            N2kMessage::GnssPositionData(data) => {
+                if self.should_broadcast(self.last_position_broadcast, now) {
+                    let gnss_method = match data.method {
+                        nmea2k::pgns::pgn129029::GnssMethod::NoGnss => "No GNSS",
+                        nmea2k::pgns::pgn129029::GnssMethod::GnssFix => "GNSS Fix",
+                        nmea2k::pgns::pgn129029::GnssMethod::DGnss => "DGNSS",
+                        nmea2k::pgns::pgn129029::GnssMethod::PreciseGnss => "Precise GNSS",
+                        nmea2k::pgns::pgn129029::GnssMethod::RtkFixed => "RTK Fixed",
+                        nmea2k::pgns::pgn129029::GnssMethod::RtkFloat => "RTK Float",
+                    }.to_string();
+                    let values = vec![SignalKValue {
+                        path: "navigation.gnss.methodQuality".to_string(),
+                        value: json!(gnss_method),
+                    }];
+                    self.send_delta(source, timestamp, values);
+                }
+            },
+
+            // GNSS DOPs - PGN 129539
+            // SignalK: navigation.gnss.horizontalDilution, verticalDilution, timeDilution, mode
+            N2kMessage::GnssDops(dop) => {
+                if self.should_broadcast(self.last_gnss_dop_broadcast, now) {
+                    let mut values = Vec::new();
+                    if let Some(hdop) = dop.hdop {
+                        values.push(SignalKValue {
+                            path: "navigation.gnss.horizontalDilution".to_string(),
+                            value: json!(hdop),
+                        });
+                    }
+                    if let Some(vdop) = dop.vdop {
+                        values.push(SignalKValue {
+                            path: "navigation.gnss.verticalDilution".to_string(),
+                            value: json!(vdop),
+                        });
+                    }
+                    if let Some(tdop) = dop.tdop {
+                        values.push(SignalKValue {
+                            path: "navigation.gnss.timeDilution".to_string(),
+                            value: json!(tdop),
+                        });
+                    }
+                    values.push(SignalKValue {
+                        path: "navigation.gnss.mode".to_string(),
+                        value: json!(dop.actual_mode.to_string()),
+                    });
+                    self.send_delta(source, timestamp, values);
+                    self.last_gnss_dop_broadcast = Some(now);
+                }
+            },
+
             // COG/SOG data - PGN 129026
             // SignalK: navigation.speedOverGround (m/s), navigation.courseOverGroundTrue (radians)
             N2kMessage::CogSogRapidUpdate(cog_sog) => {

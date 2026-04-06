@@ -127,24 +127,6 @@
             padding: 40px;
             color: var(--text-secondary);
         }
-
-        .connection-status {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 13px;
-        }
-
-        .status-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: #e74c3c;
-        }
-
-        .status-dot.connected {
-            background: #27ae60;
-        }
     </style>
 </head>
 <body>
@@ -198,7 +180,7 @@
         let filteredTargets = [];
 
         // Initialize header and theme
-        document.getElementById('headerContainer').innerHTML = createHeaderBar('ais');
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('ais', true);
         initializeTheme();
 
         // Haversine formula to calculate distance between two points
@@ -356,20 +338,6 @@
             } catch (e) {
                 console.error('Failed to connect:', e);
                 updateConnectionStatus(false);
-            }
-        }
-
-        function updateConnectionStatus(connected) {
-            const status = document.getElementById('connectionStatus');
-            const dot = status.querySelector('.status-dot');
-            const text = status.querySelector('span');
-            
-            if (connected) {
-                dot.classList.add('connected');
-                text.textContent = 'Connected';
-            } else {
-                dot.classList.remove('connected');
-                text.textContent = 'Disconnected';
             }
         }
 

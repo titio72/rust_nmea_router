@@ -10,6 +10,7 @@ use super::pgn128267::WaterDepth;
 use super::pgn129025::PositionRapidUpdate;
 use super::pgn129026::CogSogRapidUpdate;
 use super::pgn129029::GnssPositionData;
+use super::pgn129539::GnssDops;
 use super::pgn129038::AisClassAPositionReport;
 use super::pgn129039::AisClassBPositionReport;
 use super::pgn129040::AisClassBExtPositionReport;
@@ -43,6 +44,7 @@ pub enum N2kMessage {
     PositionRapidUpdate(PositionRapidUpdate),
     CogSogRapidUpdate(CogSogRapidUpdate),
     GnssPositionData(GnssPositionData),
+    GnssDops(GnssDops),
     WindData(WindData),
     Temperature(Temperature),
     Humidity(Humidity),
@@ -90,6 +92,9 @@ impl N2kMessage {
                 .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
             129029 => GnssPositionData::from_bytes(data)
                 .map(N2kMessage::GnssPositionData)
+                .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
+            129539 => GnssDops::from_bytes(data)
+                .map(N2kMessage::GnssDops)
                 .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
             129038 => AisClassAPositionReport::from_bytes(data)
                 .map(N2kMessage::AisClassAPositionReport)
@@ -145,6 +150,7 @@ impl fmt::Display for N2kMessage {
             N2kMessage::PositionRapidUpdate(msg) => write!(f, "{}", msg),
             N2kMessage::CogSogRapidUpdate(msg) => write!(f, "{}", msg),
             N2kMessage::GnssPositionData(msg) => write!(f, "{}", msg),
+            N2kMessage::GnssDops(msg) => write!(f, "{}", msg),
             N2kMessage::WindData(msg) => write!(f, "{}", msg),
             N2kMessage::Temperature(msg) => write!(f, "{}", msg),
             N2kMessage::Humidity(msg) => write!(f, "{}", msg),

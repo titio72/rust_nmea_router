@@ -122,6 +122,7 @@ h2 {
 }
 
 .theme-toggle {
+    height: 32px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
     border-radius: 6px;
@@ -174,6 +175,22 @@ h2 {
 .app-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+.status-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background-color: #999;
+    transition: background-color 0.3s ease;
+}
+
+.status-dot.connected {
+    background-color: #27ae60;
+}
+
+.status-dot.disconnected {
+    background-color: #e74c3c;
 }
 
 .sailing-percentage {

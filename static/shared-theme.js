@@ -81,7 +81,7 @@ function baseToggleTheme() {
  * @param {string} currentPage - The current page identifier ('trips', 'monitor', 'stats', 'signalk-browser')
  * @param {boolean} includeRealtimeStatus - Optional: include real-time connection status indicator (for monitor page)
  */
-function createHeaderBar(currentPage) {
+function createHeaderBar(currentPage, showConnectionStatus = false) {
     const navItems = [
         { href: '/', label: 'Trips', page: 'trips' },
         { href: '/realtime.html', label: 'Monitor', page: 'monitor' },
@@ -110,20 +110,45 @@ function createHeaderBar(currentPage) {
             </div>`;
 
 
-    headerHTML += `
-        <div style="display: flex; align-items: center; gap: 8px; margin-left: auto;">
-            <button class="theme-toggle" id="themeBtn" onclick="baseToggleTheme()">
+    headerHTML += 
+        `<div style="display: flex; align-items: center; gap: 8px; margin-left: auto;">`;
+
+    headerHTML += 
+            `<button class="theme-toggle" id="themeBtn" onclick="baseToggleTheme()">
                 <span id="theme-icon">${ICON_MAP['sun']}</span><span id="theme-text">Dark</span>
-            </button>
-            <button class="theme-toggle shutdown-btn" id="shutdownBtn" onclick="confirmShutdown()" title="Shutdown system">
+            </button>`;
+
+    if (showConnectionStatus) {
+        headerHTML += 
+            `<button class="theme-toggle" title="Real-time connection status">
+                <span class="status-dot disconnected" id="connectionStatus"></span>
+            </button>`;
+    }
+
+    headerHTML += 
+            `<button class="theme-toggle shutdown-btn" id="shutdownBtn" onclick="confirmShutdown()" title="Shutdown system">
                 ${ICON_MAP['power']}
-            </button>
-        </div>`;
+            </button>`;
+
+    headerHTML += 
+        `</div>`;
 
     headerHTML += `
         </div>`;
 
     return headerHTML;
+}
+
+function updateConnectionStatus(connected) {
+    const statusDot = document.getElementById('connectionStatus');
+
+    if (connected) {
+        statusDot.classList.add('connected');
+        statusDot.classList.remove('disconnected');
+    } else {
+        statusDot.classList.remove('connected');
+        statusDot.classList.add('disconnected');
+    }
 }
 
 // ----------------------- General purpose functions ----------------------

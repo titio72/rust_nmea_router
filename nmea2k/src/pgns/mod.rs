@@ -8,6 +8,7 @@ pub mod pgn128267;
 pub mod pgn129025;
 pub mod pgn129026;
 pub mod pgn129029;
+pub mod pgn129539;
 pub mod pgn129038;
 pub mod pgn129039;
 pub mod pgn129040;
@@ -38,6 +39,7 @@ pub use pgn130313::Humidity;
 pub use pgn130314::ActualPressure;
 pub use pgn127250::{VesselHeading, HeadingReference};
 pub use pgn129029::GnssMethod;
+pub use pgn129539::{GnssDops, GnssMode};
 
 // AIS types
 pub use pgn129038::{AisClassAPositionReport, AisNavStatus};
