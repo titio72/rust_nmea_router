@@ -23,7 +23,9 @@ pub struct AisClassBStaticDataPartB {
 
 impl AisClassBStaticDataPartB {
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
-        if data.len() < 35 {
+        // mothership_mmsi occupies bits 224-255 → bytes 28-31; 32 bytes is the minimum.
+        // sequence_id at bit 272 (byte 34) is read as 0 when absent - that's fine.
+        if data.len() < 32 {
             return None;
         }
 

@@ -94,7 +94,9 @@ impl fmt::Display for AisNavStatus {
 
 impl AisClassAPositionReport {
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
-        if data.len() < 28 {
+        // Last field (special_maneuver_indicator) sits at bits 204-205 → byte 25.
+        // 26 bytes are the minimum needed to read all fields.
+        if data.len() < 26 {
             return None;
         }
 
@@ -114,7 +116,6 @@ impl AisClassAPositionReport {
         let rate_of_turn_raw = read_signed_bits(data, 184, 16) as i16;
         let nav_status_bits = read_bits(data, 200, 4) as u8;
         let special_maneuver_indicator = read_bits(data, 204, 2) as u8;
-
         Some(Self {
             pgn: 129038,
             message_id,

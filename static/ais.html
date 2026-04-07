@@ -17,21 +17,28 @@
 
         .search-box {
             flex: 1;
-            max-width: 300px;
+            max-width: 500px;
+            padding: 8px 12px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
         }
 
         .search-box input {
             width: 100%;
-            padding: 10px;
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
             background: var(--bg-secondary);
             color: var(--text-primary);
             font-size: 14px;
+            border: none;
         }
 
         .search-box input::placeholder {
             color: var(--text-secondary);
+        }
+
+        .search-box input:active, .search-box input:focus {
+            outline: none;
         }
 
         .target-count {
@@ -40,6 +47,10 @@
             padding: 8px 16px;
             background: var(--bg-tertiary);
             border-radius: 4px;
+        }
+
+        .controls .tracking-toggle-container + .target-count {
+            margin-left: auto;
         }
 
         table {
@@ -137,12 +148,25 @@
             <div class="search-box">
                 <input type="text" id="searchInput" placeholder="Search by MMSI, name, or callsign...">
             </div>
+
+            <select id="distanceFilter" class="styled-select">
+                <option value="">All distances</option>
+                <option value="1">≤ 1 nm</option>
+                <option value="5">≤ 5 nm</option>
+                <option value="10">≤ 10 nm</option>
+                <option value="25">≤ 25 nm</option>
+                <option value="50">≤ 50 nm</option>
+            </select>
+            <div class="tracking-toggle-container" onclick="toggleAton()">
+                <span>Show AtoN</span>
+                <div class="toggle-switch active" id="atonToggle"></div>
+            </div>
             <div class="target-count">
-                <span id="targetCount">0</span> targets
+                <app-icon name="crosshair"></app-icon> <span id="targetCount">0</span>
             </div>
-            <div class="target-count" id="positionStatus" style="background: var(--border-color); color: var(--text-secondary);">
-                📍 No vessel position
-            </div>
+            <div class="target-count">
+                <app-icon name="geo"></app-icon> <span id="vesselPosition">No vessel position</span>
+            </div>        
         </div>
 
         <div id="tableContainer">
@@ -178,6 +202,8 @@
         let sortBy = 'distance';  // Default sort by distance
         let sortAsc = true;
         let filteredTargets = [];
+        let maxDistanceFilter = '';
+        let showAton = true;
 
         // Initialize header and theme
         document.getElementById('headerContainer').innerHTML = createHeaderBar('ais', true);
@@ -348,20 +374,24 @@
 
         function renderTable() {
             // Update position status
-            const posStatus = document.getElementById('positionStatus');
+            const posStatus = document.getElementById('vesselPosition');
             if (vesselLat !== null && vesselLon !== null) {
-                posStatus.textContent = `📍 Position: ${vesselLat.toFixed(4)}°, ${vesselLon.toFixed(4)}°`;
-                posStatus.style.background = 'rgba(100, 200, 100, 0.2)';
+                posStatus.innerHTML = `${vesselLat.toFixed(4)}°, ${vesselLon.toFixed(4)}°`;
             } else {
-                posStatus.textContent = '📍 No vessel position';
-                posStatus.style.background = 'var(--border-color)';
+                posStatus.innerHTML = `No vessel position`;
             }
             
             // Filter targets
             const searchTerm = document.getElementById('searchInput').value.toLowerCase();
             filteredTargets = Array.from(targets.values()).filter(t => {
                 const searchStr = `${t.mmsi} ${t.name} ${t.callsign}`.toLowerCase();
-                return searchStr.includes(searchTerm);
+                if (!searchStr.includes(searchTerm)) return false;
+                if (!showAton && t.aisClass.toLowerCase() === 'aton') return false;
+                if (maxDistanceFilter !== '') {
+                    const dist = t.getDistance();
+                    if (dist !== null && dist > parseFloat(maxDistanceFilter)) return false;
+                }
+                return true;
             });
 
             // Sort
@@ -426,6 +456,17 @@
 
         // Event listeners
         document.getElementById('searchInput').addEventListener('input', renderTable);
+
+        document.getElementById('distanceFilter').addEventListener('change', (e) => {
+            maxDistanceFilter = e.target.value;
+            renderTable();
+        });
+
+        function toggleAton() {
+            showAton = !showAton;
+            document.getElementById('atonToggle').classList.toggle('active', showAton);
+            renderTable();
+        }
 
         document.querySelectorAll('th[data-sort]').forEach(th => {
             th.addEventListener('click', () => {

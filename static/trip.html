@@ -834,11 +834,11 @@
             document.getElementById('startTimeValue').textContent = formatTime(trip.start_date);
             document.getElementById('endDateValue').textContent = formatDate(trip.end_date);
             document.getElementById('endTimeValue').textContent = formatTime(trip.end_date);
-            document.getElementById('durationValue').textContent = formatDuration(trip.start_date, trip.end_date);
+            document.getElementById('durationValue').textContent = formatDurationLong(trip.start_date, trip.end_date);
             document.getElementById('navigationTimeValue').textContent = formatDuration(totalTime);
-            document.getElementById('sailingTimeValue').textContent = formatDuration(sailingTime) + '%)';
+            document.getElementById('sailingTimeValue').textContent = formatDuration(sailingTime);
             document.getElementById('sailingTimePercentageValue').textContent = sailingTimePercent.toFixed(1) + '%';
-            document.getElementById('motoringTimeValue').textContent = formatDuration(motoringTime) + '%)';
+            document.getElementById('motoringTimeValue').textContent = formatDuration(motoringTime);
             document.getElementById('motoringTimePercentageValue').textContent = (100 - sailingTimePercent).toFixed(1) + '%';
             document.getElementById('totalDistanceValue').textContent = totalDistance.toFixed(1) + ' NM';
             document.getElementById('sailingDistanceValue').textContent = sailingDistance.toFixed(1) + ' NM';

@@ -16,7 +16,9 @@ pub struct AisClassBStaticDataPartA {
 
 impl AisClassBStaticDataPartA {
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
-        if data.len() < 27 {
+        // Name occupies bytes 5–24 (20 chars); 25 bytes is the minimum.
+        // sequence_id at bit 208 (byte 26) is read as 0 if not present — that's fine.
+        if data.len() < 25 {
             return None;
         }
 

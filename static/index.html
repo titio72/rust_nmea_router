@@ -11,54 +11,6 @@
     <script src="/components/voyage-bar-component.js"></script> 
     <script src="/components/trip-card-component.js"></script>
     <style>
-        .tracking-toggle-container {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            padding: 8px 16px;
-            cursor: pointer;
-            font-size: 14px;
-            color: var(--text-primary);
-            transition: all 0.3s ease;
-        }
-
-        .tracking-toggle-container:hover {
-            opacity: 0.8;
-        }
-
-        .toggle-switch {
-            display: inline-block;
-            width: 30px;
-            height: 18px;
-            background-color: #999;
-            border-radius: 9px;
-            position: relative;
-            transition: background-color 0.3s ease;
-        }
-
-        .toggle-switch.active {
-            background-color: var(--sailing-color);
-        }
-
-        .toggle-switch::after {
-            content: '';
-            position: absolute;
-            width: 14px;
-            height: 14px;
-            background-color: white;
-            border-radius: 50%;
-            top: 2px;
-            left: 2px;
-            transition: left 0.3s ease;
-        }
-
-        .toggle-switch.active::after {
-            left: 14px;
-        }
-
         .container {
             max-width: 100%;
             margin: 0;
@@ -208,21 +160,6 @@
         .trips-filter label {
             color: var(--text-primary);
             font-weight: 500;
-        }
-
-        .trips-filter select {
-            padding: 8px 12px;
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            background-color: var(--bg-secondary);
-            color: var(--text-primary);
-            font-size: 14px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-
-        .trips-filter select:hover {
-            border-color: var(--sailing-color);
         }
 
         input[type="date"] {
@@ -512,7 +449,7 @@
             </div>
             <div class="trips-filter">
                 <label for="yearFilter">Filter:</label>
-                <select id="yearFilter" onchange="onFilterChange()">
+                <select id="yearFilter" class="styled-select" onchange="onFilterChange()">
                     <option value="12months">Last 12 Months</option>
                 </select>
             </div>

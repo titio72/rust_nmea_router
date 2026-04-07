@@ -31,7 +31,9 @@ pub struct AisClassBPositionReport {
 
 impl AisClassBPositionReport {
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
-        if data.len() < 27 {
+        // Last field (assigned) sits at bit 199 → byte 24.
+        // 25 bytes are the minimum needed to read all fields.
+        if data.len() < 25 {
             return None;
         }
 
