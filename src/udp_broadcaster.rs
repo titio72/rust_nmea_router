@@ -5,8 +5,10 @@ use std::time::Instant;
 use tracing::{debug, warn, error};
 use nmea2k::pgns::N2kMessage;
 use nmea2k::pgns::{HeadingReference, WindReference, GnssMethod};
+use nmea2k::pgns::{AisClassAPositionReport, AisClassBPositionReport,
+    AisClassAStaticData, AisClassBStaticDataPartA, AisClassBStaticDataPartB};
 use nmea2k::{MessageHandler, N2kFrame};
-use chrono::Datelike;
+use chrono::{Datelike, TimeZone, Timelike, Utc};
 
 /// Aggregated state used to build RMC and GGA sentences
 #[derive(Debug, Clone, Default)]
@@ -408,6 +410,255 @@ fn format_xdr_pressure(instance: u8, pressure_pa: f64) -> Option<String> {
     Some(format!("${}\r\n", sentence_body))
 }
 
+// ============================================================================
+// AIS VDM Encoding Helpers
+// ============================================================================
+
+/// Bit-writer for packing AIS binary payloads
+struct BitWriter {
+    bits: Vec<u8>,
+}
+
+impl BitWriter {
+    fn new() -> Self {
+        Self { bits: Vec::new() }
+    }
+
+    /// Write `num_bits` MSB-first from `value`
+    fn write_u(&mut self, value: u64, num_bits: u8) {
+        for i in (0..num_bits).rev() {
+            self.bits.push(((value >> i) & 1) as u8);
+        }
+    }
+
+    /// Write `num_bits` MSB-first from a signed value (two's complement)
+    fn write_i(&mut self, value: i64, num_bits: u8) {
+        for i in (0..num_bits).rev() {
+            self.bits.push(((value >> i) & 1) as u8);
+        }
+    }
+
+    /// Write an AIS 6-bit text field of exactly `num_chars` characters.
+    /// Names/callsigns are AIS uppercase ASCII: '@'-'_' → 0-31, ' '-'?' → 32-63.
+    fn write_text(&mut self, text: &str, num_chars: usize) {
+        let bytes: Vec<u8> = text.bytes().collect();
+        for i in 0..num_chars {
+            let b = if i < bytes.len() { bytes[i] } else { b'@' };
+            let v: u8 = if b >= 0x40 { b - 0x40 } else { b } & 0x3F;
+            self.write_u(v as u64, 6);
+        }
+    }
+
+    /// Encode accumulated bits as an AIS armoured payload string.
+    /// Returns `(payload, fill_bits)` where `fill_bits` pads to a 6-bit boundary.
+    fn to_payload(&self) -> (String, u8) {
+        let total = self.bits.len();
+        let padded = (total + 5) / 6 * 6;
+        let fill = (padded - total) as u8;
+        let mut payload = String::new();
+        let mut i = 0usize;
+        while i < padded {
+            let mut v = 0u8;
+            for _ in 0..6 {
+                v = (v << 1) | if i < total { self.bits[i] } else { 0 };
+                i += 1;
+            }
+            // AIS armoring: 0-39 → ASCII 48-87, 40-63 → ASCII 96-119
+            payload.push(if v < 40 { (v + 48) as char } else { (v + 56) as char });
+        }
+        (payload, fill)
+    }
+}
+
+/// Wrap an AIS payload in a !AIVDM sentence with NMEA checksum
+fn wrap_ais_vdm(payload: &str, fill_bits: u8) -> String {
+    let body = format!("AIVDM,1,1,,A,{},{}", payload, fill_bits);
+    let checksum = nmea0183_checksum(&body);
+    format!("!{}*{}\r\n", body, checksum)
+}
+
+/// Convert N2K COG raw (0.0001 rad units) to AIS COG (1/10 degree, 0-3599; 3600=not available)
+fn n2k_cog_to_ais(cog_raw: u16) -> u16 {
+    if cog_raw == 0xFFFF {
+        return 3600;
+    }
+    let deg_tenths = cog_raw as f64 * 0.0001 * (180.0 / std::f64::consts::PI) * 10.0;
+    (deg_tenths.round() as u16).min(3599)
+}
+
+/// Convert N2K SOG raw (0.01 m/s units) to AIS SOG (1/10 knot; 1023=not available)
+fn n2k_sog_to_ais(sog_raw: u16) -> u16 {
+    if sog_raw == 0xFFFF {
+        return 1023;
+    }
+    (sog_raw as f64 * 0.194384).round() as u16
+}
+
+/// Convert N2K heading raw (0.0001 rad units) to AIS heading (integer degrees 0-359; 511=not available)
+fn n2k_heading_to_ais(heading_raw: u16) -> u16 {
+    if heading_raw == 0xFFFF {
+        return 511;
+    }
+    ((heading_raw as f64 * 0.0001 * (180.0 / std::f64::consts::PI)).round() as u16) % 360
+}
+
+/// Convert N2K ROT raw (3.125e-5 rad/s, signed 16-bit) to AIS ROT (signed 8-bit, 4.733×sqrt units)
+fn n2k_rot_to_ais(rot_raw: i16) -> i8 {
+    if rot_raw == i16::MAX || rot_raw == i16::MIN {
+        return -128i8; // not available
+    }
+    let rot_deg_min = rot_raw as f64 * 3.125e-5 * (180.0 / std::f64::consts::PI) * 60.0;
+    if rot_deg_min.abs() < 0.0001 {
+        return 0;
+    }
+    let ais = 4.733 * rot_deg_min.abs().sqrt() * rot_deg_min.signum();
+    ais.clamp(-127.0, 127.0) as i8
+}
+
+/// Encode N2K position (1e-7 degrees) to AIS position integer (1/10000 min, 28-bit for lon, 27-bit for lat)
+fn n2k_lon_to_ais(lon_raw: i32) -> i32 {
+    (lon_raw as f64 * 1e-7 * 600_000.0).round() as i32
+}
+
+fn n2k_lat_to_ais(lat_raw: i32) -> i32 {
+    (lat_raw as f64 * 1e-7 * 600_000.0).round() as i32
+}
+
+/// Format !AIVDM sentence for AIS Type 1 (Class A position report)
+fn format_vdm_class_a_position(msg: &AisClassAPositionReport) -> String {
+    let mut bw = BitWriter::new();
+    bw.write_u(msg.message_id as u64, 6);
+    bw.write_u(msg.repeat_indicator as u64, 2);
+    bw.write_u(msg.mmsi as u64, 30);
+    bw.write_u(msg.nav_status as u8 as u64, 4);
+    bw.write_i(n2k_rot_to_ais(msg.rate_of_turn_raw) as i64, 8);
+    bw.write_u(n2k_sog_to_ais(msg.sog_raw) as u64, 10);
+    bw.write_u(msg.position_accuracy as u64, 1);
+    bw.write_i(n2k_lon_to_ais(msg.longitude_raw) as i64, 28);
+    bw.write_i(n2k_lat_to_ais(msg.latitude_raw) as i64, 27);
+    bw.write_u(n2k_cog_to_ais(msg.cog_raw) as u64, 12);
+    bw.write_u(n2k_heading_to_ais(msg.heading_raw) as u64, 9);
+    bw.write_u(msg.time_stamp as u64, 6);
+    bw.write_u(msg.special_maneuver_indicator as u64, 2);
+    bw.write_u(0, 3); // spare
+    bw.write_u(msg.raim as u64, 1);
+    bw.write_u(msg.communication_state as u64, 19);
+    let (payload, fill) = bw.to_payload();
+    wrap_ais_vdm(&payload, fill)
+}
+
+/// Format !AIVDM sentence for AIS Type 18 (Class B position report)
+fn format_vdm_class_b_position(msg: &AisClassBPositionReport) -> String {
+    let mut bw = BitWriter::new();
+    bw.write_u(msg.message_id as u64, 6);
+    bw.write_u(msg.repeat_indicator as u64, 2);
+    bw.write_u(msg.mmsi as u64, 30);
+    bw.write_u(0, 8); // reserved
+    bw.write_u(n2k_sog_to_ais(msg.sog_raw) as u64, 10);
+    bw.write_u(msg.position_accuracy as u64, 1);
+    bw.write_i(n2k_lon_to_ais(msg.longitude_raw) as i64, 28);
+    bw.write_i(n2k_lat_to_ais(msg.latitude_raw) as i64, 27);
+    bw.write_u(n2k_cog_to_ais(msg.cog_raw) as u64, 12);
+    bw.write_u(n2k_heading_to_ais(msg.heading_raw) as u64, 9);
+    bw.write_u(msg.time_stamp as u64, 6);
+    bw.write_u(msg.regional_application as u64, 2);
+    bw.write_u(msg.unit_type as u64, 1);
+    bw.write_u(msg.integrated_display as u64, 1);
+    bw.write_u(msg.dsc as u64, 1);
+    bw.write_u(msg.band as u64, 1);
+    bw.write_u(msg.can_handle_msg22 as u64, 1);
+    bw.write_u(msg.assigned as u64, 1);
+    bw.write_u(msg.raim as u64, 1);
+    bw.write_u(msg.communication_state as u64 & 0xFFFFF, 20);
+    let (payload, fill) = bw.to_payload();
+    wrap_ais_vdm(&payload, fill)
+}
+
+/// Format !AIVDM sentence for AIS Type 5 (Class A static & voyage data)
+fn format_vdm_class_a_static(msg: &AisClassAStaticData) -> String {
+    // Derive ETA fields from eta_date_time when available
+    let (eta_month, eta_day, eta_hour, eta_minute) = if let Some(ref dt) = msg.eta_date_time {
+        let utc = Utc.timestamp_opt(
+            (dt.date as i64) * 86400 + dt.time as i64, 0
+        ).single();
+        if let Some(t) = utc {
+            (t.month() as u8, t.day() as u8, t.hour() as u8, t.minute() as u8)
+        } else {
+            (0u8, 0u8, 24u8, 60u8) // not available
+        }
+    } else {
+        (0u8, 0u8, 24u8, 60u8) // not available
+    };
+
+    let to_bow = ((msg.position_ref_bow as f64 * 0.1).round() as u16).min(511);
+    let to_stern = ((msg.length_raw as f64 * 0.1 - to_bow as f64).max(0.0).round() as u16).min(511);
+    let to_starboard = ((msg.position_ref_starboard as f64 * 0.1).round() as u16).min(63);
+    let to_port = ((msg.beam_raw as f64 * 0.1 - to_starboard as f64).max(0.0).round() as u16).min(63);
+    let draught_ais = ((msg.get_draft_meters() * 10.0).round() as u8).min(255);
+
+    let mut bw = BitWriter::new();
+    bw.write_u(msg.message_id as u64, 6);
+    bw.write_u(msg.repeat_indicator as u64, 2);
+    bw.write_u(msg.mmsi as u64, 30);
+    bw.write_u(msg.ais_version as u64, 2);
+    bw.write_u(msg.imo_number as u64, 30);
+    bw.write_text(&msg.callsign, 7);
+    bw.write_text(&msg.name, 20);
+    bw.write_u(msg.type_of_ship as u64, 8);
+    bw.write_u(to_bow as u64, 9);
+    bw.write_u(to_stern as u64, 9);
+    bw.write_u(to_port as u64, 6);
+    bw.write_u(to_starboard as u64, 6);
+    bw.write_u(msg.gnss_type as u64, 4);
+    bw.write_u(eta_month as u64, 4);
+    bw.write_u(eta_day as u64, 5);
+    bw.write_u(eta_hour as u64, 5);
+    bw.write_u(eta_minute as u64, 6);
+    bw.write_u(draught_ais as u64, 8);
+    bw.write_text(&msg.destination, 20);
+    bw.write_u(!msg.dte as u64, 1); // AIS DTE: 0=available, 1=not available
+    bw.write_u(0, 1); // spare
+    let (payload, fill) = bw.to_payload();
+    wrap_ais_vdm(&payload, fill)
+}
+
+/// Format !AIVDM sentence for AIS Type 24 Part A (Class B static, vessel name)
+fn format_vdm_class_b_static_a(msg: &AisClassBStaticDataPartA) -> String {
+    let mut bw = BitWriter::new();
+    bw.write_u(msg.message_id as u64, 6);
+    bw.write_u(msg.repeat_indicator as u64, 2);
+    bw.write_u(msg.mmsi as u64, 30);
+    bw.write_u(0, 2); // part number = 0
+    bw.write_text(&msg.name, 20);
+    bw.write_u(0, 8); // spare
+    let (payload, fill) = bw.to_payload();
+    wrap_ais_vdm(&payload, fill)
+}
+
+/// Format !AIVDM sentence for AIS Type 24 Part B (Class B static, vessel details)
+fn format_vdm_class_b_static_b(msg: &AisClassBStaticDataPartB) -> String {
+    let to_bow = ((msg.position_ref_bow as f64 * 0.1).round() as u16).min(511);
+    let to_stern = ((msg.length_raw as f64 * 0.1 - to_bow as f64).max(0.0).round() as u16).min(511);
+    let to_starboard = ((msg.position_ref_starboard as f64 * 0.1).round() as u16).min(63);
+    let to_port = ((msg.beam_raw as f64 * 0.1 - to_starboard as f64).max(0.0).round() as u16).min(63);
+
+    let mut bw = BitWriter::new();
+    bw.write_u(msg.message_id as u64, 6);
+    bw.write_u(msg.repeat_indicator as u64, 2);
+    bw.write_u(msg.mmsi as u64, 30);
+    bw.write_u(1, 2); // part number = 1
+    bw.write_u(msg.type_of_ship as u64, 8);
+    bw.write_text(&msg.vendor_id, 7);
+    bw.write_text(&msg.callsign, 7);
+    bw.write_u(to_bow as u64, 9);
+    bw.write_u(to_stern as u64, 9);
+    bw.write_u(to_port as u64, 6);
+    bw.write_u(to_starboard as u64, 6);
+    bw.write_u(0, 6); // spare
+    let (payload, fill) = bw.to_payload();
+    wrap_ais_vdm(&payload, fill)
+}
+
 impl MessageHandler for UdpBroadcaster {
     fn handle_message(&mut self, frame: &N2kFrame, _timestamp: std::time::Instant) {
         match &frame.message {
@@ -544,6 +795,41 @@ impl MessageHandler for UdpBroadcaster {
                 if let Some(xdr) = format_xdr_pressure(msg.instance, msg.pressure) {
                     self.maybe_send(&topic, &xdr);
                 }
+            }
+
+            // AIS Class A Position Report (PGN 129038) - Type 1/2/3
+            N2kMessage::AisClassAPositionReport(msg) => {
+                let topic = format!("ais_a_pos_{}", msg.mmsi);
+                let sentence = format_vdm_class_a_position(msg);
+                self.maybe_send(&topic, &sentence);
+            }
+
+            // AIS Class B Position Report (PGN 129039) - Type 18
+            N2kMessage::AisClassBPositionReport(msg) => {
+                let topic = format!("ais_b_pos_{}", msg.mmsi);
+                let sentence = format_vdm_class_b_position(msg);
+                self.maybe_send(&topic, &sentence);
+            }
+
+            // AIS Class A Static & Voyage Data (PGN 129794) - Type 5
+            N2kMessage::AisClassAStaticData(msg) => {
+                let topic = format!("ais_a_static_{}", msg.mmsi);
+                let sentence = format_vdm_class_a_static(msg);
+                self.maybe_send(&topic, &sentence);
+            }
+
+            // AIS Class B Static Data Part A (PGN 129809) - Type 24A
+            N2kMessage::AisClassBStaticDataPartA(msg) => {
+                let topic = format!("ais_b_static_a_{}", msg.mmsi);
+                let sentence = format_vdm_class_b_static_a(msg);
+                self.maybe_send(&topic, &sentence);
+            }
+
+            // AIS Class B Static Data Part B (PGN 129810) - Type 24B
+            N2kMessage::AisClassBStaticDataPartB(msg) => {
+                let topic = format!("ais_b_static_b_{}", msg.mmsi);
+                let sentence = format_vdm_class_b_static_b(msg);
+                self.maybe_send(&topic, &sentence);
             }
 
             // Ignore all other message types
@@ -774,6 +1060,137 @@ mod tests {
         assert_eq!(broadcaster.message_count, 0);
         assert_eq!(broadcaster.error_count, 0);
         assert!(broadcaster.rmc_state.latitude.is_none());
+    }
+
+    // ---- AIS encoding helpers ----
+
+    #[test]
+    fn test_bit_writer_payload_length() {
+        // Type 1 / 18 are 168 bits = 28 payload chars with 0 fill bits
+        let mut bw = BitWriter::new();
+        for _ in 0..168 {
+            bw.write_u(0, 1);
+        }
+        let (payload, fill) = bw.to_payload();
+        assert_eq!(payload.len(), 28);
+        assert_eq!(fill, 0);
+    }
+
+    #[test]
+    fn test_bit_writer_text_encoding() {
+        // 'A' = ASCII 65, AIS 6-bit = 65-64 = 1
+        // '@' = ASCII 64, AIS 6-bit = 0
+        let mut bw = BitWriter::new();
+        bw.write_text("A@", 2);
+        let (payload, _) = bw.to_payload();
+        // First char: bits 000001 = 1 → ASCII 49 = '1'
+        // Second char: bits 000000 = 0 → ASCII 48 = '0'
+        assert_eq!(&payload, "10");
+    }
+
+    #[test]
+    fn test_n2k_sog_to_ais_zero() {
+        assert_eq!(n2k_sog_to_ais(0), 0);
+    }
+
+    #[test]
+    fn test_n2k_sog_to_ais_not_available() {
+        assert_eq!(n2k_sog_to_ais(0xFFFF), 1023);
+    }
+
+    #[test]
+    fn test_n2k_cog_to_ais_not_available() {
+        assert_eq!(n2k_cog_to_ais(0xFFFF), 3600);
+    }
+
+    #[test]
+    fn test_n2k_heading_to_ais_not_available() {
+        assert_eq!(n2k_heading_to_ais(0xFFFF), 511);
+    }
+
+    #[test]
+    fn test_n2k_lon_to_ais_zero() {
+        assert_eq!(n2k_lon_to_ais(0), 0);
+    }
+
+    #[test]
+    fn test_n2k_lon_to_ais_positive() {
+        // 10.0 degrees east = 10.0 * 600000 = 6000000
+        let raw = (10.0 / 1e-7) as i32; // = 100_000_000
+        let ais = n2k_lon_to_ais(raw);
+        assert!((ais - 6_000_000).abs() < 10, "expected ~6000000, got {}", ais);
+    }
+
+    #[test]
+    fn test_format_vdm_class_a_position_sentence_prefix() {
+        use nmea2k::pgns::pgn129038::AisNavStatus;
+        let msg = AisClassAPositionReport {
+            pgn: 129038,
+            message_id: 1,
+            repeat_indicator: 0,
+            mmsi: 247123456,
+            longitude_raw: (10.161950 / 1e-7) as i32,
+            latitude_raw: (43.922298 / 1e-7) as i32,
+            position_accuracy: true,
+            raim: false,
+            time_stamp: 15,
+            cog_raw: (316.8_f64.to_radians() / 0.0001) as u16,
+            sog_raw: (5.29 / 1.94384 / 0.01) as u16,
+            communication_state: 0,
+            ais_transceiver_info: 0,
+            heading_raw: (315.0_f64.to_radians() / 0.0001) as u16,
+            rate_of_turn_raw: 0,
+            nav_status: AisNavStatus::UnderWayEngine,
+            special_maneuver_indicator: 0,
+        };
+        let sentence = format_vdm_class_a_position(&msg);
+        assert!(sentence.starts_with("!AIVDM,1,1,,A,"), "unexpected prefix: {}", sentence);
+        assert!(sentence.contains("*"), "missing checksum");
+    }
+
+    #[test]
+    fn test_format_vdm_class_b_position_sentence_prefix() {
+        let msg = AisClassBPositionReport {
+            pgn: 129039,
+            message_id: 18,
+            repeat_indicator: 0,
+            mmsi: 247363720,
+            longitude_raw: (10.161950 / 1e-7) as i32,
+            latitude_raw: (43.922298 / 1e-7) as i32,
+            position_accuracy: false,
+            raim: false,
+            time_stamp: 15,
+            cog_raw: (316.8_f64.to_radians() / 0.0001) as u16,
+            sog_raw: (5.29 / 1.94384 / 0.01) as u16,
+            communication_state: 0,
+            ais_transceiver_info: 0,
+            heading_raw: 0xFFFF,
+            regional_application: 0,
+            regional_application_b: 0,
+            unit_type: 1,
+            integrated_display: false,
+            dsc: true,
+            band: true,
+            can_handle_msg22: false,
+            assigned: false,
+        };
+        let sentence = format_vdm_class_b_position(&msg);
+        assert!(sentence.starts_with("!AIVDM,1,1,,A,"), "unexpected prefix: {}", sentence);
+    }
+
+    #[test]
+    fn test_vdm_checksum_valid() {
+        // Verify the wrap_ais_vdm checksum is correct by re-computing it inline
+        let payload = "15M67N0000G?Ijk`E`FepT?vN0<";
+        let fill = 0u8;
+        let sentence = wrap_ais_vdm(payload, fill);
+        // Extract body between '!' and '*'
+        let body_start = sentence.find('!').unwrap() + 1;
+        let body_end = sentence.find('*').unwrap();
+        let body = &sentence[body_start..body_end];
+        let expected_cs = nmea0183_checksum(body);
+        let actual_cs = &sentence[body_end + 1..body_end + 3];
+        assert_eq!(actual_cs, expected_cs, "checksum mismatch");
     }
 }
 
