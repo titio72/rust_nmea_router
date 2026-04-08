@@ -12,7 +12,7 @@ self.addEventListener('install', (event) => {
         '/index.html',
         '/trip.html',
         '/shared.css',
-        '/shared-theme.js',
+        '/js/shared-theme.js',
         '/images/nmeasail.png'
       ]).catch((err) => {
         console.log('Some assets could not be cached:', err);

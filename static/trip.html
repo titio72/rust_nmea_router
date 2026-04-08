@@ -6,7 +6,7 @@
     <title>Trip Details - NMEA Router</title>
     <link rel="icon" type="image/png" href="/images/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
-    <script src="/shared-theme.js"></script>
+    <script src="/js/shared-theme.js"></script>
     <!-- Load Chart.js and date-fns in parallel, then the adapter -->
     <script>
         function loadChartJS() {
@@ -442,7 +442,7 @@
         // Register Service Worker after page load to avoid competing for bandwidth
         window.addEventListener('load', () => {
             if ('serviceWorker' in navigator) {
-                navigator.serviceWorker.register('/sw.js').catch(err => {
+                navigator.serviceWorker.register('/js/sw.js').catch(err => {
                     console.log('Service Worker registration failed (non-critical):', err);
                 });
             }

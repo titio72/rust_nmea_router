@@ -34,7 +34,7 @@ class TripCard extends HTMLElement {
 
         this.shadowRoot.innerHTML = `
             <link rel="stylesheet" href="/shared.css">
-            <script src="/shared-theme.js"></script>
+            <script src="/js/shared-theme.js"></script>
             <style>
                 :host {
                     display: block;
