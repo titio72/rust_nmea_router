@@ -19,7 +19,7 @@ The **NMEA2000 Router** is a marine vessel data collection and analysis system t
 
 ### Core Function
 
-The software continuously monitors the NMEA2000 bus (the standard marine networking protocol), processes navigation and environmental data from marine instruments (GPS, depth sounder, wind sensor, thermometer, barometer, etc.), and persists this data to a database for analysis and visualization.
+The software continuously monitors the NMEA2000 bus (the standard marine networking protocol), processes navigation and environmental data from marine instruments (GPS, depth sounder, wind sensor, thermometer, barometer, etc.), decodes AIS messages for vessel tracking, and broadcasts data in SignalK and NMEA0183 formats. Data is persisted to a database for analysis and visualization.
 
 ### Key Data Captured
 
@@ -41,6 +41,7 @@ The software continuously monitors the NMEA2000 bus (the standard marine network
 - Depth and water speed
 - System time synchronization
 - Vessel mooring status
+- AIS target tracking (nearby vessels and navigation aids)
 
 ### Primary Use Cases
 
@@ -50,22 +51,35 @@ The software continuously monitors the NMEA2000 bus (the standard marine network
 4. **Environmental Monitoring**: Track water and air conditions over time
 5. **Maintenance & Diagnostics**: Monitor system health and performance trends
 6. **Data Integration**: Export vessel data to external systems via REST API
+7. **AIS Monitoring**: Track nearby vessels and navigation aids for collision avoidance and situational awareness
 
 ## Specs
 
 ### NMEA2000
 The supported messages are:
-1. 130306 Wind speed and direction
-2. 126992 System Time
-3. 127250 Boat heading
+1. 126992 System Time
+2. 127250 Boat heading
+3. 127251 Rate of Turn
 4. 127257 Boat attitude
 5. 127488 Engine rapid update
 6. 128259 Boat speed through water
-7. 129025 Position rapid update
-8. 129026 COG and SOG Rapid update
-9. 130312 Temperature
-10. 130313 Humidity
-11. 130314 Pressure
+7. 128267 Water Depth
+8. 129025 Position rapid update
+9. 129026 COG and SOG Rapid update
+10. 129029 GNSS Position Data
+11. 129038 AIS Class A Position Report
+12. 129039 AIS Class B Position Report
+13. 129040 AIS Class B Extended Position Report
+14. 129041 AIS Aid-to-Navigation Report
+15. 129539 GNSS DOPs
+16. 129793 AIS UTC Date Report
+17. 129794 AIS Class A Static Data
+18. 129809 AIS Class B Static Data Part A
+19. 129810 AIS Class B Static Data Part B
+20. 130306 Wind speed and direction
+21. 130312 Temperature
+22. 130313 Humidity
+23. 130314 Pressure
 The application constantly monitors the status of the CAN bus, and, in case of failure, start retrying until reconnection. In case of repeated failure, each retry must be at least 5s apart.
 
 NMEA 2000 messages reference is available in pgns.json
@@ -145,19 +159,30 @@ The application automatically calculates trips and, for every Boat Status Report
 3. The total time of the trip, and the breakdown into time sailing, time motoring, and time moored
 4. The total distance sailed and motored
 
+### AIS Target Tracking
+The application decodes Automatic Identification System (AIS) messages from the NMEA2000 bus for monitoring nearby vessels and navigation aids. Supported PGNs include Class A and B position reports, extended position reports, aid-to-navigation reports, static data, and UTC date reports. AIS data is broadcast in real-time via SignalK but not persisted to the database.
+
+### SignalK Broadcasting
+The application broadcasts real-time vessel data in SignalK v1.7.0 delta format over WebSocket connections. Data includes navigation (position, speed, heading), environment (wind, temperature, pressure), and AIS targets with SI units (m/s, radians, Kelvin, Pascals). Broadcasting is rate-limited per path with configurable intervals.
+
+### UDP NMEA0183 Broadcasting
+The application converts NMEA2000 data to legacy NMEA0183 sentences and broadcasts them over UDP for compatibility with marine instruments and chart plotters. Supported sentences include RMC, GGA, MWV, HDT, HDM, ROT, XDR, RPM, VHW, DPT. Broadcasting is rate-limited to 1 message per second per sentence type.
+
+### Web Interface
+The application provides a REST API for programmatic access to trip data, vessel tracks, environmental metrics, and speed distributions. An HTML dashboard offers interactive visualization with Google Maps integration for trip tracks and real-time AIS target monitoring.
+
 ## Logging
 The logs are written on daily files in a folder configurable (default is the application folder).
 It must report all the operations (database read/write operations, open and close of ports/sockets/database).
-Every 30 seconds, it traces a report with the number of NMEA messages received (broken down by type, and whether or not they succeeded to parse), the number of records written in the database of each type, and the time sync status.
+Every 60 seconds, it traces a report with the number of NMEA messages received (broken down by type, and whether or not they succeeded to parse), the number of records written in the database of each type, and the time sync status.
 The output is expected to be in the console as well.
 
 #### Periodic stats
-Every 30 seconds, the following stats are to be reported:
+Every 60 seconds, the following stats are to be reported:
 1. Number of messages received and parsed successfully for each supported PGN (ignore not supported messages)
 2. Number of messages failed to parse for each supported PGN (ignore unsupported PGN)
 3. Number of records written for each type
 4. Time synchronization status (last skew in milliseconds, and sync status)
-4. Time synchronization (last skew, and sync status)
 
 ## Rules
 
