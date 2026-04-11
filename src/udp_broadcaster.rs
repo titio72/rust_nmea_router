@@ -33,7 +33,6 @@ struct RmcState {
 pub struct UdpBroadcaster {
     socket: Arc<Mutex<Option<UdpSocket>>>,
     destination: String,
-    bind_address: String,
     enabled: bool,
     error_count: u64,
     message_count: u64,
@@ -69,7 +68,6 @@ impl UdpBroadcaster {
         Self {
             socket: Arc::new(Mutex::new(socket)),
             destination,
-            bind_address,
             enabled,
             error_count: 0,
             message_count: 0,
@@ -392,6 +390,7 @@ fn format_dpt(depth_m: f64, offset_m: f64) -> Option<String> {
 }
 
 /// Format DBT sentence (Water Depth)
+#[allow(dead_code)]
 fn format_dbt(depth_m: f64) -> Option<String> {
     let sentence_body = format!("IIDBT,{:.1},f,{:.1},M,{:.1},F", depth_m * 3.28084, depth_m, depth_m * 0.546807);
     let checksum = nmea0183_checksum(&sentence_body);
