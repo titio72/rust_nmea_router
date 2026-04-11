@@ -851,7 +851,7 @@
             voyageBarEl.setAttribute('total-distance', totalDistance.toFixed(1));
 
             // Initialize the map
-            initializeMap(trackData);
+            initializeMap(trackData, isFullTrip);
 
             // Save track data globally for segment marker handling
             currentTrackData = trackData;
@@ -2105,7 +2105,54 @@
             });
         }
 
-        function initializeMap(trackData) {
+        function addHourlyMarkers(map, trackPoints) {
+            if (trackPoints.length === 0) return;
+
+            const firstTime = new Date(trackPoints[0].timestamp).getTime();
+            const lastTime = new Date(trackPoints[trackPoints.length - 1].timestamp).getTime();
+
+            // Find the first full-hour boundary after the start
+            const firstHour = Math.ceil(firstTime / 3600000) * 3600000;
+
+            for (let hourMs = firstHour; hourMs < lastTime; hourMs += 3600000) {
+                // Find the track point closest in time to this hour boundary
+                let closest = null;
+                let closestDelta = Infinity;
+                for (const point of trackPoints) {
+                    const delta = Math.abs(new Date(point.timestamp).getTime() - hourMs);
+                    if (delta < closestDelta) {
+                        closestDelta = delta;
+                        closest = point;
+                    }
+                }
+                if (!closest) continue;
+
+                const hourLabel = new Date(hourMs).toISOString().slice(11, 16); // HH:MM UTC
+
+                const marker = new google.maps.Marker({
+                    position: { lat: closest.latitude, lng: closest.longitude },
+                    map: map,
+                    title: hourLabel + ' UTC',
+                    icon: {
+                        path: google.maps.SymbolPath.CIRCLE,
+                        scale: 6,
+                        fillColor: '#FFFFFF',
+                        fillOpacity: 0.9,
+                        strokeColor: '#333333',
+                        strokeWeight: 1.5
+                    },
+                    label: {
+                        text: hourLabel,
+                        color: '#222222',
+                        fontSize: '10px',
+                        fontWeight: 'bold'
+                    },
+                    zIndex: 500
+                });
+            }
+        }
+
+        function initializeMap(trackData, isFullTrip) {
             // Check if Google Maps API is available
             if (!googleMapsLoaded || !window.google?.maps) {
                 console.warn('Google Maps not available, showing fallback');
@@ -2168,6 +2215,11 @@
 
             // Create colored track segments based on speed
             createColoredTrack(map, validTrackPoints, hoverInfoWindow);
+
+            // Add hourly markers when viewing a single leg
+            if (!isFullTrip) {
+                addHourlyMarkers(map, validTrackPoints);
+            }
 
             // Add markers for start and end points
             if (validTrackPoints.length > 0) {
