@@ -33,6 +33,7 @@ struct RmcState {
 pub struct UdpBroadcaster {
     socket: Arc<Mutex<Option<UdpSocket>>>,
     destination: String,
+    bind_address: String,
     enabled: bool,
     error_count: u64,
     message_count: u64,
@@ -46,12 +47,13 @@ impl UdpBroadcaster {
     /// 
     /// # Arguments
     /// * `destination` - UDP destination address (e.g., "192.168.1.255:10110")
+    /// * `bind_address` - Local interface/address to bind to (e.g., "192.168.1.10:0" or "0.0.0.0:0")
     /// * `enabled` - Whether UDP broadcasting is enabled
-    pub fn new(destination: String, enabled: bool) -> Self {
+    pub fn new(destination: String, bind_address: String, enabled: bool) -> Self {
         let socket = if enabled {
-            match Self::create_socket(&destination) {
+            match Self::create_socket(&destination, &bind_address) {
                 Ok(sock) => {
-                    debug!("UDP broadcaster initialized: {}", destination);
+                    debug!("UDP broadcaster initialized: {} -> {}", bind_address, destination);
                     Some(sock)
                 }
                 Err(e) => {
@@ -67,6 +69,7 @@ impl UdpBroadcaster {
         Self {
             socket: Arc::new(Mutex::new(socket)),
             destination,
+            bind_address,
             enabled,
             error_count: 0,
             message_count: 0,
@@ -76,8 +79,8 @@ impl UdpBroadcaster {
     }
 
     /// Create and configure a UDP socket
-    fn create_socket(destination: &str) -> Result<UdpSocket, std::io::Error> {
-        let socket = UdpSocket::bind("0.0.0.0:0")?;
+    fn create_socket(destination: &str, bind_address: &str) -> Result<UdpSocket, std::io::Error> {
+        let socket = UdpSocket::bind(bind_address)?;
         
         // Enable broadcast if destination is a broadcast address
         if destination.contains(".255") {
@@ -1075,14 +1078,14 @@ mod tests {
 
     #[test]
     fn test_create_disabled_broadcaster() {
-        let broadcaster = UdpBroadcaster::new("127.0.0.1:10110".to_string(), false);
+        let broadcaster = UdpBroadcaster::new("127.0.0.1:10110".to_string(), "0.0.0.0:0".to_string(), false);
         assert!(!broadcaster.enabled);
         assert!(broadcaster.socket.lock().unwrap().is_none());
     }
 
     #[test]
     fn test_broadcaster_initialization() {
-        let broadcaster = UdpBroadcaster::new("127.0.0.1:10110".to_string(), false);
+        let broadcaster = UdpBroadcaster::new("127.0.0.1:10110".to_string(), "0.0.0.0:0".to_string(), false);
         assert_eq!(broadcaster.message_count, 0);
         assert_eq!(broadcaster.error_count, 0);
         assert!(broadcaster.rmc_state.latitude.is_none());

@@ -195,6 +195,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Create UDP broadcaster with config
     let mut udp_broadcaster = UdpBroadcaster::new(
         config.udp.address.clone(),
+        config.udp.bind_address.clone(),
         config.udp.enabled
     );
     

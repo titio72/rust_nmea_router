@@ -63,6 +63,9 @@ pub struct UdpConfig {
     /// UDP destination address (e.g., "192.168.1.255:10110" or "224.0.0.1:10110" for multicast)
     #[serde(default = "default_udp_address")]
     pub address: String,
+    /// Local interface/address to bind the UDP socket to (e.g., "192.168.1.10:0" or "0.0.0.0:0")
+    #[serde(default = "default_udp_bind_address")]
+    pub bind_address: String,
 }
 
 fn default_udp_enabled() -> bool {
@@ -73,11 +76,16 @@ fn default_udp_address() -> String {
     "192.168.1.255:10110".to_string()
 }
 
+fn default_udp_bind_address() -> String {
+    "0.0.0.0:0".to_string()
+}
+
 impl Default for UdpConfig {
     fn default() -> Self {
         Self {
             enabled: false,
             address: "192.168.1.255:10110".to_string(),
+            bind_address: "0.0.0.0:0".to_string(),
         }
     }
 }
