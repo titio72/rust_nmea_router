@@ -156,7 +156,6 @@ impl UdpBroadcaster {
 // ============================================================================
 
 /// Calculate the NMEA0183 checksum (XOR of all bytes in the sentence body)
-#[allow(dead_code)]
 fn nmea0183_checksum(sentence: &str) -> String {
     let mut checksum = 0u8;
     for byte in sentence.as_bytes() {
@@ -180,16 +179,24 @@ fn format_n2k_time(seconds_since_midnight: f64) -> String {
     let hours = total_secs / 3600;
     let minutes = (total_secs % 3600) / 60;
     let secs = total_secs % 60;
-    let frac = (seconds_since_midnight - total_secs as f64) * 100.0;
-    format!("{:02}{:02}{:02}.{:02}", hours, minutes, secs, frac as u8)
+//    let frac = (seconds_since_midnight - total_secs as f64) * 100.0;
+//    format!("{:02}{:02}{:02}.{:02}", hours, minutes, secs, frac as u8)
+    format!("{:02}{:02}{:02}", hours, minutes, secs)
 }
 
 /// Format decimal degrees to NMEA0183 position format (DDMM.mmmm)
-fn format_position(degrees: f64) -> String {
+fn format_latitude(degrees: f64) -> String {
     let abs_deg = degrees.abs();
     let deg = abs_deg.trunc() as u32;
     let min = (abs_deg - deg as f64) * 60.0;
-    format!("{:02}{:08.4}", deg, min)
+    format!("{:02}{:07.4}", deg, min)
+}
+
+fn format_longitude(degrees: f64) -> String {
+    let abs_deg = degrees.abs();
+    let deg = abs_deg.trunc() as u32;
+    let min = (abs_deg - deg as f64) * 60.0;
+    format!("{:03}{:07.4}", deg, min)
 }
 
 /// Determine N or S for latitude, E or W for longitude
@@ -212,13 +219,13 @@ fn format_rmc(state: &RmcState) -> Option<String> {
     let time_n2k = state.n2k_time_secs?;
 
     let time_str = format_n2k_time(time_n2k);
-    let lat_str = format_position(lat);
-    let lon_str = format_position(lon);
+    let lat_str = format_latitude(lat);
+    let lon_str = format_longitude(lon);
     let date_str = format_n2k_date(date_n2k).ok()?;
 
     // $IIRMC,HHMMSS.ss,A,DDMM.mmmm,N,DDDMM.mmmm,W,SOG,COG,T,,,DDMMYY
     let sentence_body = format!(
-        "IIRMC,{},A,{},{},{},{},{},{:.0},T,,,{}",
+        "IIRMC,{},A,{},{},{},{},{},{:.0},{}",
         time_str,
         lat_str, lat_direction(lat),
         lon_str, lon_direction(lon),
@@ -226,7 +233,8 @@ fn format_rmc(state: &RmcState) -> Option<String> {
         cog,
         date_str
     );
-    Some(format!("${}\r\n", sentence_body))
+    let checksum = nmea0183_checksum(&sentence_body);
+    Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
 
 /// Format a GGA sentence (Global Positioning System Fix Data)
@@ -234,27 +242,27 @@ fn format_gga(state: &RmcState) -> Option<String> {
     let lat = state.latitude?;
     let lon = state.longitude?;
     let time_n2k = state.n2k_time_secs?;
-    let altitude = state.altitude_m?;
     let fix_quality = state.fix_quality?;
     let num_sats = state.num_svs?;
     let hdop = state.hdop?;
 
     let time_str = format_n2k_time(time_n2k);
-    let lat_str = format_position(lat);
-    let lon_str = format_position(lon);
+    let lat_str = format_latitude(lat);
+    let lon_str = format_longitude(lon);
 
     // $IIGGA,HHMMSS.ss,DDMM.mmmm,N,DDDMM.mmmm,E,fix_quality,num_sats,hdop,altitude,M,0.0,M,,*checksum
     let sentence_body = format!(
-        "IIGGA,{},{},{},{},{},{},{},{:.1},{:.1},M,,M,,",
+        "IIGGA,{},{},{},{},{},{},{},{:.1},{:.1},M,0.0,M,,",
         time_str,
         lat_str, lat_direction(lat),
         lon_str, lon_direction(lon),
         fix_quality,
         num_sats,
         hdop,
-        altitude
+        0.0
     );
-    Some(format!("${}\r\n", sentence_body))
+    let checksum = nmea0183_checksum(&sentence_body);
+    Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
 
 /// Format a ZDA sentence (Time & Date)
@@ -273,7 +281,8 @@ fn format_zda(date_n2k: u16, time_n2k: f64) -> Option<String> {
         "IIZDA,{},{:02},{:02},{:04},00,00",
         time_str, day, month, year
     );
-    Some(format!("${}\r\n", sentence_body))
+    let checksum = nmea0183_checksum(&sentence_body);
+    Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
 
 /// Format an MWV sentence (Wind Speed and Angle)
@@ -286,10 +295,11 @@ fn format_mwv(angle_rad: f64, speed_ms: f64, reference: &WindReference) -> Optio
     };
 
     let sentence_body = format!(
-        "IIMWV,{:.1},{},,{:.1},N",
+        "IIMWV,{:.1},{},{:.1},N,A",
         angle_deg, ref_str, speed_kn
     );
-    Some(format!("${}\r\n", sentence_body))
+    let checksum = nmea0183_checksum(&sentence_body);
+    Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
 
 /// Format HDT (True Heading) or HDM (Magnetic Heading) sentence
@@ -298,14 +308,16 @@ fn format_heading(heading_rad: f64, reference: &HeadingReference) -> (Option<Str
     
     let hdt = if matches!(reference, HeadingReference::True) {
         let sentence_body = format!("IIHDT,{:.1},T", heading_deg);
-        Some(format!("${}\r\n", sentence_body))
+        let checksum = nmea0183_checksum(&sentence_body);
+        Some(format!("${}*{}\r\n", sentence_body, checksum))
     } else {
         None
     };
 
     let hdm = if matches!(reference, HeadingReference::Magnetic) {
         let sentence_body = format!("IIHDM,{:.1},M", heading_deg);
-        Some(format!("${}\r\n", sentence_body))
+        let checksum = nmea0183_checksum(&sentence_body);
+        Some(format!("${}*{}\r\n", sentence_body, checksum))
     } else {
         None
     };
@@ -317,7 +329,8 @@ fn format_heading(heading_rad: f64, reference: &HeadingReference) -> (Option<Str
 fn format_rot(rate_rad_s: f64) -> Option<String> {
     let rate_deg_min = rate_rad_s.to_degrees() * 60.0;
     let sentence_body = format!("IIROT,{:.1},A", rate_deg_min);
-    Some(format!("${}\r\n", sentence_body))
+    let checksum = nmea0183_checksum(&sentence_body);
+    Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
 
 /// Format XDR sentence for attitude (yaw/pitch/roll in degrees)
@@ -345,7 +358,8 @@ fn format_xdr_attitude(yaw: Option<f64>, pitch: Option<f64>, roll: Option<f64>) 
     }
     
     let sentence_body = format!("IIXDR,{}", body_parts.join(","));
-    Some(format!("${}\r\n", sentence_body))
+    let checksum = nmea0183_checksum(&sentence_body);
+    Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
 
 /// Format RPM sentence
@@ -355,21 +369,30 @@ fn format_rpm(engine_instance: u8, rpm: Option<f64>) -> Option<String> {
         "IIRPM,E,{},{:.0},,A",
         engine_instance, rpm_val
     );
-    Some(format!("${}\r\n", sentence_body))
+    let checksum = nmea0183_checksum(&sentence_body);
+    Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
 
 /// Format VHW sentence (Water Speed and Heading)
 fn format_vhw(speed_ms: Option<f64>) -> Option<String> {
     let speed_kn = speed_ms? * 1.94384;
     let sentence_body = format!("IIVHW,,,,,{:.1},N,,,K", speed_kn);
-    Some(format!("${}\r\n", sentence_body))
+    let checksum = nmea0183_checksum(&sentence_body);
+    Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
 
 /// Format DPT sentence (Water Depth)
-fn format_dpt(depth_m: f64, offset_m: Option<f64>) -> Option<String> {
-    let offset = offset_m.unwrap_or(0.0);
-    let sentence_body = format!("IIDPT,{:.1},{:.1},", depth_m, offset);
-    Some(format!("${}\r\n", sentence_body))
+fn format_dpt(depth_m: f64, offset_m: f64) -> Option<String> {
+    let sentence_body = format!("IIDPT,{:.1},{:.1},", depth_m, offset_m);
+    let checksum = nmea0183_checksum(&sentence_body);
+    Some(format!("${}*{}\r\n", sentence_body, checksum))
+}
+
+/// Format DBT sentence (Water Depth)
+fn format_dbt(depth_m: f64) -> Option<String> {
+    let sentence_body = format!("IIDBT,{:.1},f,{:.1},M,{:.1},F", depth_m * 3.28084, depth_m, depth_m * 0.546807);
+    let checksum = nmea0183_checksum(&sentence_body);
+    Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
 
 /// Format XDR transducer sentence for temperature
@@ -388,7 +411,8 @@ fn format_xdr_temperature(instance: u8, source: u8, kelvin: f64) -> Option<Strin
         "IIXDR,C,{:.1},C,{}",
         celsius, transducer_name
     );
-    Some(format!("${}\r\n", sentence_body))
+    let checksum = nmea0183_checksum(&sentence_body);
+    Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
 
 /// Format XDR transducer sentence for humidity
@@ -397,7 +421,8 @@ fn format_xdr_humidity(instance: u8, humidity_pct: f64) -> Option<String> {
         "IIXDR,H,{:.1},P,HUMIDITY_{}",
         humidity_pct, instance
     );
-    Some(format!("${}\r\n", sentence_body))
+    let checksum = nmea0183_checksum(&sentence_body);
+    Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
 
 /// Format XDR transducer sentence for barometric pressure (Pa to bar)
@@ -407,7 +432,8 @@ fn format_xdr_pressure(instance: u8, pressure_pa: f64) -> Option<String> {
         "IIXDR,P,{:.4},B,BARO_{}",
         pressure_bar, instance
     );
-    Some(format!("${}\r\n", sentence_body))
+    let checksum = nmea0183_checksum(&sentence_body);
+    Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
 
 // ============================================================================
@@ -768,7 +794,7 @@ impl MessageHandler for UdpBroadcaster {
 
             // Water Depth - PGN 128267
             N2kMessage::WaterDepth(msg) => {
-                if let Some(dpt) = format_dpt(msg.depth, Some(msg.offset)) {
+                if let Some(dpt) = format_dpt(msg.depth, msg.offset) {
                     self.maybe_send("dpt", &dpt);
                 }
             }

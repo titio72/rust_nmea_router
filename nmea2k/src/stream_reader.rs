@@ -394,6 +394,80 @@ mod tests {
         }
     }
 
+    /// Feed the seven real CAN frames for one PGN 129029 fast-packet message into
+    /// N2kStreamReader and verify that the assembled GnssPositionData is decoded
+    /// correctly.
+    ///
+    /// Frames captured on 2026-04-10 08:30:26 UTC (source 22, destination 255,
+    /// priority 3):
+    ///   e0 2b 04 49 50 d8 33 41   <- first frame (frame_no=0, total_len=43)
+    ///   e1 12 40 2d 82 a2 c2 7a   <- frame 1
+    ///   e2 f9 05 80 28 71 18 09   <- frame 2
+    ///   e3 71 5d 01 ff ff ff ff   <- frame 3
+    ///   e4 ff ff ff 7f 10 fd 00   <- frame 4
+    ///   e5 52 00 00 00 00 00 00   <- frame 5
+    ///   e6 00 00 ff ff ff ff ff   <- frame 6
+    ///
+    /// Assembled 43-byte payload decodes to:
+    ///   lat ≈ 43.0510216°N, lon ≈ 9.8359051°E, HDOP 0.82
+    #[test]
+    fn test_fast_packet_pgn129029_seven_frames() {
+        use crate::pgns::N2kMessage;
+
+        let mut reader = N2kStreamReader::new();
+
+        // CAN ID: priority=3, PGN=129029, source=22
+        let can_id = make_can_id(3, 129029, 22);
+
+        let frames: [&[u8]; 7] = [
+            &[0xe0, 0x2b, 0x04, 0x49, 0x50, 0xd8, 0x33, 0x41],
+            &[0xe1, 0x12, 0x40, 0x2d, 0x82, 0xa2, 0xc2, 0x7a],
+            &[0xe2, 0xf9, 0x05, 0x80, 0x28, 0x71, 0x18, 0x09],
+            &[0xe3, 0x71, 0x5d, 0x01, 0xff, 0xff, 0xff, 0xff],
+            &[0xe4, 0xff, 0xff, 0xff, 0x7f, 0x10, 0xfd, 0x00],
+            &[0xe5, 0x52, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+            &[0xe6, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff],
+        ];
+
+        // Frames 0–5: message is incomplete, reader returns None
+        assert!(reader.process_frame(can_id, frames[0]).is_none(), "frame 0 should be incomplete");
+        assert!(reader.process_frame(can_id, frames[1]).is_none(), "frame 1 should be incomplete");
+        assert!(reader.process_frame(can_id, frames[2]).is_none(), "frame 2 should be incomplete");
+        assert!(reader.process_frame(can_id, frames[3]).is_none(), "frame 3 should be incomplete");
+        assert!(reader.process_frame(can_id, frames[4]).is_none(), "frame 4 should be incomplete");
+        assert!(reader.process_frame(can_id, frames[5]).is_none(), "frame 5 should be incomplete");
+
+        // Frame 7 completes the message
+        let result = reader.process_frame(can_id, frames[6]);
+        assert!(result.is_some(), "frame 6 should complete the message");
+
+        let frame = result.unwrap();
+        assert_eq!(frame.identifier.pgn(), 129029);
+        assert_eq!(frame.identifier.source(), 22);
+        assert!(frame.is_fast_packet);
+
+        match frame.message {
+            N2kMessage::GnssPositionData(ref report) => {
+                assert!(
+                    (report.latitude - 43.0510216).abs() < 0.00001,
+                    "unexpected latitude: {}",
+                    report.latitude
+                );
+                assert!(
+                    (report.longitude - 9.8359051).abs() < 0.00001,
+                    "unexpected longitude: {}",
+                    report.longitude
+                );
+                assert!(
+                    (report.hdop - 0.82).abs() < 0.01,
+                    "unexpected hdop: {}",
+                    report.hdop
+                );
+            }
+            other => panic!("expected GnssPositionData, got {:?}", other),
+        }
+    }
+
     /// Feed the four real CAN frames for one PGN 129038 fast-packet message into
     /// N2kStreamReader and verify that:
     ///   - the first three frames return None (message is still incomplete), and
