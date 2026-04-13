@@ -945,7 +945,7 @@ pub async fn post_backup(
 
     info!(output = %output_str, "Starting database backup");
 
-    let result = tokio::process::Command::new("./backup.sh")
+    let result = tokio::process::Command::new("./scripts/backup.sh")
         .arg(&user)
         .arg(&password)
         .arg(&output_str)

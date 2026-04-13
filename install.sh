@@ -61,6 +61,16 @@ else
     echo -e "${YELLOW}⚠ static directory not found, skipping UI installation${NC}"
 fi
 
+# Copy script files (e.g. backup.sh)
+echo -e "${YELLOW}Installing script files...${NC}"
+mkdir -p "$WORK_DIR/scripts"
+if [ -d "scripts" ]; then
+    cp -r scripts/* "$WORK_DIR/scripts/"
+    echo -e "${GREEN}✓ Script files copied to $WORK_DIR/scripts${NC}"
+else
+    echo -e "${YELLOW}⚠ scripts directory not found, skipping script installation${NC}"
+fi
+
 # Download JavaScript libraries
 bash "$(dirname "$0")/download_libs.sh" "$WORK_DIR/static/libs"
 
