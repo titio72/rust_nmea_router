@@ -61,11 +61,7 @@ impl Trip {
         } else {
             self.end_timestamp.duration_since(current_time)
         };
-        
-        match duration {
-            Err(_) => return false, // SystemTime error
-            Ok(d) => return d.as_secs() <= 24 * 60 * 60 // 24 hours
-        };
+        duration.map_or(false, |d| d.as_secs() <= 24 * 60 * 60)
     }
     
     /// Get total distance (sailing + motoring)

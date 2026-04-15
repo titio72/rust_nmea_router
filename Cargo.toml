@@ -32,3 +32,11 @@ futures-util = "0.3"
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
 
+[[bin]]
+name = "nmea_router"
+path = "src/main.rs"
+
+[[bin]]
+name = "gap_filler"
+path = "src/bin/gap_filler.rs"
+

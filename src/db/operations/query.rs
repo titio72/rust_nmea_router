@@ -1,7 +1,7 @@
 use crate::db::types::{
     VesselDatabase, TripSummary, TrackPoint, WebMetricData, MultiMetricData, SpeedDistributionData,
-    WindStatisticsData, TripLeg, TripLegsData, HeatmapDay, HeatmapData, 
-    FastestSegment, TrackAnalytics, MonthlyStatistic, MonthlyStatistics, 
+    WindStatisticsData, TripLeg, TripLegsData, HeatmapDay, HeatmapData,
+    FastestSegment, TrackAnalytics, MonthlyStatistic, MonthlyStatistics,
     format_duration_ms,
 };
 use std::error::Error;
@@ -9,6 +9,26 @@ use crate::utilities::haversine_distance_nm;
 use mysql::params;
 use mysql::prelude::Queryable;
 use chrono::{DateTime, NaiveDate, Utc};
+use tracing::warn;
+
+/// Get a value from a database row, logging a warning if the default is used.
+/// This provides observability for NULL/missing columns without breaking API contracts.
+fn get_or_log<T>(row: &mysql::Row, column: &str, default: T, context: &str) -> T
+where
+    T: mysql::prelude::FromValue,
+{
+    match row.get_opt::<T, _>(column) {
+        Some(Ok(v)) => v,
+        Some(Err(e)) => {
+            warn!("[{}] Column '{}' conversion error: {}, using default", context, column, e);
+            default
+        }
+        None => {
+            warn!("[{}] Column '{}' is NULL/missing, using default", context, column);
+            default
+        }
+    }
+}
 
 impl VesselDatabase {
     pub fn fetch_trip(&self, trip_id: u32) -> Result<Option<TripSummary>, Box<dyn std::error::Error>> {
@@ -28,21 +48,21 @@ impl VesselDatabase {
                 "trip_id" => trip_id,
             },
         ).map_err(|e| format!("Database query error: {}", e))?;
-        
+
         if let Some(row) = row {
             let trip = TripSummary {
-                id: row.get_opt("id").and_then(|v| v.ok()).unwrap_or(0),
+                id: get_or_log(&row, "id", 0u32, "fetch_trip"),
                 uuid: row.get_opt::<Option<String>, _>("uuid").and_then(|v| v.ok()).flatten(),
-                description: row.get_opt::<String, _>("description").and_then(|v| v.ok()).unwrap_or_default(),
-                start_date: row.get_opt::<String, _>("start_ts").and_then(|v| v.ok()).unwrap_or_default(),
-                end_date: row.get_opt::<String, _>("end_ts").and_then(|v| v.ok()).unwrap_or_default(),
-                total_distance_nm: row.get_opt::<f64, _>("total_distance").and_then(|v| v.ok()).unwrap_or(0.0),
-                total_time_ms: row.get_opt::<i64, _>("total_time").and_then(|v| v.ok()).unwrap_or(0),
-                sailing_time_ms: row.get_opt::<i64, _>("total_time_sailing").and_then(|v| v.ok()).unwrap_or(0),
-                motoring_time_ms: row.get_opt::<i64, _>("total_time_motoring").and_then(|v| v.ok()).unwrap_or(0),
-                moored_time_ms: row.get_opt::<i64, _>("total_time_moored").and_then(|v| v.ok()).unwrap_or(0),
-                sailing_distance_nm: row.get_opt::<f64, _>("total_distance_sailed").and_then(|v| v.ok()).unwrap_or(0.0),
-                motoring_distance_nm: row.get_opt::<f64, _>("total_distance_motoring").and_then(|v| v.ok()).unwrap_or(0.0),
+                description: get_or_log(&row, "description", String::new(), "fetch_trip"),
+                start_date: get_or_log(&row, "start_ts", String::new(), "fetch_trip"),
+                end_date: get_or_log(&row, "end_ts", String::new(), "fetch_trip"),
+                total_distance_nm: get_or_log(&row, "total_distance", 0.0f64, "fetch_trip"),
+                total_time_ms: get_or_log(&row, "total_time", 0i64, "fetch_trip"),
+                sailing_time_ms: get_or_log(&row, "total_time_sailing", 0i64, "fetch_trip"),
+                motoring_time_ms: get_or_log(&row, "total_time_motoring", 0i64, "fetch_trip"),
+                moored_time_ms: get_or_log(&row, "total_time_moored", 0i64, "fetch_trip"),
+                sailing_distance_nm: get_or_log(&row, "total_distance_sailed", 0.0f64, "fetch_trip"),
+                motoring_distance_nm: get_or_log(&row, "total_distance_motoring", 0.0f64, "fetch_trip"),
             };
             Ok(Some(trip))
         } else {
@@ -88,18 +108,18 @@ impl VesselDatabase {
         let trips = results
             .iter()
             .map(|row| TripSummary {
-                id: row.get_opt("id").and_then(|v| v.ok()).unwrap_or(0),
+                id: get_or_log(row, "id", 0u32, "fetch_trips"),
                 uuid: row.get_opt::<Option<String>, _>("uuid").and_then(|v| v.ok()).flatten(),
-                description: row.get_opt::<String, _>("description").and_then(|v| v.ok()).unwrap_or_default(),
-                start_date: row.get_opt::<String, _>("start_ts").and_then(|v| v.ok()).unwrap_or_default(),
-                end_date: row.get_opt::<String, _>("end_ts").and_then(|v| v.ok()).unwrap_or_default(),
-                total_distance_nm: row.get_opt::<f64, _>("total_distance").and_then(|v| v.ok()).unwrap_or(0.0),
-                total_time_ms: row.get_opt::<i64, _>("total_time").and_then(|v| v.ok()).unwrap_or(0),
-                sailing_time_ms: row.get_opt::<i64, _>("total_time_sailing").and_then(|v| v.ok()).unwrap_or(0),
-                motoring_time_ms: row.get_opt::<i64, _>("total_time_motoring").and_then(|v| v.ok()).unwrap_or(0),
-                moored_time_ms: row.get_opt::<i64, _>("total_time_moored").and_then(|v| v.ok()).unwrap_or(0),
-                sailing_distance_nm: row.get_opt::<f64, _>("total_distance_sailed").and_then(|v| v.ok()).unwrap_or(0.0),
-                motoring_distance_nm: row.get_opt::<f64, _>("total_distance_motoring").and_then(|v| v.ok()).unwrap_or(0.0),
+                description: get_or_log(row, "description", String::new(), "fetch_trips"),
+                start_date: get_or_log(row, "start_ts", String::new(), "fetch_trips"),
+                end_date: get_or_log(row, "end_ts", String::new(), "fetch_trips"),
+                total_distance_nm: get_or_log(row, "total_distance", 0.0f64, "fetch_trips"),
+                total_time_ms: get_or_log(row, "total_time", 0i64, "fetch_trips"),
+                sailing_time_ms: get_or_log(row, "total_time_sailing", 0i64, "fetch_trips"),
+                motoring_time_ms: get_or_log(row, "total_time_motoring", 0i64, "fetch_trips"),
+                moored_time_ms: get_or_log(row, "total_time_moored", 0i64, "fetch_trips"),
+                sailing_distance_nm: get_or_log(row, "total_distance_sailed", 0.0f64, "fetch_trips"),
+                motoring_distance_nm: get_or_log(row, "total_distance_motoring", 0.0f64, "fetch_trips"),
             })
             .collect();
 
@@ -126,18 +146,18 @@ impl VesselDatabase {
         
         if let Some(row) = row {
             let trip = TripSummary {
-                id: row.get_opt("id").and_then(|v| v.ok()).unwrap_or(0),
+                id: get_or_log(&row, "id", 0u32, "fetch_trip_by_uuid"),
                 uuid: row.get_opt::<Option<String>, _>("uuid").and_then(|v| v.ok()).flatten(),
-                description: row.get_opt::<String, _>("description").and_then(|v| v.ok()).unwrap_or_default(),
-                start_date: row.get_opt::<String, _>("start_ts").and_then(|v| v.ok()).unwrap_or_default(),
-                end_date: row.get_opt::<String, _>("end_ts").and_then(|v| v.ok()).unwrap_or_default(),
-                total_distance_nm: row.get_opt::<f64, _>("total_distance").and_then(|v| v.ok()).unwrap_or(0.0),
-                total_time_ms: row.get_opt::<i64, _>("total_time").and_then(|v| v.ok()).unwrap_or(0),
-                sailing_time_ms: row.get_opt::<i64, _>("total_time_sailing").and_then(|v| v.ok()).unwrap_or(0),
-                motoring_time_ms: row.get_opt::<i64, _>("total_time_motoring").and_then(|v| v.ok()).unwrap_or(0),
-                moored_time_ms: row.get_opt::<i64, _>("total_time_moored").and_then(|v| v.ok()).unwrap_or(0),
-                sailing_distance_nm: row.get_opt::<f64, _>("total_distance_sailed").and_then(|v| v.ok()).unwrap_or(0.0),
-                motoring_distance_nm: row.get_opt::<f64, _>("total_distance_motoring").and_then(|v| v.ok()).unwrap_or(0.0),
+                description: get_or_log(&row, "description", String::new(), "fetch_trip_by_uuid"),
+                start_date: get_or_log(&row, "start_ts", String::new(), "fetch_trip_by_uuid"),
+                end_date: get_or_log(&row, "end_ts", String::new(), "fetch_trip_by_uuid"),
+                total_distance_nm: get_or_log(&row, "total_distance", 0.0f64, "fetch_trip_by_uuid"),
+                total_time_ms: get_or_log(&row, "total_time", 0i64, "fetch_trip_by_uuid"),
+                sailing_time_ms: get_or_log(&row, "total_time_sailing", 0i64, "fetch_trip_by_uuid"),
+                motoring_time_ms: get_or_log(&row, "total_time_motoring", 0i64, "fetch_trip_by_uuid"),
+                moored_time_ms: get_or_log(&row, "total_time_moored", 0i64, "fetch_trip_by_uuid"),
+                sailing_distance_nm: get_or_log(&row, "total_distance_sailed", 0.0f64, "fetch_trip_by_uuid"),
+                motoring_distance_nm: get_or_log(&row, "total_distance_motoring", 0.0f64, "fetch_trip_by_uuid"),
             };
             Ok(Some(trip))
         } else {
@@ -365,18 +385,11 @@ impl VesselDatabase {
         let metrics: Vec<WebMetricData> = results
             .iter()
             .map(|row| WebMetricData {
-                timestamp: row.get_opt::<String, _>("timestamp")
-                    .and_then(|v| v.ok())
-                    .unwrap_or_default(),
-                metric_id: row.get_opt::<String, _>("metric_id")
-                    .and_then(|v| v.ok())
-                    .unwrap_or_default(),
-                avg_value: row.get_opt::<f64, _>("value_avg")
-                    .and_then(|v| v.ok()),
-                max_value: row.get_opt::<f64, _>("value_max")
-                    .and_then(|v| v.ok()),
-                min_value: row.get_opt::<f64, _>("value_min")
-                    .and_then(|v| v.ok())
+                timestamp: get_or_log(row, "timestamp", String::new(), "fetch_metrics"),
+                metric_id: get_or_log(row, "metric_id", String::new(), "fetch_metrics"),
+                avg_value: row.get_opt::<f64, _>("value_avg").and_then(|v| v.ok()),
+                max_value: row.get_opt::<f64, _>("value_max").and_then(|v| v.ok()),
+                min_value: row.get_opt::<f64, _>("value_min").and_then(|v| v.ok()),
             })
             .collect();
 
@@ -722,12 +735,12 @@ impl VesselDatabase {
         let mut leg_number = 0;
 
         for row in &results {
-            let timestamp: String = row.get("timestamp").unwrap_or_default();
-            let is_moored: bool = row.get("is_moored").unwrap_or(false);
-            let engine_on_u8: u8 = row.get("engine_on").unwrap_or(2); // 0=off, 1=on, 2=unknown
+            let timestamp: String = get_or_log(row, "timestamp", String::new(), "fetch_trip_legs");
+            let is_moored: bool = get_or_log(row, "is_moored", false, "fetch_trip_legs");
+            let engine_on_u8: u8 = get_or_log(row, "engine_on", 2u8, "fetch_trip_legs"); // 0=off, 1=on, 2=unknown
             let engine_on = engine_on_u8 == 1; // Only treat 1 (On) as true
-            let interval_distance: f64 = row.get("total_distance_nm").unwrap_or(0.0);
-            let interval_time: u64 = row.get("total_time_ms").unwrap_or(0);
+            let interval_distance: f64 = get_or_log(row, "total_distance_nm", 0.0, "fetch_trip_legs");
+            let interval_time: u64 = get_or_log(row, "total_time_ms", 0u64, "fetch_trip_legs");
 
             if is_moored {
                 // End current leg if we have one
@@ -778,9 +791,10 @@ impl VesselDatabase {
         // Handle last leg if trip ended while underway
         if in_leg && leg_total_distance >= 0.5 {
             leg_number += 1;
-            let last_timestamp = results.last()
-                .and_then(|r| r.get::<String, _>("timestamp"))
-                .unwrap_or_default();
+            let last_timestamp = match results.last() {
+                Some(r) => get_or_log(r, "timestamp", String::new(), "fetch_trip_legs"),
+                None => String::new(),
+            };
                 
             legs.push(TripLeg {
                 leg_number,
@@ -1078,7 +1092,8 @@ impl VesselDatabase {
 
     /// Get system status (tracking and metrics enabled/disabled state)
     pub fn get_system_status(&self, key: &str) -> Result<bool, Box<dyn Error>> {
-        let cache = self.system_status_cache.lock().unwrap();
+        let cache = self.system_status_cache.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(&cached) = cache.get(key) {
             Ok(cached)
         } else {
@@ -1090,7 +1105,7 @@ impl VesselDatabase {
     pub fn set_system_status(&self, key: &str, value: bool) -> Result<(), Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
         let value_str = if value { "1" } else { "0" };
-        
+
         // Update database first
         conn.exec_drop(
             "INSERT INTO system_status (status_key, status_value) VALUES (:key, :value) ON DUPLICATE KEY UPDATE status_value = :value",
@@ -1099,11 +1114,12 @@ impl VesselDatabase {
                 "value" => value_str,
             },
         )?;
-        
+
         // Update cache to stay in sync
-        let mut cache = self.system_status_cache.lock().unwrap();
+        let mut cache = self.system_status_cache.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         cache.insert(key.to_string(), value);
-        
+
         Ok(())
     }
 
@@ -1432,15 +1448,15 @@ mod tests {
 
         assert!(json["trip"].is_object(), "Should have trip object");
         assert_eq!(json["trip"]["id"], trip_id, "Trip ID should match");
-        assert!(json["trip"]["description"].is_string(), "Trip should have description");
-        assert_eq!(json["trip"]["description"], "Export Test Trip", "Trip description should match");
-        assert!(json["trip"]["start_timestamp"].is_string(), "Trip should have start_timestamp");
-        assert!(json["trip"]["end_timestamp"].is_string(), "Trip should have end_timestamp");
+        assert!(json["trip"]["desc"].is_string(), "Trip should have description");
+        assert_eq!(json["trip"]["desc"], "Export Test Trip", "Trip description should match");
+        assert!(json["trip"]["start"].is_string(), "Trip should have start_timestamp");
+        assert!(json["trip"]["end"].is_string(), "Trip should have end_timestamp");
 
         // Verify arrays exist
-        assert!(json["vessel_statuses"].is_array(), "Should have vessel_statuses array");
-        assert!(json["environmental_metrics"].is_array(), "Should have environmental_metrics array");
-        assert!(json["export_metadata"].is_object(), "Should have export_metadata object");
+        assert!(json["vs"].is_array(), "Should have vessel_statuses array");
+        assert!(json["em"].is_array(), "Should have environmental_metrics array");
+        assert!(json["meta"].is_object(), "Should have export_metadata object");
 
         // Clean up
         fs::remove_file(&export_path)

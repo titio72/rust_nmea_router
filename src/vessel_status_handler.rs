@@ -93,51 +93,48 @@ impl VesselStatusHandler {
     /// Returns Err if there was a database error
     pub fn handle_vessel_status(
         &mut self,
-        vessel_db: &Option<VesselDatabase>,
+        vessel_db: &VesselDatabase,
         status: VesselStatus,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let effective_position = status.get_effective_position();
-        debug!("Vessel Status: latitude={:.6}, longitude={:.6}, max_speed={:.2}, avg_wind={:.2?}, avg_wind_direction={:.2?} knots, Head {:.2?} moored={}", 
+        debug!("Vessel Status: latitude={:.6}, longitude={:.6}, max_speed={:.2}, avg_wind={:.2?}, avg_wind_direction={:.2?} knots, Head {:.2?} moored={}",
             effective_position.latitude,
             effective_position.longitude,
-            status.max_speed_kn, status.wind_speed_kn, status.wind_angle_deg, 
+            status.max_speed_kn, status.wind_speed_kn, status.wind_angle_deg,
             status.average_heading_deg,
             status.is_moored);
-    
-        // Write to database if connected, time to persist, and time is synchronized
-        if let Some(ref db) = *vessel_db {
-            if status.is_valid() {
-                let status_operation = self.generate_vessel_status_operation(&status);
-                self.state.set_last_persisted_status(&status_operation);
 
-                // Determine trip operation (create, update, or none)
-                let trip_operation = Self::determine_trip_operation(&mut self.state.current_trip, &status, status_operation.total_distance_nm, status_operation.total_time_ms);
-                                
-                // Perform atomic insert of vessel status and trip operation
-                match db.insert_status_and_trip(&status_operation, &trip_operation) {
-                    Ok(new_trip_id) => {
-                        debug!("Vessel status written to database: latitude={:.6}, longitude={:.6}, is_moored={}", status_operation.position.latitude, status_operation.position.longitude, status_operation.is_moored);
-                        
-                        // Update trip ID if we created a new trip
-                        if let Some(trip_id) = new_trip_id {
-                            if let Some(ref mut trip) = self.state.current_trip {
-                                trip.id = Some(trip_id);
-                                info!("Created new trip: {} (ID: {})", trip.description, trip_id);
-                            }
-                        } else if let Some(ref trip) = self.state.current_trip {
-                            debug!("Updated trip: {} (ID: {}), total_distance={:.3}nm, total_time={}ms", 
-                                trip.description, trip.id.unwrap_or(0), trip.total_distance(), trip.total_time());
+        if status.is_valid() {
+            let status_operation = self.generate_vessel_status_operation(&status);
+            self.state.set_last_persisted_status(&status_operation);
+
+            // Determine trip operation (create, update, or none)
+            let trip_operation = Self::determine_trip_operation(&mut self.state.current_trip, &status, status_operation.total_distance_nm, status_operation.total_time_ms);
+
+            // Perform atomic insert of vessel status and trip operation
+            match vessel_db.insert_status_and_trip(&status_operation, &trip_operation) {
+                Ok(new_trip_id) => {
+                    debug!("Vessel status written to database: latitude={:.6}, longitude={:.6}, is_moored={}", status_operation.position.latitude, status_operation.position.longitude, status_operation.is_moored);
+
+                    // Update trip ID if we created a new trip
+                    if let Some(trip_id) = new_trip_id {
+                        if let Some(ref mut trip) = self.state.current_trip {
+                            trip.id = Some(trip_id);
+                            info!("Created new trip: {} (ID: {})", trip.description, trip_id);
                         }
-                        
-                        // Note: Realtime data is now broadcast directly from NMEA message processing in main loop,
-                        // not from the aggregated vessel status handler, to ensure complete data is sent
-                        
-                        return Ok(true);
+                    } else if let Some(ref trip) = self.state.current_trip {
+                        debug!("Updated trip: {} (ID: {}), total_distance={:.3}nm, total_time={}ms",
+                            trip.description, trip.id.unwrap_or(0), trip.total_distance(), trip.total_time());
                     }
-                    Err(e) => {
-                        warn!("Error writing vessel status to database: {}", e);
-                        return Err(e);
-                    }
+
+                    // Note: Realtime data is now broadcast directly from NMEA message processing in main loop,
+                    // not from the aggregated vessel status handler, to ensure complete data is sent
+
+                    return Ok(true);
+                }
+                Err(e) => {
+                    warn!("Error writing vessel status to database: {}", e);
+                    return Err(e);
                 }
             }
         }

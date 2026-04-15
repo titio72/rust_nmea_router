@@ -30,11 +30,21 @@ impl VesselDatabase {
     /// );
     /// ```
     pub fn new(connection_url: &str) -> Result<Self, Box<dyn Error>> {
-        use mysql::{Opts, OptsBuilder, Pool};
-        
+        use mysql::{Opts, OptsBuilder, Pool, PoolOpts, PoolConstraints};
+
         let opts = Opts::from_url(connection_url)?;
+
+        // Configure connection pool with limits
+        let pool_opts = PoolOpts::new()
+            .with_constraints(PoolConstraints::new(2, 10).unwrap());  // min 2, max 10 connections
+
         // Set session timezone to UTC to ensure all timestamps are handled consistently
+        // Configure timeouts to prevent hanging on unresponsive DB
         let opts_builder = OptsBuilder::from_opts(opts)
+            .pool_opts(pool_opts)
+            .tcp_connect_timeout(Some(Duration::from_secs(5)))  // 5s to establish connection
+            .read_timeout(Some(Duration::from_secs(30)))        // 30s for query reads
+            .write_timeout(Some(Duration::from_secs(30)))       // 30s for query writes
             .init(vec!["SET time_zone = '+00:00'"]);
         let pool = Pool::new(opts_builder)?;
         
@@ -56,7 +66,8 @@ impl VesselDatabase {
             
             // Load cache from database
             if let Ok(rows) = conn.query::<(String, String), _>("SELECT status_key, status_value FROM system_status") {
-                let mut cache = db.system_status_cache.lock().unwrap();
+                let mut cache = db.system_status_cache.lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 for (key, value) in rows {
                     let enabled = value == "1" || value.to_lowercase() == "true";
                     cache.insert(key, enabled);

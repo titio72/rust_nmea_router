@@ -4,7 +4,7 @@ use axum::{
     extract::DefaultBodyLimit,
 };
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tower_http::services::ServeDir;
 use tower_http::cors::{CorsLayer, Any};
 use tracing::info;
@@ -17,13 +17,14 @@ use super::api::{AppState, create_api_router};
 use super::broadcast_manager::get_signalk_channels;
 
 pub async fn start_web_server(
-    db: Arc<VesselDatabase>,
+    db: Arc<RwLock<VesselDatabase>>,
     config: Arc<Config>,
     port: u16,
+    startup_signal: std::sync::mpsc::Sender<Result<(), String>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get the global SignalK broadcast channels
     let signalk_broadcast = get_signalk_channels();
-    
+
     let state = AppState {
         db,
         config,
@@ -58,9 +59,22 @@ pub async fn start_web_server(
         );
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    info!("Web server starting on http://{}", addr);
+    info!("Web server binding to http://{}", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    // Try to bind - this is where port-in-use errors occur
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => {
+            // Signal successful startup
+            let _ = startup_signal.send(Ok(()));
+            l
+        }
+        Err(e) => {
+            // Signal failure
+            let _ = startup_signal.send(Err(format!("Failed to bind to port {}: {}", port, e)));
+            return Err(e.into());
+        }
+    };
+
     axum::serve(listener, app)
         .await
         .map_err(|e| format!("Server error: {}", e).into())

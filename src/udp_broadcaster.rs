@@ -2,7 +2,7 @@ use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use std::time::Instant;
-use tracing::{debug, warn, error};
+use tracing::{debug, warn};
 use nmea2k::pgns::N2kMessage;
 use nmea2k::pgns::{HeadingReference, WindReference, GnssMethod};
 use nmea2k::pgns::{AisClassAPositionReport, AisClassBPositionReport,
@@ -43,12 +43,16 @@ pub struct UdpBroadcaster {
 
 impl UdpBroadcaster {
     /// Create a new UDP broadcaster
-    /// 
+    ///
     /// # Arguments
     /// * `destination` - UDP destination address (e.g., "192.168.1.255:10110")
     /// * `bind_address` - Local interface/address to bind to (e.g., "192.168.1.10:0" or "0.0.0.0:0")
     /// * `enabled` - Whether UDP broadcasting is enabled
-    pub fn new(destination: String, bind_address: String, enabled: bool) -> Self {
+    ///
+    /// # Returns
+    /// * `Ok(Self)` - Broadcaster created successfully (or disabled)
+    /// * `Err(String)` - Socket creation failed when enabled
+    pub fn new(destination: String, bind_address: String, enabled: bool) -> Result<Self, String> {
         let socket = if enabled {
             match Self::create_socket(&destination, &bind_address) {
                 Ok(sock) => {
@@ -56,8 +60,7 @@ impl UdpBroadcaster {
                     Some(sock)
                 }
                 Err(e) => {
-                    error!("Failed to create UDP socket: {}. Broadcasting disabled.", e);
-                    None
+                    return Err(format!("Failed to bind UDP socket to {}: {}", bind_address, e));
                 }
             }
         } else {
@@ -65,7 +68,7 @@ impl UdpBroadcaster {
             None
         };
 
-        Self {
+        Ok(Self {
             socket: Arc::new(Mutex::new(socket)),
             destination,
             enabled,
@@ -73,7 +76,7 @@ impl UdpBroadcaster {
             message_count: 0,
             rate_limiter: HashMap::new(),
             rmc_state: RmcState::default(),
-        }
+        })
     }
 
     /// Create and configure a UDP socket
@@ -98,11 +101,17 @@ impl UdpBroadcaster {
         }
 
         let now = Instant::now();
+
+        // Cleanup stale entries if map is getting large (prevents unbounded growth from AIS MMSIs)
+        if self.rate_limiter.len() > 500 {
+            self.cleanup_stale_rate_limiter_entries(now);
+        }
+
         let last_send = self.rate_limiter.get(topic).copied();
-        
+
         // Check if we should send (1 second rate limit per topic)
         if let Some(last) = last_send {
-            if now.duration_since(last).as_millis() < 900 /* account for some wiggle room, other wise we end up with 2s period instead of 1s */ {
+            if now.duration_since(last).as_millis() < 900 /* account for some wiggle room, otherwise we end up with 2s period instead of 1s */ {
                 return;
             }
         }
@@ -139,6 +148,22 @@ impl UdpBroadcaster {
                     self.error_count += 1;
                 }
             }
+        }
+    }
+
+    /// Remove rate limiter entries older than 5 minutes to prevent unbounded growth
+    /// Called when the map exceeds 500 entries (primarily from AIS MMSI-based topics)
+    fn cleanup_stale_rate_limiter_entries(&mut self, now: Instant) {
+        let stale_threshold = std::time::Duration::from_secs(300); // 5 minutes
+        let before_count = self.rate_limiter.len();
+
+        self.rate_limiter.retain(|_, last_send| {
+            now.duration_since(*last_send) < stale_threshold
+        });
+
+        let removed = before_count - self.rate_limiter.len();
+        if removed > 0 {
+            debug!("Cleaned up {} stale rate limiter entries, {} remaining", removed, self.rate_limiter.len());
         }
     }
 
@@ -883,7 +908,7 @@ mod tests {
     #[test]
     fn test_format_position_north() {
         let lat = 52.373126; // degrees
-        let formatted = format_position(lat);
+        let formatted = format_latitude(lat);
         // Should be 52°22.3876' which is 5222.3876
         assert!(formatted.starts_with("52"));
     }
@@ -1043,7 +1068,7 @@ mod tests {
 
     #[test]
     fn test_format_dpt() {
-        let result = format_dpt(5.5, Some(0.0));
+        let result = format_dpt(5.5, 0.0);
         assert!(result.is_some());
         let dpt = result.unwrap();
         assert!(dpt.starts_with("$IIDPT"));
@@ -1077,14 +1102,14 @@ mod tests {
 
     #[test]
     fn test_create_disabled_broadcaster() {
-        let broadcaster = UdpBroadcaster::new("127.0.0.1:10110".to_string(), "0.0.0.0:0".to_string(), false);
+        let broadcaster = UdpBroadcaster::new("127.0.0.1:10110".to_string(), "0.0.0.0:0".to_string(), false).unwrap();
         assert!(!broadcaster.enabled);
         assert!(broadcaster.socket.lock().unwrap().is_none());
     }
 
     #[test]
     fn test_broadcaster_initialization() {
-        let broadcaster = UdpBroadcaster::new("127.0.0.1:10110".to_string(), "0.0.0.0:0".to_string(), false);
+        let broadcaster = UdpBroadcaster::new("127.0.0.1:10110".to_string(), "0.0.0.0:0".to_string(), false).unwrap();
         assert_eq!(broadcaster.message_count, 0);
         assert_eq!(broadcaster.error_count, 0);
         assert!(broadcaster.rmc_state.latitude.is_none());

@@ -498,18 +498,18 @@ mod test_infrastructure_examples {
         let make_payload = |description: &str| -> String {
             serde_json::json!({
                 "trip": {
-                    "description": description,
-                    "start_timestamp": "2026-01-01T10:00:00Z",
-                    "end_timestamp": "2026-01-01T14:00:00Z",
-                    "total_distance_sailed": 10.0,
-                    "total_distance_motoring": 1.0,
-                    "total_time_sailing": 10000000u64,
-                    "total_time_motoring": 1000000u64,
-                    "total_time_moored": 500000u64,
+                    "desc": description,
+                    "start": "2026-01-01T10:00:00Z",
+                    "end": "2026-01-01T14:00:00Z",
+                    "dist_sail": 10.0,
+                    "dist_motor": 1.0,
+                    "t_sail": 10000000u64,
+                    "t_motor": 1000000u64,
+                    "t_moor": 500000u64,
                     "uuid": fixed_uuid,
                 },
-                "vessel_statuses": [],
-                "environmental_metrics": []
+                "vs": [],
+                "em": []
             }).to_string()
         };
 

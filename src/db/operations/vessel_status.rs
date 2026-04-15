@@ -7,6 +7,119 @@ use chrono::NaiveDateTime;
 use crate::utilities::dirty_instant_to_systemtime;
 use mysql::prelude::Queryable;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::{setup_db, add_test_trip, fetch_vessel_status_by_timestamp, assert_approx_equal};
+    use crate::db::types::TripOperation;
+    use crate::position_utils::Position;
+    use crate::trip::Trip;
+    use crate::utilities::EngineStatus;
+    use std::time::{Duration, Instant, SystemTime};
+    use std::ops::Add;
+    use mysql::prelude::Queryable;
+
+    fn make_status_op() -> VesselStatusOperation {
+        let ts = Instant::now() - Duration::from_secs(3600);
+        VesselStatusOperation {
+            timestamp: ts,
+            position: Position { latitude: 51.5, longitude: -0.1 },
+            average_speed_kn: 6.5,
+            max_speed_kn: 8.2,
+            is_moored: false,
+            engine_on: EngineStatus::Off,
+            total_distance_nm: 1.2,
+            total_time_ms: 600_000,
+            wind_speed_kn: Some(12.0),
+            wind_speed_variance: None,
+            wind_angle_deg: Some(45.0),
+            wind_angle_variance: None,
+            cog_deg: Some(90.0),
+            average_heading_deg: Some(92.0),
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn test_insert_status_no_trip_operation() {
+        let db = setup_db();
+        let op = make_status_op();
+        let result = db.insert_status_and_trip(&op, &TripOperation::None).unwrap();
+        assert!(result.is_none());
+        // vessel_status row was inserted
+        let ts_sys = dirty_instant_to_systemtime(op.timestamp);
+        let record = fetch_vessel_status_by_timestamp(&db, ts_sys).unwrap();
+        assert!(record.is_some(), "vessel_status row should exist");
+        // trips table stays empty
+        let mut conn = db.pool.get_conn().unwrap();
+        let count: u64 = conn.query_first("SELECT COUNT(*) FROM trips").unwrap().unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_insert_status_creates_trip() {
+        let db = setup_db();
+        let op = make_status_op();
+        let ts_sys = dirty_instant_to_systemtime(op.timestamp);
+        let trip = Trip::new(ts_sys, "Test Create".to_string());
+        let result = db.insert_status_and_trip(&op, &TripOperation::CreateTrip(trip)).unwrap();
+        let trip_id = result.expect("CreateTrip should return Some(id)");
+        assert!(trip_id > 0);
+        // Both rows exist
+        let record = fetch_vessel_status_by_timestamp(&db, ts_sys).unwrap();
+        assert!(record.is_some(), "vessel_status row should exist");
+        let mut conn = db.pool.get_conn().unwrap();
+        let count: u64 = conn.query_first("SELECT COUNT(*) FROM trips").unwrap().unwrap();
+        assert_eq!(count, 1);
+        let desc: String = conn
+            .exec_first("SELECT description FROM trips WHERE id = :id", mysql::params! { "id" => trip_id })
+            .unwrap()
+            .unwrap();
+        assert_eq!(desc, "Test Create");
+    }
+
+    #[test]
+    #[ignore]
+    fn test_insert_status_updates_trip() {
+        let db = setup_db();
+        let now = SystemTime::now();
+        let trip_id = add_test_trip(&db, "Original".to_string(), now, now.add(Duration::from_secs(3600)), 1.0, 0.0, 3600000, 0, 0).unwrap();
+        let op = make_status_op();
+        let mut trip = Trip::new(now, "Updated".to_string());
+        trip.id = Some(trip_id as i64);
+        trip.total_distance_sailed = 5.5;
+        trip.end_timestamp = now.add(Duration::from_secs(7200));
+        let result = db.insert_status_and_trip(&op, &TripOperation::UpdateTrip(trip)).unwrap();
+        assert!(result.is_none(), "UpdateTrip should return None");
+        // Still exactly 1 trip row — no duplicate
+        let mut conn = db.pool.get_conn().unwrap();
+        let count: u64 = conn.query_first("SELECT COUNT(*) FROM trips").unwrap().unwrap();
+        assert_eq!(count, 1);
+        // Distance was updated
+        let dist: f64 = conn
+            .exec_first("SELECT total_distance_sailed FROM trips WHERE id = :id", mysql::params! { "id" => trip_id })
+            .unwrap()
+            .unwrap();
+        assert_approx_equal(dist, 5.5, 0.001, "total_distance_sailed should be updated");
+    }
+
+    #[test]
+    #[ignore]
+    fn test_insert_status_fields_persisted() {
+        let db = setup_db();
+        let op = make_status_op();
+        let ts_sys = dirty_instant_to_systemtime(op.timestamp);
+        db.insert_status_and_trip(&op, &TripOperation::None).unwrap();
+        let rec = fetch_vessel_status_by_timestamp(&db, ts_sys).unwrap().unwrap();
+        assert_approx_equal(rec.latitude.unwrap_or(0.0), 51.5, 0.001, "latitude");
+        assert_approx_equal(rec.longitude.unwrap_or(0.0), -0.1, 0.001, "longitude");
+        assert_approx_equal(rec.average_speed_kn, 6.5, 0.001, "average_speed_kn");
+        assert_approx_equal(rec.total_distance_nm, 1.2, 0.001, "total_distance_nm");
+        assert!(!rec.is_moored, "is_moored should be false");
+    }
+}
+
 impl VesselDatabase {
     /// Insert vessel status and create/update trip in a single transaction
     /// This ensures atomicity - either both operations succeed or both fail

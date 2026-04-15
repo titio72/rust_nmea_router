@@ -483,6 +483,7 @@ impl Config {
     }
     
     /// Create default configuration
+    #[allow(dead_code)]
     pub fn default() -> Self {
         Config {
             can_interface: "vcan0".to_string(),
@@ -1055,6 +1056,7 @@ mod tests {
         let config = UdpConfig {
             enabled: true,
             address: "224.0.0.1:5555".to_string(),
+            bind_address: "0.0.0.0:0".to_string(),
         };
         assert_eq!(config.enabled, true);
         assert_eq!(config.address, "224.0.0.1:5555");
@@ -1065,11 +1067,12 @@ mod tests {
         let config = UdpConfig {
             enabled: true,
             address: "192.168.100.255:12345".to_string(),
+            bind_address: "0.0.0.0:0".to_string(),
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("192.168.100.255:12345"));
         assert!(json.contains("true"));
-        
+
         let deserialized: UdpConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.enabled, true);
         assert_eq!(deserialized.address, "192.168.100.255:12345");
@@ -1089,6 +1092,7 @@ mod tests {
         let config = UdpConfig {
             enabled: true,
             address: "224.0.0.1:10110".to_string(),
+            bind_address: "0.0.0.0:0".to_string(),
         };
         assert_eq!(config.address, "224.0.0.1:10110");
     }
@@ -1098,6 +1102,7 @@ mod tests {
         let config = UdpConfig {
             enabled: true,
             address: "255.255.255.255:10110".to_string(),
+            bind_address: "0.0.0.0:0".to_string(),
         };
         assert_eq!(config.address, "255.255.255.255:10110");
     }

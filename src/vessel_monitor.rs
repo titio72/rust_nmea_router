@@ -112,7 +112,7 @@ pub struct VesselMonitor {
 impl VesselMonitor {
     pub fn new(status_report_period: Duration, status_report_moored_period: Duration) -> Self {
         let now = Instant::now();
-        let time_window_secs = std::cmp::max(status_report_moored_period.as_secs(), status_report_moored_period.as_secs()) + 30;
+        let time_window_secs = std::cmp::max(status_report_moored_period.as_secs(), status_report_period.as_secs()) + 30;
         let sample_age_window = Duration::from_secs(time_window_secs);
         VesselMonitor {
             status_report_period,
@@ -183,7 +183,7 @@ impl VesselMonitor {
         let new_status = Some(self.vmg_for_mooring.is_stationary(timestamp));
         if new_status != self.mooring_status {
             self.mooring_status = new_status;
-            println!("Mooring status changed: {:?}", self.mooring_status);
+            tracing::info!("Mooring status changed: {:?}", self.mooring_status);
         }
 
         self.speeds.add_sample(sog_kn, timestamp);

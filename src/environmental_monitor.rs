@@ -139,8 +139,8 @@ impl EnvironmentalMonitor {
         }
 
         //process wind speed
-        let boat_speed = if self.last_boat_speed_knots.is_none() || self.last_boat_speed_event.is_none() || now.duration_since(self.last_boat_speed_event.unwrap()) > Duration::from_secs(1) {
-            // Boat speed data is none or stale
+        let boat_speed = if self.last_boat_speed_event.is_none() || now.duration_since(self.last_boat_speed_event.unwrap()) > Duration::from_secs(1) {
+            // Boat speed data is stale
             return;
         } else {
             self.last_boat_speed_knots.unwrap()
@@ -188,9 +188,11 @@ impl EnvironmentalMonitor {
     }
 
     fn reset_stale_heading(&mut self, now: Instant) {
-        if now.duration_since(self.last_heading_event.unwrap_or(now)) > Duration::from_secs(10) {
-            self.last_heading_event = None;
-            self.last_heading_degrees = None;
+        if let Some(last) = self.last_heading_event {
+            if now.duration_since(last) > Duration::from_secs(10) {
+                self.last_heading_event = None;
+                self.last_heading_degrees = None;
+            }
         }
     }
 

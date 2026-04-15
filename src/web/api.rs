@@ -10,7 +10,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::{info, error, Span};
-use std::{backtrace::Backtrace, sync::Arc, sync::atomic::{AtomicBool, Ordering}, time::Duration};
+use std::{backtrace::Backtrace, sync::Arc, sync::atomic::{AtomicBool, Ordering}, sync::RwLock, time::Duration};
 use tower_http::trace::TraceLayer;
 
 use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData, MultiMetricData, SpeedDistributionData, WindStatisticsData, TripLegsData, TrackAnalytics, HeatmapData};
@@ -22,10 +22,17 @@ const MAX_IMPORT_TRIP_UPLOAD_BYTES: usize = 100 * 1024 * 1024; // 100 MiB
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db: Arc<VesselDatabase>,
+    pub db: Arc<RwLock<VesselDatabase>>,
     pub config: Arc<Config>,
     pub signalk_broadcast: Arc<SignalKBroadcastChannels>,
     pub backup_in_progress: Arc<AtomicBool>,
+}
+
+impl AppState {
+    /// Get a read guard for the database. Handles poisoned locks gracefully.
+    pub fn db(&self) -> std::sync::RwLockReadGuard<'_, VesselDatabase> {
+        self.db.read().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -213,7 +220,7 @@ pub async fn get_trips(
     State(state): State<AppState>,
     Query(params): Query<TripsQuery>,
 ) -> Result<Json<ApiResponse<Vec<TripSummary>>>, StatusCode> {
-    match state.db.fetch_trips(params.year, params.last_months) {
+    match state.db().fetch_trips(params.year, params.last_months) {
         Ok(trips) => Ok(Json(ApiResponse::ok(trips))),
         Err(e) => {
             error!(error = %e, "Failed to fetch trips");
@@ -226,7 +233,7 @@ pub async fn get_trip(
     State(state): State<AppState>,
     Query(params): Query<TripIdQuery>,
 ) -> Result<Json<ApiResponse<TripSummary>>, StatusCode> {
-    match state.db.fetch_trip(params.id) {
+    match state.db().fetch_trip(params.id) {
         Ok(res_trip) => {
             if let Some(trip) = res_trip {
                 Ok(Json(ApiResponse::ok(trip)))
@@ -246,7 +253,7 @@ pub async fn get_trip_by_uuid(
     State(state): State<AppState>,
     Query(params): Query<TripUuidQuery>,
 ) -> Result<Json<ApiResponse<TripSummary>>, StatusCode> {
-    match state.db.fetch_trip_by_uuid(&params.uuid) {
+    match state.db().fetch_trip_by_uuid(&params.uuid) {
         Ok(Some(trip)) => Ok(Json(ApiResponse::ok(trip))),
         Ok(None) => {
             error!(uuid = %params.uuid, "Trip not found by UUID");
@@ -265,7 +272,7 @@ pub async fn get_track(
 ) -> Result<Json<ApiResponse<Vec<TrackPoint>>>, StatusCode> {
     let start = parse_optional_datetime(&params.start)?;
     let end = parse_optional_datetime(&params.end)?;
-    match state.db.fetch_track(
+    match state.db().fetch_track(
         params.trip_id,
         start,
         end,
@@ -289,7 +296,7 @@ pub async fn get_metrics(
 ) -> Result<Json<ApiResponse<Vec<WebMetricData>>>, StatusCode> {
     let start = parse_optional_datetime(&params.start)?;
     let end = parse_optional_datetime(&params.end)?;
-    match state.db.fetch_metrics(
+    match state.db().fetch_metrics(
         &params.metric,
         params.trip_id,
         start,
@@ -323,7 +330,7 @@ pub async fn get_metrics_batch(
     };
     let start = parse_optional_datetime(&params.start)?;
     let end = parse_optional_datetime(&params.end)?;
-    match state.db.fetch_metrics_batch(
+    match state.db().fetch_metrics_batch(
         &metric_ids,
         params.trip_id,
         start,
@@ -344,7 +351,7 @@ pub async fn get_speed_distribution(
 ) -> Result<Json<ApiResponse<SpeedDistributionData>>, StatusCode> {
     let start = parse_optional_datetime(&params.start)?;
     let end = parse_optional_datetime(&params.end)?;
-    match state.db.fetch_speed_distribution(
+    match state.db().fetch_speed_distribution(
         params.id,
         start,
         end,
@@ -367,7 +374,7 @@ pub async fn get_wind_statistics(
 ) -> Result<Json<ApiResponse<WindStatisticsData>>, StatusCode> {
     let start = parse_optional_datetime(&params.start)?;
     let end = parse_optional_datetime(&params.end)?;
-    match state.db.fetch_wind_statistics(
+    match state.db().fetch_wind_statistics(
         params.id,
         start,
         end,
@@ -388,7 +395,7 @@ pub async fn get_trip_legs(
     State(state): State<AppState>,
     Query(params): Query<TripIdQuery>,
 ) -> Result<Json<ApiResponse<TripLegsData>>, StatusCode> {
-    match state.db.fetch_trip_legs(params.id) {
+    match state.db().fetch_trip_legs(params.id) {
         Ok(legs_data) => Ok(Json(ApiResponse::ok(legs_data))),
         Err(e) => {
             error!(error = %e, "Failed to fetch trip legs");
@@ -407,7 +414,7 @@ pub async fn get_track_analytics(
 ) -> Result<Json<ApiResponse<TrackAnalytics>>, StatusCode> {
     let start = parse_required_datetime(&params.start)?;
     let end = parse_required_datetime(&params.end)?;
-    match state.db.fetch_track_analytics(start, end) {
+    match state.db().fetch_track_analytics(start, end) {
         Ok(analytics) => Ok(Json(ApiResponse::ok(analytics))),
         Err(e) => {
             error!(error = %e, "Failed to fetch track analytics");
@@ -423,7 +430,7 @@ pub async fn get_track_analytics(
 pub async fn get_monthly_statistics(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<crate::db::MonthlyStatistics>>, StatusCode> {
-    match state.db.fetch_monthly_statistics() {
+    match state.db().fetch_monthly_statistics() {
         Ok(stats) => Ok(Json(ApiResponse::ok(stats))),
         Err(e) => {
             error!(error = %e, "Failed to fetch monthly statistics");
@@ -443,7 +450,7 @@ pub async fn update_trip_description(
 
     info!(?params, "POST /api/trip_description called");
     
-    match state.db.update_trip_description(params.id as i64, &params.description) {
+    match state.db().update_trip_description(params.id as i64, &params.description) {
         Ok(()) => {
             info!(trip_id = params.id, description = %params.description, "Trip description updated successfully");
             Ok(Json(ApiResponse::ok(())))
@@ -463,7 +470,7 @@ pub async fn delete_trip(
     State(state): State<AppState>,
     Query(params): Query<TripIdQuery>,
 ) -> Result<Json<ApiResponse<()>>, StatusCode> {
-    match state.db.delete_trip(params.id) {
+    match state.db().delete_trip(params.id) {
         Ok(()) => {
             info!(trip_id = params.id, "Trip deleted successfully");
             Ok(Json(ApiResponse::ok(())))
@@ -483,7 +490,7 @@ pub async fn trim_trip(
     State(state): State<AppState>,
     Query(params): Query<TripIdQuery>,
 ) -> Result<Json<ApiResponse<()>>, StatusCode> {
-    match state.db.trim_trip(params.id) {
+    match state.db().trim_trip(params.id) {
         Ok(()) => {
             info!(trip_id = params.id, "Trip trimmed successfully");
             Ok(Json(ApiResponse::ok(())))
@@ -510,7 +517,7 @@ pub async fn export_trip(
     
     info!(trip_id = params.id, path = %export_path, "Exporting trip");
     
-    match state.db.export_trip(params.id as i64, &export_path) {
+    match state.db().export_trip(params.id as i64, &export_path) {
         Ok(()) => {
             info!(trip_id = params.id, path = %export_path, "Trip exported successfully");
             Ok(Json(ApiResponse::ok(format!("Trip {} exported to {}", params.id, export_path))))
@@ -558,7 +565,7 @@ pub async fn import_trip(
                             }
                         };
                         
-                        match state.db.import_trip(json_content) {
+                        match state.db().import_trip(json_content) {
                             Ok(trip_id) => {
                                 info!(trip_id = trip_id, "Trip imported successfully");
                                 return Ok(Json(ApiResponse::ok(format!("Trip imported successfully with ID: {}", trip_id))));
@@ -675,7 +682,7 @@ pub async fn get_heatmap(
 ) -> Result<Json<ApiResponse<HeatmapData>>, StatusCode> {
     let date = NaiveDate::parse_from_str(&params.date, "%Y-%m-%d")
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    match state.db.fetch_heatmap(date) {
+    match state.db().fetch_heatmap(date) {
         Ok(heatmap) => Ok(Json(ApiResponse::ok(heatmap))),
         Err(e) => {
             error!(error = %e, "Failed to fetch heatmap");
@@ -688,7 +695,7 @@ pub async fn get_tracking_status(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<TrackingStatusResponse>>, StatusCode> {
     // Get tracking status from database
-    let enabled = state.db.get_system_status("tracking_enabled")
+    let enabled = state.db().get_system_status("tracking_enabled")
         .unwrap_or(true);
     
     let response = TrackingStatusResponse { enabled };
@@ -702,7 +709,7 @@ pub async fn set_tracking_status(
     info!(?request, "POST /api/tracking/status called");
     
     // Save tracking status to database
-    if let Err(e) = state.db.set_system_status("tracking_enabled", request.enabled) {
+    if let Err(e) = state.db().set_system_status("tracking_enabled", request.enabled) {
         error!(error = %e, "Failed to set tracking status in database");
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -718,7 +725,7 @@ pub async fn get_metrics_status(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<MetricsStatusResponse>>, StatusCode> {
     // Get metrics status from database
-    let enabled = state.db.get_system_status("metrics_enabled")
+    let enabled = state.db().get_system_status("metrics_enabled")
         .unwrap_or(true);
     
     let response = MetricsStatusResponse { enabled };
@@ -732,7 +739,7 @@ pub async fn set_metrics_status(
     info!(?request, "POST /api/metrics/status called");
     
     // Save metrics status to database (persistent across restarts)
-    if let Err(e) = state.db.set_system_status("metrics_enabled", request.enabled) {
+    if let Err(e) = state.db().set_system_status("metrics_enabled", request.enabled) {
         error!("Failed to save metrics status to database: {}", e);
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -749,7 +756,7 @@ pub async fn get_signalk_status(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<SignalKStatusResponse>>, StatusCode> {
     // Get signalk status from database
-    let enabled = state.db.get_system_status("signalk_enabled")
+    let enabled = state.db().get_system_status("signalk_enabled")
         .unwrap_or(false);
     
     let response = SignalKStatusResponse { enabled };
@@ -763,7 +770,7 @@ pub async fn set_signalk_status(
     info!(?request, "POST /api/signalk/status called");
     
     // Save signalk status to database
-    if let Err(e) = state.db.set_system_status("signalk_enabled", request.enabled) {
+    if let Err(e) = state.db().set_system_status("signalk_enabled", request.enabled) {
         error!(error = %e, "Failed to set signalk status");
         return Ok(Json(ApiResponse::error(e.to_string())));
     }
@@ -1079,7 +1086,7 @@ mod tests {
         config.web.google_maps_api_key = Some("your_google_maps_api_key_here".to_string());
         let signalk_broadcast = Arc::new(SignalKBroadcastChannels::new());
         let state = AppState {
-            db: Arc::new(db),
+            db: Arc::new(RwLock::new(db)),
             config: Arc::new(config),
             signalk_broadcast,
             backup_in_progress: Arc::new(AtomicBool::new(false)),
@@ -1955,5 +1962,250 @@ mod tests {
             json["error"].as_str().unwrap().contains("not found"),
             "Error message should indicate trip not found"
         );
+    }
+
+    // ---- Seeded integration tests (require test_config.json + live test DB) ----
+    //
+    // Run with: cargo test web::api::tests -- --test-threads=1 --include-ignored
+
+    fn create_clean_test_app() -> (Router, Arc<RwLock<crate::db::types::VesselDatabase>>) {
+        use crate::db::test_helpers::setup_db;
+        let db = Arc::new(RwLock::new(setup_db()));
+        let config = Arc::new(crate::config::Config::load_for_context().unwrap());
+        let signalk_broadcast = Arc::new(SignalKBroadcastChannels::new());
+        let state = AppState {
+            db: db.clone(),
+            config,
+            signalk_broadcast,
+            backup_in_progress: Arc::new(AtomicBool::new(false)),
+        };
+        (create_api_router(state), db)
+    }
+
+    async fn call_api(app: Router, req: axum::http::Request<Body>) -> (StatusCode, serde_json::Value) {
+        let resp = app.oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_trips_seeded() {
+        use crate::db::test_helpers::add_test_trip;
+        use std::time::{SystemTime, Duration};
+        use std::ops::Add;
+        let (app, db) = create_clean_test_app();
+        let now = SystemTime::now();
+        {
+            let db = db.read().unwrap();
+            add_test_trip(&db, "Trip A".to_string(), now, now.add(Duration::from_secs(3600)), 10.0, 2.0, 3600000, 600000, 0).unwrap();
+            add_test_trip(&db, "Trip B".to_string(), now.add(Duration::from_secs(7200)), now.add(Duration::from_secs(10800)), 5.0, 0.0, 1800000, 0, 0).unwrap();
+        }
+        let (status, json) = call_api(app, axum::http::Request::builder().uri("/trips").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["data"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_trip_by_id_seeded() {
+        use crate::db::test_helpers::add_test_trip;
+        use std::time::{SystemTime, Duration};
+        use std::ops::Add;
+        let (app, db) = create_clean_test_app();
+        let now = SystemTime::now();
+        let trip_id = {
+            let db = db.read().unwrap();
+            add_test_trip(&db, "Seeded Trip".to_string(), now, now.add(Duration::from_secs(7200)), 12.5, 3.0, 7200000, 1800000, 0).unwrap()
+        };
+        let (status, json) = call_api(app, axum::http::Request::builder().uri(&format!("/trip?id={}", trip_id)).body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["data"]["id"].as_u64().unwrap(), trip_id as u64);
+        assert_eq!(json["data"]["description"].as_str().unwrap(), "Seeded Trip");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_delete_trip_seeded() {
+        use crate::db::test_helpers::add_test_trip;
+        use std::time::{SystemTime, Duration};
+        use std::ops::Add;
+        let (app, db) = create_clean_test_app();
+        let now = SystemTime::now();
+        let trip_id = {
+            let db = db.read().unwrap();
+            add_test_trip(&db, "To Delete".to_string(), now, now.add(Duration::from_secs(3600)), 1.0, 0.0, 3600000, 0, 0).unwrap()
+        };
+        let (status, json) = call_api(app.clone(), axum::http::Request::builder().method("DELETE").uri(&format!("/delete_trip?id={}", trip_id)).body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+        let (_, json2) = call_api(app, axum::http::Request::builder().uri(&format!("/trip?id={}", trip_id)).body(Body::empty()).unwrap()).await;
+        assert_eq!(json2["status"], "error");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_update_trip_description_seeded() {
+        use crate::db::test_helpers::add_test_trip;
+        use std::time::{SystemTime, Duration};
+        use std::ops::Add;
+        let (app, db) = create_clean_test_app();
+        let now = SystemTime::now();
+        let trip_id = {
+            let db = db.read().unwrap();
+            add_test_trip(&db, "Original".to_string(), now, now.add(Duration::from_secs(3600)), 1.0, 0.0, 3600000, 0, 0).unwrap()
+        };
+        let body = json!({"id": trip_id, "description": "Updated Description"}).to_string();
+        let (status, json) = call_api(app.clone(), axum::http::Request::builder().method("POST").uri("/trip_description").header("content-type", "application/json").body(Body::from(body)).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+        let (_, json2) = call_api(app, axum::http::Request::builder().uri(&format!("/trip?id={}", trip_id)).body(Body::empty()).unwrap()).await;
+        assert_eq!(json2["data"]["description"].as_str().unwrap(), "Updated Description");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_track_seeded() {
+        use crate::db::test_helpers::{add_test_trip, add_test_vessel_status};
+        use crate::utilities::EngineStatus;
+        use std::time::{SystemTime, Duration};
+        use std::ops::Add;
+        let (app, db) = create_clean_test_app();
+        let now = SystemTime::now();
+        let trip_id = {
+            let db = db.read().unwrap();
+            let tid = add_test_trip(&db, "Track Test".to_string(), now, now.add(Duration::from_secs(3600)), 5.0, 0.0, 3600000, 0, 0).unwrap();
+            for i in 0..5u64 {
+                add_test_vessel_status(&db, now.add(Duration::from_secs(i * 600)), 51.5 + (i as f64) * 0.01, -0.1, 6.0, 7.0, None, None, false, EngineStatus::Off, 1.0, 600000, Some(90.0), None).unwrap();
+            }
+            tid
+        };
+        let (status, json) = call_api(app, axum::http::Request::builder().uri(&format!("/track?trip_id={}", trip_id)).body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["data"].as_array().unwrap().len(), 5);
+        let lat = json["data"][0]["latitude"].as_f64().unwrap();
+        assert!((lat - 51.5).abs() < 0.05, "Expected lat ~51.5, got {}", lat);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_track_bad_datetime() {
+        let (app, _) = create_clean_test_app();
+        let resp = app.oneshot(axum::http::Request::builder().uri("/track?start=not-a-date").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_metrics_seeded() {
+        use crate::db::test_helpers::{add_test_trip, add_test_env};
+        use std::time::{SystemTime, Duration};
+        use std::ops::Add;
+        let (app, db) = create_clean_test_app();
+        let now = SystemTime::now();
+        let trip_id = {
+            let db = db.read().unwrap();
+            let tid = add_test_trip(&db, "Metrics Trip".to_string(), now, now.add(Duration::from_secs(3600)), 1.0, 0.0, 3600000, 0, 0).unwrap();
+            for i in 0..3u64 {
+                add_test_env(&db, now.add(Duration::from_secs(i * 300)), 2, Some(20.0 + i as f64), Some(22.0), Some(18.0), "C").unwrap();
+            }
+            tid
+        };
+        let (status, json) = call_api(app, axum::http::Request::builder().uri(&format!("/metrics?metric=2&trip_id={}", trip_id)).body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+        assert!(!json["data"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_metrics_batch_invalid_param() {
+        let (app, _) = create_clean_test_app();
+        let (status, json) = call_api(app, axum::http::Request::builder().uri("/metrics/batch?metrics=not-ids").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "error");
+        assert!(json["error"].as_str().unwrap().to_lowercase().contains("invalid"));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_signalk_status_defaults_true() {
+        // All system_status keys (including signalk_enabled) default to true when absent from cache/DB
+        let (app, _) = create_clean_test_app();
+        let (status, json) = call_api(app, axum::http::Request::builder().uri("/signalk/status").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["data"]["enabled"], true);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_tracking_status_defaults_true() {
+        let (app, _) = create_clean_test_app();
+        let (status, json) = call_api(app, axum::http::Request::builder().uri("/tracking/status").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["data"]["enabled"], true);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_set_and_get_tracking_status_seeded() {
+        let (app, _) = create_clean_test_app();
+        let body = json!({"enabled": false}).to_string();
+        let (status, json) = call_api(app.clone(), axum::http::Request::builder().method("POST").uri("/tracking/status").header("content-type", "application/json").body(Body::from(body)).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["data"]["enabled"], false);
+        let (_, json2) = call_api(app, axum::http::Request::builder().uri("/tracking/status").body(Body::empty()).unwrap()).await;
+        assert_eq!(json2["data"]["enabled"], false);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_list_exports_returns_array() {
+        let (app, _) = create_clean_test_app();
+        let (status, json) = call_api(app, axum::http::Request::builder().uri("/list_exports").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+        assert!(json["data"].is_array());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_monthly_statistics_empty_db() {
+        let (app, _) = create_clean_test_app();
+        let (status, json) = call_api(app, axum::http::Request::builder().uri("/monthly_statistics").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+        assert!(json["data"]["months"].is_array());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_delete_backup_path_traversal() {
+        let (app, _) = create_clean_test_app();
+        let (status, json) = call_api(app, axum::http::Request::builder().method("DELETE").uri("/backup?file=../../../etc/passwd").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "error");
+        assert_eq!(json["error"].as_str().unwrap(), "Invalid filename");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_download_backup_not_found() {
+        let (app, _) = create_clean_test_app();
+        let resp = app.oneshot(axum::http::Request::builder().uri("/backup/download?file=nonexistent_test_file.gz").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_download_backup_path_traversal() {
+        let (app, _) = create_clean_test_app();
+        let resp = app.oneshot(axum::http::Request::builder().uri("/backup/download?file=../config.json").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

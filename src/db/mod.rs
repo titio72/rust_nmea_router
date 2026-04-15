@@ -15,6 +15,7 @@ mod test_examples;
 // Re-export main types and the connection manager
 pub use types::{
     VesselDatabase, VesselStatusOperation, TripOperation, HealthCheckManager,
+    is_connection_error,
     // Response types
     TripSummary, TrackPoint, WebMetricData, MultiMetricData, SpeedDistributionData, WindStatisticsData,
     TripLegsData, HeatmapData, TrackAnalytics, MonthlyStatistics,

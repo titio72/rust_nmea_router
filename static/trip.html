@@ -597,9 +597,11 @@
         // Initialize theme on page load
         initializeTheme();
 
-        // Get trip ID from URL parameters
+        // Get trip ID and optional leg number from URL parameters
         const urlParams = new URLSearchParams(window.location.search);
         const tripId = urlParams.get('id');
+        const urlLegParam = urlParams.get('leg');
+        const requestedLeg = urlLegParam !== null ? parseInt(urlLegParam, 10) : null;
         
         // Global variables to store trip data and legs
         let currentTrip = null;
@@ -668,9 +670,20 @@
                     fullTrackData = trackResult.data;
                 }
 
-                // Display leg selector and initial trip view immediately
-                updateLegSelector();
-                await loadTripDetails(tripId, null);
+                // Determine initial leg from URL parameter (validate against loaded legs)
+                let initialLeg = null;
+                let initialLegNumber = null;
+                if (requestedLeg !== null && !isNaN(requestedLeg)) {
+                    const leg = currentLegs.find(l => l.leg_number === requestedLeg);
+                    if (leg) {
+                        initialLeg = leg;
+                        initialLegNumber = requestedLeg;
+                    }
+                }
+
+                // Display leg selector and initial trip/leg view immediately
+                updateLegSelector(initialLegNumber);
+                await loadTripDetails(tripId, initialLeg);
 
                 // Wait for Google Maps to finish (it may still be loading)
                 const mapsLoaded = await mapsPromise;
@@ -686,18 +699,32 @@
             }
         }
 
-        function updateLegSelector() {
+        function updateLegSelector(initialLegNumber) {
             if (currentLegs.length === 0) {
                 // No legs, don't show selector
                 return;
             }
 
             window.legNavigation = [null, ...currentLegs];
-            window.currentLegIndex = 0;
+
+            // Set initial index from URL parameter if valid
+            if (initialLegNumber !== null && initialLegNumber !== undefined) {
+                const idx = window.legNavigation.findIndex(l => l !== null && l.leg_number === initialLegNumber);
+                window.currentLegIndex = idx > 0 ? idx : 0;
+            } else {
+                window.currentLegIndex = 0;
+            }
             
             const description = currentTrip.description || 'Trip ' + currentTrip.id;
             document.getElementById('tripDescriptionLabel').textContent = description;
-            document.getElementById('legDisplay').textContent = 'Trip (' + currentLegs.length + ' legs)';
+
+            const displayIdx = window.currentLegIndex;
+            if (displayIdx === 0) {
+                document.getElementById('legDisplay').textContent = 'Trip (' + currentLegs.length + ' legs)';
+            } else {
+                const leg = window.legNavigation[displayIdx];
+                document.getElementById('legDisplay').textContent = 'Leg ' + leg.leg_number + ' of ' + currentLegs.length;
+            }
         }
 
         function previousLeg() {

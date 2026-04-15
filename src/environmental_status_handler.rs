@@ -99,7 +99,7 @@ impl EnvironmentalStatusHandler {
     /// Returns Err if there was a database error
     pub fn handle_environment_status(
         &mut self,
-        vessel_db: &Option<VesselDatabase>,
+        vessel_db: &VesselDatabase,
         env_monitor: &mut EnvironmentalMonitor,
         now: Instant,
     ) -> Result<usize, Box<dyn std::error::Error>> {
@@ -108,45 +108,42 @@ impl EnvironmentalStatusHandler {
 }
 
 /// Handles environmental status persistence to the database
-/// 
+///
 /// This function processes environmental metrics and writes them to the database
 /// when conditions are met (database connected, time synchronized, metrics ready).
 fn handle_environment_status(
-    vessel_db: &Option<VesselDatabase>,
+    vessel_db: &VesselDatabase,
     env_monitor: &mut EnvironmentalMonitor,
     state: &mut EnvironmentalStatusState,
     now: Instant,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     let mut written_count = 0;
-    // Write to database if connected, time to persist, and time is synchronized
-    if let Some(ref db) = *vessel_db {
-        let now_timestamp = dirty_instant_to_systemtime(now); // used for database timestamp
-        let metrics_to_persist = state.get_metrics_to_persist(env_monitor, now);
-        if !metrics_to_persist.is_empty() {
-            for metricid in metrics_to_persist.iter() {
-                debug!("Persisting environmental metric: {}", metricid.name());
-                let data = env_monitor.calculate_metric_data(*metricid);
-                if let Some(metric_data) = data {
-                    debug!("Metric Data for {}: avg={:?}, max={:?}, min={:?}, count={:?}", 
-                        metricid.name(), 
-                        metric_data.avg, 
-                        metric_data.max, 
-                        metric_data.min,
-                        metric_data.count);
-                    if let Err(e) = db.insert_environmental_metrics(&metric_data, *metricid, now_timestamp) {
-                        warn!("Error writing {} data to database: {}", metricid.name(), e);
-                        return Err(e);
-                    } else {
-                        state.mark_metric_persisted(*metricid, now);
-                        env_monitor.cleanup_all_samples(*metricid);
-                        debug!("Environmental metric {} written to database", metricid.name());
-                        written_count += 1;
-                        
-                        // Note: Realtime data is now broadcast directly from NMEA message processing in main loop
-                    }
+    let now_timestamp = dirty_instant_to_systemtime(now); // used for database timestamp
+    let metrics_to_persist = state.get_metrics_to_persist(env_monitor, now);
+    if !metrics_to_persist.is_empty() {
+        for metricid in metrics_to_persist.iter() {
+            debug!("Persisting environmental metric: {}", metricid.name());
+            let data = env_monitor.calculate_metric_data(*metricid);
+            if let Some(metric_data) = data {
+                debug!("Metric Data for {}: avg={:?}, max={:?}, min={:?}, count={:?}",
+                    metricid.name(),
+                    metric_data.avg,
+                    metric_data.max,
+                    metric_data.min,
+                    metric_data.count);
+                if let Err(e) = vessel_db.insert_environmental_metrics(&metric_data, *metricid, now_timestamp) {
+                    warn!("Error writing {} data to database: {}", metricid.name(), e);
+                    return Err(e);
                 } else {
-                    debug!("No data available for metric: {}", metricid.name());
+                    state.mark_metric_persisted(*metricid, now);
+                    env_monitor.cleanup_all_samples(*metricid);
+                    debug!("Environmental metric {} written to database", metricid.name());
+                    written_count += 1;
+
+                    // Note: Realtime data is now broadcast directly from NMEA message processing in main loop
                 }
+            } else {
+                debug!("No data available for metric: {}", metricid.name());
             }
         }
     }

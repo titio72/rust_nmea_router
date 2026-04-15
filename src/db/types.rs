@@ -1,5 +1,5 @@
 use mysql::Pool;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 use crate::trip::Trip;
 use crate::position_utils::Position;
@@ -236,34 +236,119 @@ impl HealthCheckManager {
     }
     
     /// Perform health check and handle reconnection if needed
-    /// Returns the updated database connection (may be None if reconnection fails)
+    /// Returns Ok(true) if a check was performed, Ok(false) if not time yet,
+    /// or Err if reconnection failed after all retries
     pub fn check_and_reconnect(
         &mut self,
-        db: &mut Option<VesselDatabase>,
+        db: &Arc<RwLock<VesselDatabase>>,
         db_url: &str,
-    ) -> bool {
+    ) -> Result<bool, Box<dyn std::error::Error>> {
         use tracing::{info, warn};
-        
+
         if !self.should_check() {
-            return false;
+            return Ok(false);
         }
-        
-        let mut did_check = false;
-        if let Some(database) = db {
-            match database.health_check() {
-                Ok(_) => {
-                    info!("[DB Health] Connection healthy");
-                }
-                Err(e) => {
-                    warn!("[DB Health] Connection check failed: {}", e);
-                    warn!("Attempting to reconnect to database...");
-                    *db = VesselDatabase::reconnect_with_retry(db_url, 3);
-                }
-            }
-            did_check = true;
+
+        // Acquire read lock for health check
+        let health_ok = {
+            let db_read = db.read().unwrap_or_else(|e| e.into_inner());
+            db_read.health_check().is_ok()
+        };
+
+        if health_ok {
+            info!("[DB Health] Connection healthy");
+        } else {
+            warn!("[DB Health] Connection check failed");
+            self.do_reconnect(db, db_url)?;
         }
-        
+
         self.reset();
-        did_check
+        Ok(true)
+    }
+
+    /// Force immediate reconnection attempt (called reactively on write failures)
+    /// Returns Ok(true) if reconnection succeeded, Err if it failed
+    pub fn force_reconnect(
+        &mut self,
+        db: &Arc<RwLock<VesselDatabase>>,
+        db_url: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        use tracing::warn;
+        warn!("[DB Health] Reactive reconnection triggered");
+        self.do_reconnect(db, db_url)?;
+        self.reset();
+        Ok(true)
+    }
+
+    /// Internal reconnection logic shared by periodic and reactive paths
+    fn do_reconnect(
+        &self,
+        db: &Arc<RwLock<VesselDatabase>>,
+        db_url: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use tracing::warn;
+        warn!("Attempting to reconnect to database...");
+        match VesselDatabase::reconnect_with_retry(db_url, 3) {
+            Some(new_db) => {
+                // Acquire write lock to replace the database
+                let mut db_write = db.write().unwrap_or_else(|e| e.into_inner());
+                *db_write = new_db;
+                Ok(())
+            }
+            None => {
+                Err("Database reconnection failed after all retries".into())
+            }
+        }
+    }
+}
+
+/// Check if an error is likely a database connection error that warrants reconnection
+pub fn is_connection_error(err: &dyn std::error::Error) -> bool {
+    let err_str = err.to_string().to_lowercase();
+    err_str.contains("connection")
+        || err_str.contains("timeout")
+        || err_str.contains("broken pipe")
+        || err_str.contains("reset by peer")
+        || err_str.contains("refused")
+        || err_str.contains("network")
+        || err_str.contains("mysql server has gone away")
+        || err_str.contains("lost connection")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_connection_error_detects_connection_errors() {
+        let err: Box<dyn std::error::Error> = "Connection refused".into();
+        assert!(is_connection_error(err.as_ref()));
+
+        let err: Box<dyn std::error::Error> = "Connection timeout".into();
+        assert!(is_connection_error(err.as_ref()));
+
+        let err: Box<dyn std::error::Error> = "MySQL server has gone away".into();
+        assert!(is_connection_error(err.as_ref()));
+
+        let err: Box<dyn std::error::Error> = "Lost connection to MySQL server".into();
+        assert!(is_connection_error(err.as_ref()));
+
+        let err: Box<dyn std::error::Error> = "Broken pipe".into();
+        assert!(is_connection_error(err.as_ref()));
+
+        let err: Box<dyn std::error::Error> = "Network unreachable".into();
+        assert!(is_connection_error(err.as_ref()));
+    }
+
+    #[test]
+    fn test_is_connection_error_ignores_other_errors() {
+        let err: Box<dyn std::error::Error> = "Duplicate entry for key".into();
+        assert!(!is_connection_error(err.as_ref()));
+
+        let err: Box<dyn std::error::Error> = "Column not found".into();
+        assert!(!is_connection_error(err.as_ref()));
+
+        let err: Box<dyn std::error::Error> = "Syntax error in SQL".into();
+        assert!(!is_connection_error(err.as_ref()));
     }
 }

@@ -155,54 +155,33 @@ impl TimeMonitor {
                     "System time successfully set to NMEA time: {} (Unix timestamp)",
                     unix_timestamp
                 );
-                println!("\n╔════════════════════════════════════════════════════════════╗");
-                println!("║  SYSTEM TIME UPDATED                                       ║");
-                println!("╠════════════════════════════════════════════════════════════╣");
-                println!("║  System time synchronized with NMEA2000 time source       ║");
-                println!("║  New timestamp: {} (Unix)                        ║", unix_timestamp);
-                println!("╚════════════════════════════════════════════════════════════╝\n");
             }
             Err(err) => {
                 tracing::error!(
-                    "Failed to set system time: {}. This typically requires root/sudo privileges.",
+                    "Failed to set system time: {}. This operation requires root/sudo privileges.",
                     err
                 );
-                println!("\n╔════════════════════════════════════════════════════════════╗");
-                println!("║  FAILED TO SET SYSTEM TIME                                 ║");
-                println!("╠════════════════════════════════════════════════════════════╣");
-                println!("║  Error: {}                                          ", err);
-                println!("║                                                            ║");
-                println!("║  This operation requires elevated privileges.              ║");
-                println!("║  Run with: sudo ./nmea_router                              ║");
-                println!("╚════════════════════════════════════════════════════════════╝\n");
             }
         }
     }
 
     fn print_time_skew_warning(&self, skew_ms: i64, system_ts: i64, nmea_ts: i64) {
-        println!("\n╔════════════════════════════════════════════════════════════╗");
-        println!("║  WARNING: TIME SKEW DETECTED                               ║");
-        println!("╠════════════════════════════════════════════════════════════╣");
-        
-        if skew_ms > 0 {
-            println!("║  NMEA2000 time is BEHIND system time by {} ms       ", skew_ms);
+        let direction = if skew_ms > 0 { "BEHIND" } else { "AHEAD of" };
+        let action = if self.set_system_time_enabled {
+            "attempting to set system time"
         } else {
-            println!("║  NMEA2000 time is AHEAD of system time by {} ms      ", skew_ms.abs());
-        }
-        
-        println!("║                                                            ║");
-        println!("║  System Time:  {} (Unix timestamp)              ║", system_ts);
-        println!("║  NMEA2000 Time: {} (Unix timestamp)             ║", nmea_ts);
-        println!("║                                                            ║");
-        println!("║  Threshold: {} ms                                       ║", self.time_skew_threshold_ms);
-        
-        if self.set_system_time_enabled {
-            println!("║  Attempting to set system time...                          ║");
-        } else {
-            println!("║  WARNING: DATABASE WRITES DISABLED UNTIL TIME SYNC         ║");
-        }
-        
-        println!("╚════════════════════════════════════════════════════════════╝\n");
+            "database writes disabled until time sync"
+        };
+        tracing::warn!(
+            skew_ms,
+            system_ts,
+            nmea_ts,
+            threshold_ms = self.time_skew_threshold_ms,
+            "Time skew detected: NMEA2000 is {} system time by {} ms; {}",
+            direction,
+            skew_ms.abs(),
+            action
+        );
     }
 }
 
