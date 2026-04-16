@@ -54,6 +54,11 @@ pub struct SignalKBroadcaster {
     last_gnss_dop_broadcast: Option<Instant>,
 
     last_position: Option<Position>,
+
+    /// Last known magnetic variation (radians, East positive)
+    /// Populated from the NMEA packet first; geomagnetic library as fallback.
+    /// Retained across messages to avoid flickering when the source is temporarily unavailable.
+    last_variation_rad: Option<f64>,
 }
 
 impl SignalKBroadcaster {
@@ -83,6 +88,7 @@ impl SignalKBroadcaster {
             last_roll_broadcast: None,
             last_gnss_dop_broadcast: None,
             last_position: None,
+            last_variation_rad: None,
         }
     }
     
@@ -272,18 +278,22 @@ impl MessageHandler for SignalKBroadcaster {
                         self.last_heading_broadcast = Some(now);
 
 
-                        if let Some(pos) = self.last_position {
-                            let var = match crate::utilities::get_variation_deg(pos.latitude, pos.longitude, chrono::Utc::now()) {
-                                Ok(v) => v,
-                                Err(_) => 0.0, // Unable to get variation, revert to magnetic - better than nothing
-                            };
-                            let heading_true = heading.heading + var.to_radians(); // heading is in radians, var is in degrees, convert var to radians
-                            // println!("Calculated true heading: {:.2}° + {:.2}° = {:.2}°", heading.heading.to_degrees(), var, heading_true.to_degrees());
+                        // Prefer variation from the NMEA packet (already radians, no conversion needed).
+                        // Fall back to the geomagnetic library only when the instrument doesn't provide it.
+                        // Cache the last good value so a temporary gap doesn't cause flickering.
+                        if let Some(v) = heading.variation {
+                            self.last_variation_rad = Some(v);
+                        } else if let Some(pos) = self.last_position {
+                            if let Ok(v) = crate::utilities::get_variation_deg(pos.latitude, pos.longitude, chrono::Utc::now()) {
+                                self.last_variation_rad = Some(v.to_radians());
+                            }
+                        }
+                        if let Some(var_rad) = self.last_variation_rad {
+                            let heading_true = heading.heading + var_rad;
                             let values = vec![SignalKValue {
                                 path: "navigation.headingTrue".to_string(),
                                 value: json!(heading_true),
                             }];
-                            
                             self.send_delta(source, timestamp, values);
                         }
                     }

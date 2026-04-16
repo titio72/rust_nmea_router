@@ -320,9 +320,10 @@
                     }
                     
                     // Process delta messages (have 'context' and 'updates')
-                    if (message.context && message.updates) {
-                        //console.log('Received SignalK delta with', message.updates[0]?.values?.length || 0, 'values');
-                        
+                    // Skip AIS target messages — their paths (e.g. navigation.position) would
+                    // overwrite own-vessel data if not filtered here.
+                    if (message.context && message.updates &&
+                            !message.context.startsWith('vessels.urn:mrn:imo:mmsi:')) {
                         for (const update of message.updates) {
                             for (const value of update.values) {
                                 updateValueByPath(value.path, value.value, update.timestamp);
@@ -401,7 +402,7 @@
                         updateLastUpdateTime('gnssLastUpdate', lastUpdate.gnss);
                         break;
                     
-                    // Navigation - Heading True (radians to degrees)
+                    // Navigation - Heading Magnetic (radians to degrees)
                     case 'navigation.headingTrue':
                         const heading_deg = (value * 180 / Math.PI) % 360;
                         currentHeading = heading_deg;

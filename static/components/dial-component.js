@@ -360,11 +360,10 @@ customElements.define('my-roll-dial', class extends HTMLElement {
         // Clamp to -90 to +90 range
         const clampedAngle = Math.max(-90, Math.min(90, rollAngleDeg));
         
-        // Convert roll angle (-90 to +90) to rotation (-180 to 0 degrees)
-        // At -90 (port), needle points left (-180°)
-        // At 0 (upright), needle points up (-90°)
-        // At +90 (starboard), needle points right (0°)
-        const rotationAngle = -90 - clampedAngle;
+        // Convert roll angle (-90 to +90) to SVG rotation
+        // Needle starts pointing up; positive rotation is clockwise (starboard)
+        // At -90 (port), needle points left; at 0 upright, points up; at +90 (starboard), points right
+        const rotationAngle = clampedAngle;
 
         if (this.needle) {
             this.needle.setAttributeNS(null, "transform", `rotate(${rotationAngle} 105 105)`);

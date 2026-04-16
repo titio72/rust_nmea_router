@@ -175,6 +175,15 @@ impl RouterLoop {
         self.metrics.gnss_time_skew = sync.skew;
         self.metrics.gnss_time_skew_status = sync.status;
 
+        /* debugging stuff */
+        /*
+        match &frame.message {
+            nmea2k::pgns::N2kMessage::PositionRapidUpdate(pos) => {
+                print!("Received Position Rapid Update: lat {:.6}, lon {:.6} at {:?}\n", pos.latitude, pos.longitude, now);
+            }
+            _ => {} // Ignore messages we're not interested in
+        }
+        */
 
         self.update_signalk_time_sync_status(&sync);
 
