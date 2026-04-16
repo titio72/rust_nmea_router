@@ -274,7 +274,11 @@
             updateStats();
         }
 
+        let selfContext = null;
+
         function handleDelta(delta) {
+            const ctx = delta.context;
+            if (selfContext && ctx && ctx !== selfContext) return;
             messageCount++;
             
             // Process updates
@@ -308,8 +312,10 @@
         }
 
         function handleHello(hello) {
+            if (hello.self) {
+                selfContext = hello.self.startsWith('vessels.') ? hello.self : `vessels.${hello.self}`;
+            }
             addSystemMessage(`Connected to ${hello.name} v${hello.version}`, 'success');
-            console.log('SignalK Server Hello:', hello);
         }
 
         function addSystemMessage(text, type = 'info') {
