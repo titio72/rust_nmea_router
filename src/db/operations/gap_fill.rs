@@ -290,7 +290,7 @@ impl VesselDatabase {
                   SUM(CASE WHEN is_moored = 0 AND engine_on != 1 THEN total_time_ms ELSE 0 END) AS time_sailing,
                   SUM(CASE WHEN is_moored = 0 AND engine_on = 1 THEN total_distance_nm ELSE 0 END) AS dist_motoring,
                   SUM(CASE WHEN is_moored = 0 AND engine_on != 1 THEN total_distance_nm ELSE 0 END) AS dist_sailed,
-                  DATE_FORMAT(MAX(timestamp), '%Y-%m-%d %H:%i:%S.%f') AS last_ts
+                  MAX(timestamp) AS last_ts
               FROM vessel_status
               WHERE timestamp BETWEEN :start AND :end",
             params! { "start" => &start_str, "end" => &end_str },
@@ -302,7 +302,17 @@ impl VesselDatabase {
             let time_sailing: u64 = row.get("time_sailing").unwrap_or(0);
             let dist_motoring: f64 = row.get("dist_motoring").unwrap_or(0.0);
             let dist_sailed: f64 = row.get("dist_sailed").unwrap_or(0.0);
-            let last_ts_str: Option<String> = row.get("last_ts");
+
+            // MariaDB may return MAX(timestamp) as Value::Date or Value::Bytes depending
+            // on context (aggregate vs plain column). Handle both to avoid a panic.
+            let last_ts_val: mysql::Value = row.get("last_ts").unwrap_or(mysql::Value::NULL);
+            let last_ts_str: Option<String> = match last_ts_val {
+                mysql::Value::Date(y, mo, d, h, m, s, us) => {
+                    Some(format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06}", y, mo, d, h, m, s, us))
+                }
+                mysql::Value::Bytes(b) => String::from_utf8(b).ok(),
+                _ => None,
+            };
 
             // Update trip end timestamp to the last vessel_status record's time
             let end_ts_str = if let Some(ts) = last_ts_str {

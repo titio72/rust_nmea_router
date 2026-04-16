@@ -24,13 +24,20 @@ pub struct SyntheticPeriod {
     pub env_metrics: Vec<(MetricId, MetricData)>,
 }
 
-const MIN_SAMPLES_FOR_VALIDATION: usize = 10;
+/// Minimum GNSS fixes required to produce a period in the coarse (moored-interval) scan.
+/// Needs to be large enough to compute a reliable median position for mooring detection.
+const MIN_GNSS_SAMPLES_MOORED: usize = 10;
+
+/// Minimum GNSS fixes required to produce a period in the fine (underway-interval) scan.
+/// Short intervals (e.g. 10 s at 1 Hz) yield exactly ~10 fixes; timing jitter can drop
+/// that below the moored threshold.  Two fixes are enough to compute position, speed and COG.
+const MIN_GNSS_SAMPLES_UNDERWAY: usize = 2;
 const MAX_VALID_SOG_KN: f64 = 25.0;
-/// Mooring detection: fraction of positions that must be within `MOORING_RADIUS_NM` of the
-/// median position for the vessel to be considered stationary.
-const MOORING_ACCURACY: f64 = 0.85;
-/// 50 m in nautical miles
-const MOORING_RADIUS_NM: f64 = 50.0 / 1852.0;
+/// SOG threshold for mooring detection.  Below this the vessel is considered stationary.
+/// Using SOG (rather than a radius check) works correctly at any interval length, including
+/// the short underway intervals (e.g. 10 s) where radius-based detection always returns
+/// moored because typical boat speeds keep all fixes within the radius.
+const MOORING_SOG_THRESHOLD_KN: f64 = 0.75;
 
 /// Convert `SystemTime` → `Instant` (approximate, relative to now).
 fn st_to_instant(st: SystemTime) -> Instant {
@@ -102,14 +109,16 @@ fn metric_data(v: &[f64]) -> Option<MetricData> {
 /// `prev_position` is the effective position of the record that preceded this interval
 /// (used for COG/distance/speed calculation).
 /// `prev_heading` is the heading from the previous interval or the "before" record.
+/// `min_gnss_samples` is the minimum number of GNSS fixes required to produce a period.
 ///
-/// Returns `None` if the interval has fewer than `MIN_SAMPLES_FOR_VALIDATION` GNSS fixes.
+/// Returns `None` if the interval has fewer than `min_gnss_samples` GNSS fixes.
 fn synthesize_interval(
     entries: &[LogEntry],
     t_start: SystemTime,
     t_end: SystemTime,
     prev_position: Option<(Position, SystemTime)>,
     prev_heading: Option<f64>,
+    min_gnss_samples: usize,
 ) -> Option<SyntheticPeriod> {
     // ---- Collect entries for this interval ---------------------------------
     let interval_entries: Vec<&LogEntry> = entries
@@ -132,33 +141,12 @@ fn synthesize_interval(
         })
         .collect();
 
-    if gnss_samples.len() < MIN_SAMPLES_FOR_VALIDATION {
+    if gnss_samples.len() < min_gnss_samples {
         return None;
     }
 
-    // ---- Mooring detection ------------------------------------------------
-    let positions_2d: Vec<(f64, f64)> =
-        gnss_samples.iter().map(|g| (g.0, g.1)).collect();
-    let median_pos = median_position(&positions_2d)?;
-
-    let within_radius = gnss_samples.iter().filter(|g| {
-        haversine_distance_nm(g.0, g.1, median_pos.latitude, median_pos.longitude)
-            <= MOORING_RADIUS_NM
-    }).count();
-    let is_moored = (within_radius as f64 / gnss_samples.len() as f64) >= MOORING_ACCURACY;
-
-    // ---- Effective position -----------------------------------------------
-    let current_position = if is_moored {
-        median_pos
-    } else {
-        // Last GNSS fix
-        let last = gnss_samples.last().unwrap();
-        Position { latitude: last.0, longitude: last.1 }
-    };
-
-    // ---- SOG per consecutive GNSS pair ------------------------------------
+    // ---- SOG per consecutive GNSS pair (for true-wind calculation) --------
     let mut sog_values: Vec<f64> = Vec::new();
-    let mut avg_sog_for_wind = 0.0_f64;
     for w in gnss_samples.windows(2) {
         let (lat1, lon1, ts1) = w[0];
         let (lat2, lon2, ts2) = w[1];
@@ -169,9 +157,43 @@ fn synthesize_interval(
             sog_values.push(sog);
         }
     }
-    if !sog_values.is_empty() {
-        avg_sog_for_wind = sog_values.iter().sum::<f64>() / sog_values.len() as f64;
-    }
+    let avg_sog_for_wind = if sog_values.is_empty() {
+        0.0
+    } else {
+        sog_values.iter().sum::<f64>() / sog_values.len() as f64
+    };
+
+    // ---- Mooring detection ------------------------------------------------
+    // Uses net displacement: distance from prev_position to the last GNSS fix,
+    // divided by the interval duration.  GPS position noise is ~2–5 m regardless
+    // of interval length (it does not accumulate), so this stays near 0 kn for a
+    // stationary vessel even over a 10-second window.  Consecutive-pair SOG cannot
+    // be used here because 1 Hz GPS jitter alone produces apparent speeds of 1–5 kn.
+    let total_time_ms = duration_between_sys(t_start, t_end).as_millis() as u64;
+    let last_gnss = gnss_samples.last().unwrap();
+    let last_gnss_pos = Position { latitude: last_gnss.0, longitude: last_gnss.1 };
+    let is_moored = match prev_position {
+        Some((prev_pos, _)) if total_time_ms > 0 => {
+            let net_dist = haversine_distance_nm(
+                prev_pos.latitude, prev_pos.longitude,
+                last_gnss_pos.latitude, last_gnss_pos.longitude,
+            );
+            let net_sog = net_dist / (total_time_ms as f64 / 3_600_000.0);
+            net_sog < MOORING_SOG_THRESHOLD_KN
+        }
+        _ => true,
+    };
+
+    // ---- Effective position -----------------------------------------------
+    let positions_2d: Vec<(f64, f64)> =
+        gnss_samples.iter().map(|g| (g.0, g.1)).collect();
+    let current_position = if is_moored {
+        // Median gives a stable fix when the vessel is stationary.
+        median_position(&positions_2d)?
+    } else {
+        // Last GNSS fix — best estimate of where the vessel is at interval end.
+        last_gnss_pos
+    };
     let max_speed_kn = opt_max(&sog_values).unwrap_or(0.0);
 
     // ---- Wind -------------------------------------------------------------
@@ -310,8 +332,12 @@ fn duration_between_sys(a: SystemTime, b: SystemTime) -> Duration {
 
 // ---- Public entry point ---------------------------------------------------
 
-/// Split the gap window `[gap_start, gap_end]` into intervals of `interval` duration,
-/// synthesise each interval from the provided log `entries`, and return the results.
+/// Split the gap window `[gap_start, gap_end]` into intervals using adaptive granularity:
+/// - Scan coarsely at `moored_interval`.
+/// - When a coarse interval comes out as **underway**, re-synthesise it at the finer
+///   `underway_interval` to get full tracking resolution.
+/// - If the finer re-synthesis yields no periods (too few GNSS samples per sub-interval),
+///   the original coarse period is kept rather than discarding the data.
 ///
 /// `prev_position`: position+timestamp of the record immediately before the gap.
 /// `prev_heading`:  heading of the record immediately before the gap (or `None`).
@@ -321,7 +347,8 @@ pub fn synthesize_gap(
     entries: &[LogEntry],
     gap_start: SystemTime,
     gap_end: SystemTime,
-    interval: Duration,
+    moored_interval: Duration,
+    underway_interval: Duration,
     prev_position: Option<(Position, SystemTime)>,
     prev_heading: Option<f64>,
 ) -> Vec<SyntheticPeriod> {
@@ -332,15 +359,15 @@ pub fn synthesize_gap(
 
     let gap_start_ms = systemtime_to_millis(gap_start);
     let gap_end_ms = systemtime_to_millis(gap_end);
-    let interval_ms = interval.as_millis() as u64;
+    let moored_interval_ms = moored_interval.as_millis() as u64;
 
-    if interval_ms == 0 {
+    if moored_interval_ms == 0 {
         return results;
     }
 
     let mut t_start_ms = gap_start_ms;
     while t_start_ms < gap_end_ms {
-        let t_end_ms = (t_start_ms + interval_ms).min(gap_end_ms);
+        let t_end_ms = (t_start_ms + moored_interval_ms).min(gap_end_ms);
         let t_start = millis_to_systemtime(t_start_ms);
         let t_end = millis_to_systemtime(t_end_ms);
 
@@ -350,17 +377,89 @@ pub fn synthesize_gap(
             t_end,
             current_prev_pos,
             current_prev_heading,
+            MIN_GNSS_SAMPLES_MOORED,
         ) {
-            // Update prev_position / prev_heading for the next interval
-            current_prev_pos = Some((period.vessel_status.position, t_end));
-            current_prev_heading = period.vessel_status.average_heading_deg;
-            results.push(period);
+            if period.vessel_status.is_moored || underway_interval >= moored_interval {
+                // Moored (or no finer interval available) — keep the coarse period as-is.
+                current_prev_pos = Some((period.vessel_status.position, t_end));
+                current_prev_heading = period.vessel_status.average_heading_deg;
+                results.push(period);
+            } else {
+                // Underway — re-synthesise this coarse window at the finer underway interval.
+                let (fine_periods, new_pos, new_heading) = synthesize_at_interval(
+                    entries,
+                    t_start,
+                    t_end,
+                    underway_interval,
+                    current_prev_pos,
+                    current_prev_heading,
+                );
+                // Keep position tracking accurate regardless of what we emit.
+                current_prev_pos = new_pos;
+                current_prev_heading = new_heading;
+
+                // Discard moored fine periods: the preceding coarse moored record
+                // already covers that time at the correct (coarse) granularity.
+                // Only the underway fine periods need to be written.
+                let underway_fine: Vec<_> = fine_periods
+                    .into_iter()
+                    .filter(|p| !p.vessel_status.is_moored)
+                    .collect();
+
+                if underway_fine.is_empty() {
+                    // Fine synthesis yielded no underway periods (GNSS too sparse, or the
+                    // coarse net-displacement was a GPS artefact).  Fall back to the coarse
+                    // period so the window is not silently dropped.
+                    results.push(period);
+                } else {
+                    results.extend(underway_fine);
+                }
+            }
         }
 
         t_start_ms = t_end_ms;
     }
 
     results
+}
+
+/// Synthesise a fixed window `[window_start, window_end]` by slicing it into sub-intervals
+/// of `interval` duration.  Returns the produced periods and the updated prev_position /
+/// prev_heading after the last period.
+fn synthesize_at_interval(
+    entries: &[LogEntry],
+    window_start: SystemTime,
+    window_end: SystemTime,
+    interval: Duration,
+    mut prev_position: Option<(Position, SystemTime)>,
+    mut prev_heading: Option<f64>,
+) -> (Vec<SyntheticPeriod>, Option<(Position, SystemTime)>, Option<f64>) {
+    let mut results = Vec::new();
+
+    let start_ms = systemtime_to_millis(window_start);
+    let end_ms = systemtime_to_millis(window_end);
+    let interval_ms = interval.as_millis() as u64;
+
+    if interval_ms == 0 {
+        return (results, prev_position, prev_heading);
+    }
+
+    let mut t_ms = start_ms;
+    while t_ms < end_ms {
+        let t_end_ms = (t_ms + interval_ms).min(end_ms);
+        let t_start = millis_to_systemtime(t_ms);
+        let t_end = millis_to_systemtime(t_end_ms);
+
+        if let Some(period) = synthesize_interval(entries, t_start, t_end, prev_position, prev_heading, MIN_GNSS_SAMPLES_UNDERWAY) {
+            prev_position = Some((period.vessel_status.position, t_end));
+            prev_heading = period.vessel_status.average_heading_deg;
+            results.push(period);
+        }
+
+        t_ms = t_end_ms;
+    }
+
+    (results, prev_position, prev_heading)
 }
 
 // ---- tests ----------------------------------------------------------------
@@ -395,6 +494,7 @@ mod tests {
             base,
             base + Duration::from_secs(300),
             Duration::from_secs(300),
+            Duration::from_secs(10),
             None,
             None,
         );
@@ -419,6 +519,7 @@ mod tests {
             base,
             base + Duration::from_secs(300),
             Duration::from_secs(300),
+            Duration::from_secs(10),
             Some((prev_pos, base)),
             Some(270.0),
         );
@@ -443,10 +544,13 @@ mod tests {
 
         let prev_pos = Position { latitude: 42.85, longitude: 9.35 };
 
+        // underway_interval equals moored_interval so no re-synthesis happens; the coarse
+        // result is kept and we can assert on it directly.
         let result = synthesize_gap(
             &entries,
             base,
             base + Duration::from_secs(300),
+            Duration::from_secs(300),
             Duration::from_secs(300),
             Some((prev_pos, base)),
             Some(90.0),

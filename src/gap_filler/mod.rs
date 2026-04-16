@@ -70,8 +70,8 @@ pub fn fill_gaps(
         let entries = read_entries_in_range(log_dir, gap.before_timestamp, gap.after_timestamp);
         tracing::info!("  Log entries found: {}", entries.len());
 
-        // Determine the interval to use: moored period (the boat was stationary)
-        let interval = Duration::from_secs(moored_interval_secs);
+        let moored_interval = Duration::from_secs(moored_interval_secs);
+        let underway_interval = config.database.vessel_status.interval_underway();
 
         // Synthesise synthetic periods
         let prev_position = Some((gap.before_position, gap.before_timestamp));
@@ -81,7 +81,8 @@ pub fn fill_gaps(
             &entries,
             gap.before_timestamp,
             gap.after_timestamp,
-            interval,
+            moored_interval,
+            underway_interval,
             prev_position,
             prev_heading,
         );
