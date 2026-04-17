@@ -155,7 +155,7 @@ The current status and last skew value are read by `main.rs` after every message
 
 All queues are bounded by the longer of the underway and moored reporting periods plus a 30 s margin, so older samples are automatically discarded.
 
-**Reporting cadence** — a status report is triggered when the reporting period has elapsed *and* at least 10 position samples have accumulated. The period is shorter when underway (default 30 s) and longer when moored (default 300 s).
+**Reporting cadence** — a status report is triggered when the reporting period has elapsed *and* at least 10 position samples have accumulated. The period is shorter when underway (default 30 s) and longer when moored (default 1800 s / 30 min).
 
 **Noise filtering** — two filters protect data quality:
 - SOG readings above 25 kn are discarded.

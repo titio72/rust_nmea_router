@@ -268,12 +268,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let db_health_check = HealthCheckManager::new(Duration::from_secs(60));
 
     // Create SignalK broadcaster (if enabled)
-    let signalk_broadcaster = if config.signalk.enabled {
-        info!("SignalK broadcaster enabled with {}ms rate limit", config.signalk.rate_limit_ms);
-        Some(SignalKBroadcaster::new(config.signalk.rate_limit_ms, config.signalk.vessel_uuid.clone()))
-    } else {
-        None
-    };
+    let signalk_broadcaster = SignalKBroadcaster::new(config.signalk.rate_limit_ms, config.signalk.vessel_uuid.clone());
 
     RouterLoop::new(
         socket,

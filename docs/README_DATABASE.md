@@ -71,37 +71,23 @@ Enter password: `nmea`
 
 ## Configuration
 
-The application uses the `DATABASE_URL` environment variable for database connection. If not set, it defaults to:
+Database connection is configured in `config.json` (or `/etc/nmea_router/config.json`):
 
-```
-mysql://nmea:nmea@localhost:3306/nmea_router
-```
-
-### Custom Connection String
-
-Set the `DATABASE_URL` environment variable before running:
-
-```bash
-export DATABASE_URL="mysql://username:password@host:port/database"
-cargo run
-```
-
-Or create a `.env` file (optional, requires adding `dotenv` crate):
-
-```
-DATABASE_URL=mysql://nmea:nmea@localhost:3306/nmea_router
+```json
+{
+  "database": {
+    "connection": {
+      "host": "localhost",
+      "port": 3306,
+      "username": "nmea",
+      "password": "nmea",
+      "database_name": "nmea_router"
+    }
+  }
+}
 ```
 
-## Connection String Format
-
-```
-mysql://[user]:[password]@[host]:[port]/[database]
-```
-
-Examples:
-- Local: `mysql://nmea:nmea@localhost:3306/nmea_router`
-- Remote: `mysql://user:pass@192.168.1.100:3306/nmea_router`
-- With options: `mysql://user:pass@host:3306/db?socket=/var/run/mysqld/mysqld.sock`
+See `config.example.json` for all options.
 
 ## Data Stored
 
@@ -119,7 +105,7 @@ Every 30 seconds, the following vessel status data is written to the database:
 | `max_speed_kn` | DECIMAL(6,3) | Maximum speed over reporting period in knots |
 | `average_wind_speed_kn` | DECIMAL(6,3) | Average wind speed over reporting period in knots (NULL if no wind data) |
 | `average_wind_angle_deg` | DECIMAL(6,3) | Average wind direction over reporting period in degrees (NULL if no wind data) |
-| `is_moored` | BOOLEAN | TRUE if moored (stable position for 2+ min) |
+| `is_moored` | BOOLEAN | TRUE if moored (VMG < 0.25 kn for 85% of 180 s window) |
 | `engine_on` | BOOLEAN | TRUE if engine is running |
 | `total_distance_nm` | DOUBLE | Distance traveled since last report in nautical miles |
 | `total_time_ms` | BIGINT | Time elapsed since last report (milliseconds) |

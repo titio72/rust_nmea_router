@@ -392,7 +392,7 @@ class AppIcon extends HTMLElement {
     render() {
         const iconName = this.getAttribute('name');
         const fill = this.getAttribute('fill') || 'currentColor';
-        const svgContent = getIconSVG(iconName, fill);
+        const svgContent = getIconSVG(iconName);
         this.shadowRoot.innerHTML = `
             <style>
                 :host {

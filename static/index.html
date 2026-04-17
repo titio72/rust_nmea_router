@@ -447,6 +447,10 @@
                 <span>SignalK Broadcasting:</span>
                 <div class="toggle-switch" id="signalkToggle"></div>
             </div>
+            <div class="tracking-toggle-container" onclick="toggleUdpBroadcast()">
+                <span>UDP Broadcasting:</span>
+                <div class="toggle-switch" id="udpBroadcastToggle"></div>
+            </div>
             <div class="trips-filter">
                 <label for="yearFilter">Filter:</label>
                 <select id="yearFilter" class="styled-select" onchange="onFilterChange()">
@@ -1177,6 +1181,56 @@
             } catch (error) {
                 console.error('Error toggling signalk:', error);
                 alert('Failed to update signalk status. Check console for details.');
+            }
+        }
+
+        // Initialize UDP broadcast status
+        async function initializeUdpBroadcast() {
+            try {
+                const response = await fetch('/api/udp_broadcast/status');
+                if (!response.ok) {
+                    throw new Error('Failed to load UDP broadcast status');
+                }
+                const result = await response.json();
+                const toggle = document.getElementById('udpBroadcastToggle');
+                if (result.data && result.data.enabled) {
+                    toggle.classList.add('active');
+                }
+            } catch (error) {
+                console.error('Error loading UDP broadcast status:', error);
+            }
+        }
+        initializeUdpBroadcast();
+
+        // Toggle UDP broadcasting
+        async function toggleUdpBroadcast() {
+            const toggle = document.getElementById('udpBroadcastToggle');
+            const newStatus = !toggle.classList.contains('active');
+
+            try {
+                const response = await fetch('/api/udp_broadcast/status', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ enabled: newStatus })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to update UDP broadcast status');
+                }
+
+                const result = await response.json();
+                if (result.status === 'ok' && result.data) {
+                    if (result.data.enabled) {
+                        toggle.classList.add('active');
+                    } else {
+                        toggle.classList.remove('active');
+                    }
+                }
+            } catch (error) {
+                console.error('Error toggling UDP broadcast:', error);
+                alert('Failed to update UDP broadcast status. Check console for details.');
             }
         }
 

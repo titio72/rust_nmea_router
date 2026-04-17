@@ -41,7 +41,7 @@ pub struct RouterLoop {
     environmental_status_handler: EnvironmentalStatusHandler,
     // Broadcasters
     udp_broadcaster: UdpBroadcaster,
-    signalk_broadcaster: Option<SignalKBroadcaster>,
+    signalk_broadcaster: SignalKBroadcaster,
     // Database
     vessel_db: Arc<RwLock<VesselDatabase>>,
     // Metrics & health
@@ -62,7 +62,7 @@ impl RouterLoop {
         vessel_status_handler: VesselStatusHandler,
         environmental_status_handler: EnvironmentalStatusHandler,
         udp_broadcaster: UdpBroadcaster,
-        signalk_broadcaster: Option<SignalKBroadcaster>,
+        signalk_broadcaster: SignalKBroadcaster,
         vessel_db: Arc<RwLock<VesselDatabase>>,
         metrics: AppMetrics,
         metrics_logger: MetricsLogger,
@@ -163,12 +163,13 @@ impl RouterLoop {
     /// `Instant::now()` inside business logic.
     pub(crate) fn process_n2k_message(&mut self, frame: &N2kFrame, now: Instant) {
         self.time_monitor.handle_message(frame, now);
-        self.udp_broadcaster.handle_message(frame, now);
+        
+        if self.is_udp_broadcast_enabled() {
+            self.udp_broadcaster.handle_message(frame, now);
+        }
 
         if self.is_signalk_enabled() {
-            if let Some(ref mut sk) = self.signalk_broadcaster {
-                sk.handle_message(frame, now);
-            }
+            self.signalk_broadcaster.handle_message(frame, now);
         }
 
         let sync = self.time_monitor.time_sync_status();
@@ -209,18 +210,15 @@ impl RouterLoop {
             warn!("Skipping message processing - time not synchronized - skew {}", sync);
         }
     }
-
-    
+ 
     // ── Private helpers ──────────────────────────────────────────────────────
 
     fn update_signalk_time_sync_status(&mut self, sync: &crate::time_monitor::TimeSyncStatusAndSkew) {
-        if let Some(ref mut sk) = self.signalk_broadcaster {
-            let status_str = match sync.status {
-                TimeSyncStatus::Synchronized => "synced".to_string(),
-                _ => "not_synced".to_string(),
-            };            
-            sk.update_time_sync_status(status_str, sync.skew);
-        }
+        let status_str = match sync.status {
+            TimeSyncStatus::Synchronized => "synced".to_string(),
+            _ => "not_synced".to_string(),
+        };            
+        self.signalk_broadcaster.update_time_sync_status(status_str, sync.skew);
     }
     
     fn handle_vessel_status_write(
@@ -300,7 +298,14 @@ impl RouterLoop {
 
     fn is_signalk_enabled(&self) -> bool {
         let db = self.vessel_db.read().unwrap_or_else(|e| e.into_inner());
-        db.get_system_status("signalk_enabled").unwrap_or(false)
+        let user_conf = db.get_system_status("signalk_enabled").unwrap_or(false);
+        user_conf && self.config.signalk.enabled
+    }
+
+    fn is_udp_broadcast_enabled(&self) -> bool {
+        let db = self.vessel_db.read().unwrap_or_else(|e| e.into_inner());
+        let user_conf = db.get_system_status("udp_broadcast_enabled").unwrap_or(false);
+        user_conf && self.config.udp.enabled
     }
 
     fn broadcast_mooring_status(&self, vessel_moored_status: bool, now: Instant) {

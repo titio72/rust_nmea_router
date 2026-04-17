@@ -1,5 +1,7 @@
 # Running NMEA Router as a systemd Service
 
+> **Recommended approach**: use `sudo ./install.sh` from the project root — it builds the release binary, installs it to `/opt/nmea_router`, copies config to `/etc/nmea_router`, sets up the log directory `/var/log/nmea_router`, and registers the systemd unit. The manual steps below are for reference or customisation only.
+
 ## Prerequisites
 
 1. Build the release version:
@@ -123,13 +125,13 @@ sudo udevadm trigger
 
 ### Database connection issues
 
-Ensure PostgreSQL is running and accessible before the service starts. You can add a dependency in the service file:
+Ensure MariaDB is running and accessible before the service starts. You can add a dependency in the service file:
 
 ```ini
 [Unit]
 Description=NMEA2000 Router Service
-After=network.target postgresql.service
-Requires=postgresql.service
+After=network.target mariadb.service
+Requires=mariadb.service
 ```
 
 ## Configuration Updates

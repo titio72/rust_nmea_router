@@ -763,6 +763,38 @@ pub async fn get_signalk_status(
     Ok(Json(ApiResponse::ok(response)))
 }
 
+pub async fn set_udp_broadcast_status(
+    State(state): State<AppState>,
+    Json(request): Json<SignalKStatusRequest>,
+) -> Result<Json<ApiResponse<SignalKStatusResponse>>, StatusCode> {
+    info!(?request, "POST /api/udp_broadcast/status called");
+    
+    // Save UDP broadcast status to database
+    if let Err(e) = state.db().set_system_status("udp_broadcast_enabled", request.enabled) {
+        error!(error = %e, "Failed to set UDP broadcast status in database");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    
+    let response = SignalKStatusResponse {
+        enabled: request.enabled,
+    };
+    
+    info!("UDP broadcast status updated to: {}", request.enabled);
+    Ok(Json(ApiResponse::ok(response)))
+}
+
+pub async fn get_udp_broadcast_status(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<SignalKStatusResponse>>, StatusCode> {
+    // Get UDP broadcast status from database
+    let enabled = state.db().get_system_status("udp_broadcast_enabled")
+        .unwrap_or(false);
+    
+    let response = SignalKStatusResponse { enabled };
+    Ok(Json(ApiResponse::ok(response)))
+}
+
+
 pub async fn set_signalk_status(
     State(state): State<AppState>,
     Json(request): Json<SignalKStatusRequest>,
@@ -1033,6 +1065,8 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/metrics/status", post(set_metrics_status))
         .route("/signalk/status", get(get_signalk_status))
         .route("/signalk/status", post(set_signalk_status))
+        .route("/udp_broadcast/status", get(get_udp_broadcast_status))
+        .route("/udp_broadcast/status", post(set_udp_broadcast_status))
         .route("/backup", get(list_backups))
         .route("/backup", post(post_backup))
         .route("/backup", delete(delete_backup))
