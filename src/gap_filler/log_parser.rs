@@ -256,8 +256,7 @@ fn parse_timestamp(s: &str) -> Option<SystemTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::UNIX_EPOCH;
-
+    
     #[test]
     fn test_parse_gnss_line() {
         let line = "2026-04-11T06:00:00.677Z GNSS    9.4553728   42.9589615 2026-04-11T06:00:00.499Z -178 0";

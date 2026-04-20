@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - NMEA Router</title>
+    <link rel="icon" type="image/png" href="/images/nmeasail.png">
+    <link rel="stylesheet" href="/shared.css">
+    <script src="/js/shared-theme.js"></script>
+    <style>
+        body {
+            min-height: 100vh;
+            background-color: var(--bg-primary);
+            transition: background-color 0.3s ease;
+        }
+        .page-wrapper {
+            max-width: 1500px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        .login-card {
+            max-width: 400px;
+            margin: 60px auto 0;
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            box-shadow: 0 2px 12px var(--card-shadow);
+            padding: 32px 36px 36px;
+            transition: background-color 0.3s ease;
+        }
+        .login-card h3 {
+            margin: 0 0 24px;
+            color: var(--text-primary);
+            font-size: 20px;
+        }
+        .login-field {
+            margin-bottom: 20px;
+        }
+        .login-field label {
+            display: block;
+            margin-bottom: 6px;
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+        .login-field input[type="password"] {
+            width: 100%;
+            padding: 10px 14px;
+            box-sizing: border-box;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 15px;
+            transition: border-color 0.2s ease, background-color 0.3s ease;
+            outline: none;
+        }
+        .login-field input[type="password"]:focus {
+            border-color: var(--sailing-color);
+        }
+        .login-btn {
+            width: 100%;
+            padding: 11px;
+            background: var(--sailing-color);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 15px;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .login-btn:hover { opacity: 0.85; }
+        .login-btn:disabled { opacity: 0.6; cursor: default; }
+        .login-error {
+            color: #e74c3c;
+            font-size: 14px;
+            margin-top: 12px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="page-wrapper">
+        <div class="header-bar">
+            <div style="display: flex; align-items: center; gap: 15px;">
+                <img id="brandLogo" src="/images/Itaca_v3.svg" alt="Logo" style="height: 80px; margin-right: 15px;">
+                <div>
+                    <h2 style="margin: 0; color: var(--text-primary);">NMEA Router</h2>
+                </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; margin-left: auto;">
+                <button class="theme-toggle" id="themeBtn" onclick="baseToggleTheme()">
+                    <span id="theme-icon"></span><span id="theme-text">Dark</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="login-card">
+            <h3>Sign In</h3>
+            <form id="loginForm" onsubmit="handleLogin(event)">
+                <div class="login-field">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password"
+                           autocomplete="current-password" required autofocus>
+                </div>
+                <button type="submit" class="login-btn" id="loginBtn">Sign In</button>
+                <div class="login-error" id="loginError">Incorrect password.</div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        initializeTheme();
+
+        async function handleLogin(e) {
+            e.preventDefault();
+            const pw = document.getElementById('password').value;
+            const err = document.getElementById('loginError');
+            const btn = document.getElementById('loginBtn');
+            err.style.display = 'none';
+            btn.disabled = true;
+            try {
+                const resp = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: pw }),
+                    credentials: 'same-origin'
+                });
+                if (resp.ok) {
+                    const raw = new URLSearchParams(location.search).get('next') || '/';
+                    const dest = raw.startsWith('/') && !raw.startsWith('//') && !raw.includes(':') ? raw : '/';
+                    location.replace(dest);
+                } else {
+                    err.style.display = 'block';
+                    document.getElementById('password').value = '';
+                    document.getElementById('password').focus();
+                }
+            } catch {
+                err.textContent = 'Network error. Please retry.';
+                err.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>

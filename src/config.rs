@@ -35,6 +35,17 @@ pub struct WebConfig {
     pub port: u16,
     /// Google Maps API key for the web interface
     pub google_maps_api_key: Option<String>,
+    /// Shared password for web UI access (plaintext)
+    pub auth_password: Option<String>,
+    /// Session lifetime in seconds (default: 7 days)
+    #[serde(default = "default_session_duration_secs")]
+    pub session_duration_secs: u64,
+    /// Set Secure flag on session cookies. Disable for local HTTP dev.
+    #[serde(default = "default_secure_cookies")]
+    pub secure_cookies: bool,
+    /// Restrict UI and API to read-only trip/stats views (for public internet deployment).
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 fn default_web_enabled() -> bool {
@@ -45,12 +56,24 @@ fn default_web_port() -> u16 {
     8080
 }
 
+fn default_session_duration_secs() -> u64 {
+    7 * 24 * 3600
+}
+
+fn default_secure_cookies() -> bool {
+    true
+}
+
 impl Default for WebConfig {
     fn default() -> Self {
         Self {
             enabled: true,
             port: 8080,
             google_maps_api_key: None,
+            auth_password: None,
+            session_duration_secs: default_session_duration_secs(),
+            secure_cookies: default_secure_cookies(),
+            read_only: false,
         }
     }
 }
@@ -973,6 +996,10 @@ mod tests {
             enabled: false,
             port: 9000,
             google_maps_api_key: Some("test_key".to_string()),
+            auth_password: None,
+            session_duration_secs: default_session_duration_secs(),
+            secure_cookies: false,
+            read_only: false,
         };
         assert_eq!(config.enabled, false);
         assert_eq!(config.port, 9000);
@@ -985,6 +1012,10 @@ mod tests {
             enabled: true,
             port: 3000,
             google_maps_api_key: None,
+            auth_password: None,
+            session_duration_secs: default_session_duration_secs(),
+            secure_cookies: true,
+            read_only: false,
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("3000"));

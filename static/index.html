@@ -435,19 +435,19 @@
 
     <div id="settingsSection" class="level-1-container">
         <div style="display: flex; gap: 15px; align-items: center;">
-            <div class="tracking-toggle-container" onclick="toggleTracking()">
+            <div class="tracking-toggle-container" onclick="toggleTracking()" data-ro-hidden="true">
                 <span>Position Tracking:</span>
                 <div class="toggle-switch" id="trackingToggle"></div>
             </div>
-            <div class="tracking-toggle-container" onclick="toggleMetrics()">
+            <div class="tracking-toggle-container" onclick="toggleMetrics()" data-ro-hidden="true">
                 <span>Metrics Tracking:</span>
                 <div class="toggle-switch" id="metricsToggle"></div>
             </div>
-            <div class="tracking-toggle-container" onclick="toggleSignalk()">
+            <div class="tracking-toggle-container" onclick="toggleSignalk()" data-ro-hidden="true">
                 <span>SignalK Broadcasting:</span>
                 <div class="toggle-switch" id="signalkToggle"></div>
             </div>
-            <div class="tracking-toggle-container" onclick="toggleUdpBroadcast()">
+            <div class="tracking-toggle-container" onclick="toggleUdpBroadcast()" data-ro-hidden="true">
                 <span>UDP Broadcasting:</span>
                 <div class="toggle-switch" id="udpBroadcastToggle"></div>
             </div>
@@ -498,7 +498,7 @@
 
     <!-- Trips Section -->
     <div id="tripsSection" class="level-1-container">
-        <div class="trip-header"><h2 id="tripsTitle">Trips</h2><button class="app-btn" onclick="triggerImportDialog()" title="Import trip"><app-icon name="upload"></app-icon></button></div>
+        <div class="trip-header"><h2 id="tripsTitle">Trips</h2><button class="app-btn" onclick="triggerImportDialog()" title="Import trip" data-ro-hidden="true"><app-icon name="upload"></app-icon></button></div>
         <div id="content">
             <div class="loading">Loading trips...</div>
         </div>
@@ -567,7 +567,7 @@
             });
         }
 
-        function filterTrips() {
+        async function filterTrips() {
             let filteredTrips = window.allTrips || [];
 
             const endDate = getHeatmapEndDate();
@@ -583,10 +583,10 @@
                 return tripEndDate >= startDateStr && tripStartDate <= endDateStr;
             });
 
-            display_trips(filteredTrips);
+            await display_trips(filteredTrips);
         }
 
-        function display_trips(trips) {
+        async function display_trips(trips) {
             document.getElementById('tripsTitle').textContent = `Trips (${trips.length})`;
 
             const content = document.getElementById('content');
@@ -595,6 +595,8 @@
                 content.innerHTML = '<div class="no-trips">No trips found in the last 12 months</div>';
                 return;
             }
+
+            const readOnly = await fetchUiMode();
 
             const grid = document.createElement('div');
             grid.className = 'trips-grid';
@@ -613,6 +615,7 @@
                 card.setAttribute('data-motoring-time', trip.motoring_time_ms);
                 card.setAttribute('data-moored-time', trip.moored_time_ms || 0);
                 card.setAttribute('data-uuid', trip.uuid || '');
+                if (readOnly) card.setAttribute('data-readonly', 'true');
 
                 grid.appendChild(card);
             });
@@ -1050,7 +1053,7 @@
                 console.error('Error loading tracking status:', error);
             }
         }
-        initializeTracking();
+        fetchUiMode().then(readOnly => { if (!readOnly) initializeTracking(); });
 
         // Toggle tracking
         async function toggleTracking() {
@@ -1100,7 +1103,7 @@
                 console.error('Error loading metrics status:', error);
             }
         }
-        initializeMetrics();
+        fetchUiMode().then(readOnly => { if (!readOnly) initializeMetrics(); });
 
         // Toggle metrics tracking
         async function toggleMetrics() {
@@ -1150,7 +1153,7 @@
                 console.error('Error loading signalk status:', error);
             }
         }
-        initializeSignalk();
+        fetchUiMode().then(readOnly => { if (!readOnly) initializeSignalk(); });
 
         // Toggle SignalK broadcasting
         async function toggleSignalk() {
@@ -1200,7 +1203,7 @@
                 console.error('Error loading UDP broadcast status:', error);
             }
         }
-        initializeUdpBroadcast();
+        fetchUiMode().then(readOnly => { if (!readOnly) initializeUdpBroadcast(); });
 
         // Toggle UDP broadcasting
         async function toggleUdpBroadcast() {

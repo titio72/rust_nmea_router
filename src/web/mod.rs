@@ -1,4 +1,5 @@
 pub mod api;
+pub mod auth;
 pub mod server;
 pub mod broadcast_manager;
 pub mod signalk_messages;

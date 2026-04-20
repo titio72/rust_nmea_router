@@ -26,6 +26,10 @@ const ICON_MAP = {
     'geo':      `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-geo-alt" viewBox="0 0 16 16">
                     <path d="M12.166 8.94c-.524 1.062-1.234 2.12-1.96 3.07A32 32 0 0 1 8 14.58a32 32 0 0 1-2.206-2.57c-.726-.95-1.436-2.008-1.96-3.07C3.304 7.867 3 6.862 3 6a5 5 0 0 1 10 0c0 .862-.305 1.867-.834 2.94M8 16s6-5.686 6-10A6 6 0 0 0 2 6c0 4.314 6 10 6 10"/>
                     <path d="M8 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4m0 1a3 3 0 1 0 0-6 3 3 0 0 0 0 6"/>
+                </svg>`,
+    'logout':   `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                    <path fill-rule="evenodd" d="M10 12.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5h8a.5.5 0 0 1 .5.5v2a.5.5 0 0 0 1 0v-2A1.5 1.5 0 0 0 9.5 2h-8A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h8a1.5 1.5 0 0 0 1.5-1.5v-2a.5.5 0 0 0-1 0z"/>
+                    <path fill-rule="evenodd" d="M15.854 8.354a.5.5 0 0 0 0-.708l-3-3a.5.5 0 0 0-.708.708L14.293 7.5H5.5a.5.5 0 0 0 0 1h8.793l-2.147 2.146a.5.5 0 0 0 .708.708z"/>
                 </svg>`
 };
 
@@ -83,6 +87,40 @@ function baseToggleTheme() {
     return isDark;
 }
 
+async function handleLogout() {
+    try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); }
+    finally { location.replace('/login.html'); }
+}
+
+// Cached UI mode: null = not yet loaded, true/false = read_only value
+let _uiReadOnly = null;
+
+async function fetchUiMode() {
+    if (_uiReadOnly !== null) return _uiReadOnly;
+    try {
+        const resp = await fetch('/api/config/read_only', { credentials: 'same-origin' });
+        if (resp.ok) {
+            const data = await resp.json();
+            _uiReadOnly = !!data.read_only;
+        } else {
+            _uiReadOnly = false;
+        }
+    } catch (_) {
+        _uiReadOnly = false;
+    }
+    return _uiReadOnly;
+}
+
+async function applyUiMode() {
+    const readOnly = await fetchUiMode();
+    if (readOnly) {
+        document.querySelectorAll('[data-ro-hidden]').forEach(el => { el.style.display = 'none'; });
+    }
+    document.dispatchEvent(new CustomEvent('uiModeLoaded', { detail: { readOnly } }));
+}
+
+document.addEventListener('DOMContentLoaded', applyUiMode);
+
 /**
  * Create the common navigation header for all pages
  * @param {string} currentPage - The current page identifier ('trips', 'monitor', 'stats', 'signalk-browser')
@@ -90,12 +128,12 @@ function baseToggleTheme() {
  */
 function createHeaderBar(currentPage, showConnectionStatus = false) {
     const navItems = [
-        { href: '/', label: 'Trips', page: 'trips' },
-        { href: '/realtime.html', label: 'Monitor', page: 'monitor' },
-        { href: '/ais.html', label: 'AIS', page: 'ais' },
-        { href: '/yearly-stats.html', label: 'Stats', page: 'stats' },
-        { href: '/signalk-browser.html', label: 'SignalK Browser', page: 'signalk-browser' },
-        { href: '/backup.html', label: 'Backup', page: 'backup' }
+        { href: '/', label: 'Trips', page: 'trips', roHidden: false },
+        { href: '/realtime.html', label: 'Monitor', page: 'monitor', roHidden: true },
+        { href: '/ais.html', label: 'AIS', page: 'ais', roHidden: true },
+        { href: '/yearly-stats.html', label: 'Stats', page: 'stats', roHidden: false },
+        { href: '/signalk-browser.html', label: 'SignalK Browser', page: 'signalk-browser', roHidden: true },
+        { href: '/backup.html', label: 'Backup', page: 'backup', roHidden: true }
     ];
 
     let headerHTML = `
@@ -105,10 +143,11 @@ function createHeaderBar(currentPage, showConnectionStatus = false) {
                 <div>
                     <h2 style="margin: 0; color: var(--text-primary);">NMEA Router</h2>
                     <nav class="navigation-links" style="margin-top: 8px;">`;
-    
+
     navItems.forEach(item => {
         const isActive = item.page === currentPage ? ' nav-link-active' : '';
-        headerHTML += `<a href="${item.href}" class="nav-link${isActive}">${item.label}</a>`;
+        const roAttr = item.roHidden ? ' data-ro-hidden="true"' : '';
+        headerHTML += `<a href="${item.href}" class="nav-link${isActive}"${roAttr}>${item.label}</a>`;
     });
 
     headerHTML += `
@@ -117,27 +156,32 @@ function createHeaderBar(currentPage, showConnectionStatus = false) {
             </div>`;
 
 
-    headerHTML += 
+    headerHTML +=
         `<div style="display: flex; align-items: center; gap: 8px; margin-left: auto;">`;
 
-    headerHTML += 
+    headerHTML +=
             `<button class="theme-toggle" id="themeBtn" onclick="baseToggleTheme()">
                 <span id="theme-icon">${ICON_MAP['sun']}</span><span id="theme-text">Dark</span>
             </button>`;
 
     if (showConnectionStatus) {
-        headerHTML += 
+        headerHTML +=
             `<button class="theme-toggle" title="Real-time connection status">
                 <span class="status-dot disconnected" id="connectionStatus"></span>
             </button>`;
     }
 
-    headerHTML += 
-            `<button class="theme-toggle shutdown-btn" id="shutdownBtn" onclick="confirmShutdown()" title="Shutdown system">
+    headerHTML +=
+            `<button class="theme-toggle" onclick="handleLogout()" title="Sign out">
+                ${ICON_MAP['logout']}
+            </button>`;
+
+    headerHTML +=
+            `<button class="theme-toggle shutdown-btn" id="shutdownBtn" onclick="confirmShutdown()" title="Shutdown system" data-ro-hidden="true">
                 ${ICON_MAP['power']}
             </button>`;
 
-    headerHTML += 
+    headerHTML +=
         `</div>`;
 
     headerHTML += `

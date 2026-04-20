@@ -147,6 +147,7 @@ External Systems:
 | 129025 | PositionRapidUpdate | Latitude, Longitude | 100ms |
 | 129026 | CogSogRapidUpdate | Course, Speed | 100ms |
 | 129029 | GnssPositionData | Full GPS data with altitude | 1s |
+| 129284 | NavigationData | Distance/bearing to waypoint, ETA, destination position, closing velocity | on change |
 | 127250 | VesselHeading | True/Magnetic heading | 100ms |
 | 127251 | RateOfTurn | Rate of turn | 100ms |
 | 127257 | Attitude | Yaw, Pitch, Roll | 100ms |

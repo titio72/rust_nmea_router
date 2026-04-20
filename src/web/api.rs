@@ -16,9 +16,11 @@ use tower_http::trace::TraceLayer;
 use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData, MultiMetricData, SpeedDistributionData, WindStatisticsData, TripLegsData, TrackAnalytics, HeatmapData};
 use crate::config::Config;
 use crate::web::broadcast_manager::SignalKBroadcastChannels;
+use crate::web::auth::JwtSecret;
 use chrono::{DateTime, NaiveDate, Utc};
 
 const MAX_IMPORT_TRIP_UPLOAD_BYTES: usize = 100 * 1024 * 1024; // 100 MiB
+const MAX_POINTS_LIMIT: usize = 10_000;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -26,6 +28,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub signalk_broadcast: Arc<SignalKBroadcastChannels>,
     pub backup_in_progress: Arc<AtomicBool>,
+    pub jwt_secret: Arc<JwtSecret>,
 }
 
 impl AppState {
@@ -276,7 +279,7 @@ pub async fn get_track(
         params.trip_id,
         start,
         end,
-        params.max_points,
+        params.max_points.map(|n| n.min(MAX_POINTS_LIMIT)),
     ) {
         Ok(track) => Ok(Json(ApiResponse::ok(track))),
         Err(e) => {
@@ -301,7 +304,7 @@ pub async fn get_metrics(
         params.trip_id,
         start,
         end,
-        params.max_points,
+        params.max_points.map(|n| n.min(MAX_POINTS_LIMIT)),
     ) {
         Ok(metrics) => Ok(Json(ApiResponse::ok(metrics))),
         Err(e) => {
@@ -335,7 +338,7 @@ pub async fn get_metrics_batch(
         params.trip_id,
         start,
         end,
-        params.max_points,
+        params.max_points.map(|n| n.min(MAX_POINTS_LIMIT)),
     ) {
         Ok(data) => Ok(Json(ApiResponse::ok(data))),
         Err(e) => {
@@ -510,11 +513,17 @@ pub async fn export_trip(
     State(state): State<AppState>,
     Query(params): Query<ExportTripQuery>,
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
-    // Determine the export path
-    let export_path = params.path.clone().unwrap_or_else(|| {
-        format!("static/exports/trip_{}.json", params.id)
-    });
-    
+    // Determine the export path, rejecting any user-supplied path with traversal characters
+    let export_path = match params.path.as_deref() {
+        None => format!("static/exports/trip_{}.json", params.id),
+        Some(p) => {
+            if std::path::Path::new(p).is_absolute() || p.contains("..") || p.contains('\\') {
+                return Ok(Json(ApiResponse::error("Invalid export path".to_string())));
+            }
+            p.to_string()
+        }
+    };
+
     info!(trip_id = params.id, path = %export_path, "Exporting trip");
     
     match state.db().export_trip(params.id as i64, &export_path) {
@@ -794,7 +803,6 @@ pub async fn get_udp_broadcast_status(
     Ok(Json(ApiResponse::ok(response)))
 }
 
-
 pub async fn set_signalk_status(
     State(state): State<AppState>,
     Json(request): Json<SignalKStatusRequest>,
@@ -1035,17 +1043,14 @@ pub async fn system_shutdown() -> Result<Json<ApiResponse<String>>, StatusCode> 
     Ok(Json(ApiResponse::ok("Shutdown initiated".to_string())))
 }
 
+async fn get_read_only(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "read_only": state.config.web.read_only }))
+}
+
 pub fn create_api_router(state: AppState) -> Router {
-    Router::new()
-        .route("/trip_description", post(update_trip_description))
-        .route("/delete_trip", delete(delete_trip))
-        .route("/trim_trip", post(trim_trip))
-        .route("/export_trip", get(export_trip))
-        .route(
-            "/import_trip",
-            post(import_trip).layer(DefaultBodyLimit::max(MAX_IMPORT_TRIP_UPLOAD_BYTES)),
-        )
-        .route("/list_exports", get(list_exports))
+    let read_only = state.config.web.read_only;
+
+    let mut router = Router::new()
         .route("/trips", get(get_trips))
         .route("/trip", get(get_trip))
         .route("/trip_by_uuid", get(get_trip_by_uuid))
@@ -1059,19 +1064,35 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/monthly_statistics", get(get_monthly_statistics))
         .route("/heatmap", get(get_heatmap))
         .route("/config/google_maps_key", get(get_google_maps_key))
-        .route("/tracking/status", get(get_tracking_status))
-        .route("/tracking/status", post(set_tracking_status))
-        .route("/metrics/status", get(get_metrics_status))
-        .route("/metrics/status", post(set_metrics_status))
-        .route("/signalk/status", get(get_signalk_status))
-        .route("/signalk/status", post(set_signalk_status))
-        .route("/udp_broadcast/status", get(get_udp_broadcast_status))
-        .route("/udp_broadcast/status", post(set_udp_broadcast_status))
-        .route("/backup", get(list_backups))
-        .route("/backup", post(post_backup))
-        .route("/backup", delete(delete_backup))
-        .route("/backup/download", get(download_backup))
-        .route("/system/shutdown", post(system_shutdown))
+        .route("/config/read_only", get(get_read_only));
+
+    if !read_only {
+        router = router
+            .route("/trip_description", post(update_trip_description))
+            .route("/delete_trip", delete(delete_trip))
+            .route("/trim_trip", post(trim_trip))
+            .route("/export_trip", get(export_trip))
+            .route(
+                "/import_trip",
+                post(import_trip).layer(DefaultBodyLimit::max(MAX_IMPORT_TRIP_UPLOAD_BYTES)),
+            )
+            .route("/list_exports", get(list_exports))
+            .route("/tracking/status", get(get_tracking_status))
+            .route("/tracking/status", post(set_tracking_status))
+            .route("/metrics/status", get(get_metrics_status))
+            .route("/metrics/status", post(set_metrics_status))
+            .route("/signalk/status", get(get_signalk_status))
+            .route("/signalk/status", post(set_signalk_status))
+            .route("/udp_broadcast/status", get(get_udp_broadcast_status))
+            .route("/udp_broadcast/status", post(set_udp_broadcast_status))
+            .route("/backup", get(list_backups))
+            .route("/backup", post(post_backup))
+            .route("/backup", delete(delete_backup))
+            .route("/backup/download", get(download_backup))
+            .route("/system/shutdown", post(system_shutdown));
+    }
+
+    router
         .layer(
             TraceLayer::new_for_http()
                 .on_request(|request: &axum::http::Request<_>, _span: &Span| {
@@ -1124,6 +1145,7 @@ mod tests {
             config: Arc::new(config),
             signalk_broadcast,
             backup_in_progress: Arc::new(AtomicBool::new(false)),
+            jwt_secret: Arc::new(JwtSecret::generate()),
         };
         create_api_router(state)
     }
@@ -2012,6 +2034,7 @@ mod tests {
             config,
             signalk_broadcast,
             backup_in_progress: Arc::new(AtomicBool::new(false)),
+            jwt_secret: Arc::new(JwtSecret::generate()),
         };
         (create_api_router(state), db)
     }
@@ -2241,5 +2264,144 @@ mod tests {
         let (app, _) = create_clean_test_app();
         let resp = app.oneshot(axum::http::Request::builder().uri("/backup/download?file=../config.json").body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ---- Read-only mode tests ----
+    //
+    // Verify that read_only: true exposes only safe read endpoints and blocks all write/admin routes.
+    // Non-ignored tests use the live DB at DATABASE_URL (same as create_test_app).
+    // Ignored tests use a clean test DB and seed data where needed.
+
+    fn create_test_app_read_only() -> Router {
+        let db = create_test_db();
+        let mut config = crate::config::Config::default();
+        config.web.read_only = true;
+        let signalk_broadcast = Arc::new(SignalKBroadcastChannels::new());
+        let state = AppState {
+            db: Arc::new(RwLock::new(db)),
+            config: Arc::new(config),
+            signalk_broadcast,
+            backup_in_progress: Arc::new(AtomicBool::new(false)),
+            jwt_secret: Arc::new(JwtSecret::generate()),
+        };
+        create_api_router(state)
+    }
+
+    async fn get_status(app: Router, uri: &str) -> StatusCode {
+        app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap()).await.unwrap().status()
+    }
+
+    async fn post_status(app: Router, uri: &str) -> StatusCode {
+        app.oneshot(Request::builder().method("POST").uri(uri).body(Body::empty()).unwrap()).await.unwrap().status()
+    }
+
+    async fn delete_status(app: Router, uri: &str) -> StatusCode {
+        app.oneshot(Request::builder().method("DELETE").uri(uri).body(Body::empty()).unwrap()).await.unwrap().status()
+    }
+
+    #[tokio::test]
+    async fn test_read_only_config_endpoint_returns_true() {
+        let app = create_test_app_read_only();
+        let resp = app.oneshot(Request::builder().uri("/config/read_only").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["read_only"], true);
+    }
+
+    #[tokio::test]
+    async fn test_non_read_only_config_endpoint_returns_false() {
+        let app = create_test_app();
+        let resp = app.oneshot(Request::builder().uri("/config/read_only").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["read_only"], false);
+    }
+
+    // Read-only mode: read endpoints must remain reachable (may return DB errors, but NOT 404)
+    #[tokio::test]
+    async fn test_read_only_read_routes_are_accessible() {
+        let read_routes = [
+            "/trips",
+            "/track?trip_id=1",
+            "/metrics?metric=speed&trip_id=1",
+            "/metrics/batch?metrics=speed&trip_id=1",
+            "/heatmap",
+            "/monthly_statistics",
+            "/config/google_maps_key",
+            "/config/read_only",
+        ];
+        for uri in &read_routes {
+            let app = create_test_app_read_only();
+            let status = get_status(app, uri).await;
+            assert_ne!(status, StatusCode::NOT_FOUND, "RO mode: read route {uri} must not return 404");
+        }
+    }
+
+    // Read-only mode: all write/admin routes must return 404 (not registered)
+    #[tokio::test]
+    async fn test_read_only_write_routes_are_blocked() {
+        // POST routes that should not exist in RO mode
+        let post_routes = [
+            "/trip_description",
+            "/trim_trip?id=1",
+            "/import_trip",
+            "/tracking/status",
+            "/metrics/status",
+            "/signalk/status",
+            "/udp_broadcast/status",
+            "/backup",
+            "/system/shutdown",
+        ];
+        for uri in &post_routes {
+            let app = create_test_app_read_only();
+            let status = post_status(app, uri).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "RO mode: POST {uri} must return 404");
+        }
+
+        // DELETE routes that should not exist in RO mode
+        let delete_routes = ["/delete_trip?id=1", "/backup"];
+        for uri in &delete_routes {
+            let app = create_test_app_read_only();
+            let status = delete_status(app, uri).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "RO mode: DELETE {uri} must return 404");
+        }
+
+        // GET routes that should not exist in RO mode
+        let get_routes = [
+            "/export_trip?id=1",
+            "/list_exports",
+            "/tracking/status",
+            "/metrics/status",
+            "/signalk/status",
+            "/udp_broadcast/status",
+            "/backup",
+            "/backup/download?file=x.gz",
+        ];
+        for uri in &get_routes {
+            let app = create_test_app_read_only();
+            let status = get_status(app, uri).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "RO mode: GET {uri} must return 404");
+        }
+    }
+
+    // Non-read-only mode: write/admin routes must be registered (may return errors, but not 404)
+    #[tokio::test]
+    async fn test_non_read_only_write_routes_are_registered() {
+        let get_routes = [
+            "/export_trip?id=1",
+            "/list_exports",
+            "/tracking/status",
+            "/metrics/status",
+            "/signalk/status",
+            "/udp_broadcast/status",
+            "/backup",
+        ];
+        for uri in &get_routes {
+            let app = create_test_app();
+            let status = get_status(app, uri).await;
+            assert_ne!(status, StatusCode::NOT_FOUND, "Full mode: GET {uri} must not return 404");
+        }
     }
 }

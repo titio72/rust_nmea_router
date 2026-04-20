@@ -67,19 +67,20 @@ The supported messages are:
 8. 129025 Position rapid update
 9. 129026 COG and SOG Rapid update
 10. 129029 GNSS Position Data
-11. 129038 AIS Class A Position Report
-12. 129039 AIS Class B Position Report
-13. 129040 AIS Class B Extended Position Report
-14. 129041 AIS Aid-to-Navigation Report
-15. 129539 GNSS DOPs
-16. 129793 AIS UTC Date Report
-17. 129794 AIS Class A Static Data
-18. 129809 AIS Class B Static Data Part A
-19. 129810 AIS Class B Static Data Part B
-20. 130306 Wind speed and direction
-21. 130312 Temperature
-22. 130313 Humidity
-23. 130314 Pressure
+11. 129284 Navigation Data (distance/bearing to waypoint, ETA, destination lat/lon, closing velocity)
+12. 129038 AIS Class A Position Report
+13. 129039 AIS Class B Position Report
+14. 129040 AIS Class B Extended Position Report
+15. 129041 AIS Aid-to-Navigation Report
+16. 129539 GNSS DOPs
+17. 129793 AIS UTC Date Report
+18. 129794 AIS Class A Static Data
+19. 129809 AIS Class B Static Data Part A
+20. 129810 AIS Class B Static Data Part B
+21. 130306 Wind speed and direction
+22. 130312 Temperature
+23. 130313 Humidity
+24. 130314 Pressure
 The application constantly monitors the status of the CAN bus, and, in case of failure, start retrying until reconnection. In case of repeated failure, each retry must be at least 5s apart.
 
 NMEA 2000 messages reference is available in pgns.json

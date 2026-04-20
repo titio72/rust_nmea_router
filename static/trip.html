@@ -611,6 +611,7 @@
         let currentMap = null; // Global reference to the map
         let currentAnalyticsData = null; // Global reference to analytics data
         let currentTrackData = null; // Global reference to track data for segment markers
+        let currentIsFullTrip = false;
         let fullTrackData = null; // Global reference to full trip track data (loaded once)
         let segmentMarkers = []; // Array to store segment start/end markers
         let headingScaleNormalized = false; // Toggle for heading chart scale (0-360 vs -180 to 180)
@@ -691,7 +692,7 @@
                 // If Maps finished loading after initializeMap() already ran (and showed
                 // the fallback), render the map now with the track data we already have.
                 if (mapsLoaded && !currentMap && currentTrackData) {
-                    initializeMap(currentTrackData);
+                    initializeMap(currentTrackData, currentIsFullTrip);
                 }
             } catch (error) {
                 //document.getElementById('tripDetails').innerHTML =
@@ -882,6 +883,7 @@
 
             // Save track data globally for segment marker handling
             currentTrackData = trackData;
+            currentIsFullTrip = isFullTrip;
         }
 
         async function renderLegCharts(trackData, startTime, endTime) {
@@ -2156,23 +2158,25 @@
 
                 const hourLabel = new Date(hourMs).toISOString().slice(11, 16); // HH:MM UTC
 
+                const svg = [
+                    '<svg xmlns="http://www.w3.org/2000/svg" width="50" height="32">',
+                    '<rect x="1" y="1" width="48" height="16" rx="3" fill="white" fill-opacity="0.9" stroke="#555" stroke-width="1"/>',
+                    '<text x="25" y="13" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" font-weight="bold" fill="#222">' + hourLabel + '</text>',
+                    '<line x1="25" y1="17" x2="25" y2="26" stroke="#555" stroke-width="1.5"/>',
+                    '<circle cx="25" cy="28" r="4" fill="white" fill-opacity="0.9" stroke="#555" stroke-width="1.5"/>',
+                    '</svg>'
+                ].join('');
+
                 const marker = new google.maps.Marker({
                     position: { lat: closest.latitude, lng: closest.longitude },
                     map: map,
                     title: hourLabel + ' UTC',
                     icon: {
-                        path: google.maps.SymbolPath.CIRCLE,
-                        scale: 6,
-                        fillColor: '#FFFFFF',
-                        fillOpacity: 0.9,
-                        strokeColor: '#333333',
-                        strokeWeight: 1.5
-                    },
-                    label: {
-                        text: hourLabel,
-                        color: '#222222',
-                        fontSize: '10px',
-                        fontWeight: 'bold'
+                        url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
+                        size: new google.maps.Size(50, 32),
+                        origin: new google.maps.Point(0, 0),
+                        anchor: new google.maps.Point(25, 28),
+                        scaledSize: new google.maps.Size(50, 32)
                     },
                     zIndex: 500
                 });
