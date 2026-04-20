@@ -21,7 +21,8 @@ class TripCard extends HTMLElement {
             sailing_time_ms: parseInt(this.getAttribute('data-sailing-time')) || 0,
             motoring_time_ms: parseInt(this.getAttribute('data-motoring-time')) || 0,
             moored_time_ms: parseInt(this.getAttribute('data-moored-time')) || 0,
-            uuid: this.getAttribute('data-uuid') || ''
+            uuid: this.getAttribute('data-uuid') || '',
+            readOnly: this.getAttribute('data-readonly') === 'true'
         };
 
         const sailing_percent = trip_data.total_distance_nm > 0 
@@ -83,10 +84,10 @@ class TripCard extends HTMLElement {
                         </div>
                     </div>
                     <div class="trip-buttons">
-                        <button class="app-btn" data-action="edit" title="Edit description"><app-icon name="pencil"></app-icon></button>
+                        ${!trip_data.readOnly ? `<button class="app-btn" data-action="edit" title="Edit description"><app-icon name="pencil"></app-icon></button>` : ''}
                         <button class="app-btn" data-action="export" title="Export trip"><app-icon name="download"></app-icon></button>
-                        <button class="app-btn" data-action="trim" title="Trim trip"><app-icon name="scissors"></app-icon></button>
-                        <button class="app-btn" data-action="delete" title="Delete trip"><app-icon name="trash"></app-icon></button>
+                        ${!trip_data.readOnly ? `<button class="app-btn" data-action="trim" title="Trim trip"><app-icon name="scissors"></app-icon></button>` : ''}
+                        ${!trip_data.readOnly ? `<button class="app-btn" data-action="delete" title="Delete trip"><app-icon name="trash"></app-icon></button>` : ''}
                     </div>
                 </div>
 
