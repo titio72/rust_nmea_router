@@ -89,9 +89,10 @@ impl VesselDatabase {
         let mut tx = conn.start_transaction(mysql::TxOpts::default())?;
 
         // Fetch trip timestamps into session variables
-        let query1 = format!("SELECT @trip_start_ts := start_timestamp, @trip_end_ts := end_timestamp FROM trips WHERE id = {}", trip_id);
-        tx.exec_drop(&query1, ())
-            .map_err(|e| format!("Failed to fetch trip timestamps: {}", e))?;
+        tx.exec_drop(
+            "SELECT @trip_start_ts := start_timestamp, @trip_end_ts := end_timestamp FROM trips WHERE id = :id",
+            params! { "id" => trip_id },
+        ).map_err(|e| format!("Failed to fetch trip timestamps: {}", e))?;
 
         // Fetch min and max timestamps for non-moored records into session variables
         tx.exec_drop(
@@ -112,9 +113,10 @@ impl VesselDatabase {
         ).map_err(|e| format!("Failed to delete environmental_data: {}", e))?;
 
         // Update trip with new boundaries
-        let query2 = format!("UPDATE trips SET start_timestamp = SUBTIME(@min_ts, '0 1:00:0.000'), end_timestamp = ADDTIME(@max_ts, '0 1:00:0.000') WHERE id = {}", trip_id);
-        tx.exec_drop(&query2, ())
-            .map_err(|e| format!("Failed to update trip: {}", e))?;
+        tx.exec_drop(
+            "UPDATE trips SET start_timestamp = SUBTIME(@min_ts, '0 1:00:0.000'), end_timestamp = ADDTIME(@max_ts, '0 1:00:0.000') WHERE id = :id",
+            params! { "id" => trip_id },
+        ).map_err(|e| format!("Failed to update trip: {}", e))?;
 
         tx.commit()?;
 

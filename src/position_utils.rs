@@ -76,22 +76,25 @@ impl PositionQueue {
     }
     
     pub fn get_rolling_median_position(&self, time_window: Duration, min_num_samples: usize, now: Instant) -> (usize, Option<Position>) {
-        let recent_positions: Vec<&Position> = self.samples
+        let recent_iter = self.samples
             .iter()
             .rev()
-            .take_while(|s| s.timestamp >= now - time_window)
-            .map(|s| &s.position)
-            .collect();
-        
-        if recent_positions.is_empty() {
-            return (0, None);
+            .take_while(|s| s.timestamp >= now - time_window);
+
+        let hint = self.samples.len();
+        let mut lats: Vec<f64> = Vec::with_capacity(hint);
+        let mut lons: Vec<f64> = Vec::with_capacity(hint);
+        for s in recent_iter {
+            lats.push(s.position.latitude);
+            lons.push(s.position.longitude);
         }
 
-        let mut lats: Vec<f64> = recent_positions.iter().map(|p| p.latitude).collect();
-        let mut lons: Vec<f64> = recent_positions.iter().map(|p| p.longitude).collect();
+        if lats.is_empty() {
+            return (0, None);
+        }
         
-        lats.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        lons.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        lats.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        lons.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         
         if lats.len() < min_num_samples {
             return (lats.len(), None);

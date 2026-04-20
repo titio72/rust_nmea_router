@@ -43,7 +43,9 @@
       "port": 3306,
       "username": "nmea",
       "password": "nmea",
-      "database_name": "nmea_router"
+      "database_name": "nmea_router",
+      "pool_min": 2,
+      "pool_max": 10
     },
     "vessel_status": {
       "interval_moored_seconds": 1800,

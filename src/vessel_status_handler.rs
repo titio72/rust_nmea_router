@@ -94,7 +94,7 @@ impl VesselStatusHandler {
     pub fn handle_vessel_status(
         &mut self,
         vessel_db: &VesselDatabase,
-        status: VesselStatus,
+        status: &VesselStatus,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let effective_position = status.get_effective_position();
         debug!("Vessel Status: latitude={:.6}, longitude={:.6}, max_speed={:.2}, avg_wind={:.2?}, avg_wind_direction={:.2?} knots, Head {:.2?} moored={}",

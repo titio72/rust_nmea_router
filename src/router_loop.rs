@@ -25,6 +25,52 @@ use crate::udp_broadcaster::UdpBroadcaster;
 use crate::vessel_monitor::VesselMonitor;
 use crate::vessel_status_handler::VesselStatusHandler;
 
+/// Acquire a read guard on the shared database, logging and recovering from lock poisoning.
+/// Implemented as a free function so callers can borrow other `self` fields simultaneously.
+fn read_db(vessel_db: &Arc<RwLock<VesselDatabase>>) -> std::sync::RwLockReadGuard<'_, VesselDatabase> {
+    vessel_db.read().unwrap_or_else(|poisoned| {
+        warn!("VesselDatabase RwLock was poisoned; recovering inner value");
+        poisoned.into_inner()
+    })
+}
+
+/// Run `op` against the database. On a connection error, reconnect once and retry.
+/// Returns the successful result, or `None` if both attempts failed.
+/// Takes `vessel_db` and `health_check` as explicit parameters so the caller retains the
+/// ability to borrow other fields of `self` inside the closure.
+fn with_db_retry<T, F>(
+    vessel_db: &Arc<RwLock<VesselDatabase>>,
+    health_check: &mut crate::db::HealthCheckManager,
+    db_url: &str,
+    op_name: &str,
+    mut op: F,
+) -> Option<T>
+where
+    F: FnMut(&VesselDatabase) -> Result<T, Box<dyn std::error::Error>>,
+{
+    let first = op(&read_db(vessel_db));
+    match first {
+        Ok(v) => Some(v),
+        Err(e) => {
+            warn!("Database error during {}: {}", op_name, e);
+            if is_connection_error(e.as_ref()) && health_check.force_reconnect(vessel_db, db_url).is_ok() {
+                match op(&read_db(vessel_db)) {
+                    Ok(v) => {
+                        info!("{} retry succeeded after reconnection", op_name);
+                        Some(v)
+                    }
+                    Err(e) => {
+                        warn!("{} retry failed: {}", op_name, e);
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        }
+    }
+}
+
 pub struct RouterLoop {
     // CAN I/O
     socket: CanSocket,
@@ -144,7 +190,7 @@ impl RouterLoop {
             match self.db_health_check.check_and_reconnect(&self.vessel_db, &db_url) {
                 Ok(true) => {
                     // Reconnection occurred — reload trip state
-                    let db = self.vessel_db.read().unwrap_or_else(|e| e.into_inner());
+                    let db = read_db(&self.vessel_db);
                     self.vessel_status_handler.load_last_trip(&db);
                 }
                 Ok(false) => {}
@@ -227,83 +273,48 @@ impl RouterLoop {
         _now: Instant,
     ) {
         let db_url = self.config.database.connection.connection_url();
-        let result = {
-            let db = self.vessel_db.read().unwrap_or_else(|e| e.into_inner());
-            self.vessel_status_handler.handle_vessel_status(&db, vessel_status.clone())
-        };
-
-        match result {
-            Ok(true) => {
-                self.metrics.vessel_reports += 1;
-            }
-            Ok(false) => {}
-            Err(e) => {
-                warn!("Database error during vessel status write: {}", e);
-                if is_connection_error(e.as_ref()) {
-                    if self.db_health_check.force_reconnect(&self.vessel_db, &db_url).is_ok() {
-                        let db = self.vessel_db.read().unwrap_or_else(|e| e.into_inner());
-                        match self.vessel_status_handler.handle_vessel_status(&db, vessel_status) {
-                            Ok(true) => {
-                                self.metrics.vessel_reports += 1;
-                                info!("Vessel status retry succeeded after reconnection");
-                            }
-                            Ok(false) => {}
-                            Err(e) => warn!("Vessel status retry failed: {}", e),
-                        }
-                    }
-                }
-            }
+        if let Some(true) = with_db_retry(
+            &self.vessel_db,
+            &mut self.db_health_check,
+            &db_url,
+            "vessel status write",
+            |db| self.vessel_status_handler.handle_vessel_status(db, &vessel_status),
+        ) {
+            self.metrics.vessel_reports += 1;
         }
     }
 
     fn handle_env_status_write(&mut self, now: Instant) {
         let db_url = self.config.database.connection.connection_url();
-        let result = {
-            let db = self.vessel_db.read().unwrap_or_else(|e| e.into_inner());
-            self.environmental_status_handler
-                .handle_environment_status(&db, &mut self.env_monitor, now)
-        };
-
-        match result {
-            Ok(count) => self.metrics.env_reports += count as u64,
-            Err(e) => {
-                warn!("Database error during environmental write: {}", e);
-                if is_connection_error(e.as_ref()) {
-                    if self.db_health_check.force_reconnect(&self.vessel_db, &db_url).is_ok() {
-                        let db = self.vessel_db.read().unwrap_or_else(|e| e.into_inner());
-                        match self.environmental_status_handler
-                            .handle_environment_status(&db, &mut self.env_monitor, now)
-                        {
-                            Ok(count) => {
-                                self.metrics.env_reports += count as u64;
-                                info!("Environmental status retry succeeded after reconnection");
-                            }
-                            Err(e) => warn!("Environmental status retry failed: {}", e),
-                        }
-                    }
-                }
-            }
+        if let Some(count) = with_db_retry(
+            &self.vessel_db,
+            &mut self.db_health_check,
+            &db_url,
+            "environmental write",
+            |db| self.environmental_status_handler.handle_environment_status(db, &mut self.env_monitor, now),
+        ) {
+            self.metrics.env_reports += count as u64;
         }
     }
 
     fn is_metrics_enabled(&self) -> bool {
-        let db = self.vessel_db.read().unwrap_or_else(|e| e.into_inner());
+        let db = read_db(&self.vessel_db);
         db.get_system_status("metrics_enabled").unwrap_or(false)
     }
 
     fn is_vessel_tracking_enabled(&self) -> bool {
-        let db = self.vessel_db.read().unwrap_or_else(|e| e.into_inner());
+        let db = read_db(&self.vessel_db);
         db.get_system_status("tracking_enabled").unwrap_or(false)
     }
 
     fn is_signalk_enabled(&self) -> bool {
-        let db = self.vessel_db.read().unwrap_or_else(|e| e.into_inner());
+        let db = read_db(&self.vessel_db);
         let user_conf = db.get_system_status("signalk_enabled").unwrap_or(false);
         user_conf && self.config.signalk.enabled
     }
 
     fn is_udp_broadcast_enabled(&self) -> bool {
-        let db = self.vessel_db.read().unwrap_or_else(|e| e.into_inner());
+        let db = read_db(&self.vessel_db);
         let user_conf = db.get_system_status("udp_broadcast_enabled").unwrap_or(false);
         user_conf && self.config.udp.enabled
     }

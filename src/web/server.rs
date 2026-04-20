@@ -26,7 +26,7 @@ pub async fn start_web_server(
     config: Arc<Config>,
     port: u16,
     startup_signal: std::sync::mpsc::Sender<Result<(), String>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), crate::error::AppError> {
     match config.web.auth_password.as_deref() {
         None | Some("") => {
             tracing::warn!("Web UI has no auth_password set — all routes are unprotected!");
@@ -92,11 +92,11 @@ pub async fn start_web_server(
         }
         Err(e) => {
             let _ = startup_signal.send(Err(format!("Failed to bind to port {}: {}", port, e)));
-            return Err(e.into());
+            return Err(crate::error::AppError::Io(format!("Failed to bind to port {}: {}", port, e)));
         }
     };
 
     axum::serve(listener, app)
         .await
-        .map_err(|e| format!("Server error: {}", e).into())
+        .map_err(|e| crate::error::AppError::Io(format!("Server error: {}", e)))
 }

@@ -44,6 +44,8 @@ pub struct VesselDatabase {
 pub struct HealthCheckManager {
     pub(crate) last_check: Instant,
     pub(crate) check_interval: Duration,
+    pub(crate) pool_min: usize,
+    pub(crate) pool_max: usize,
 }
 
 // ============== Web API Query Response Types ==============
@@ -217,11 +219,13 @@ pub fn format_duration_ms(milliseconds: u64) -> String {
 }
 
 impl HealthCheckManager {
-    /// Create a new health check manager with the specified interval
-    pub fn new(check_interval: Duration) -> Self {
+    /// Create a new health check manager with the specified interval and pool sizing
+    pub fn new(check_interval: Duration, pool_min: usize, pool_max: usize) -> Self {
         Self {
             last_check: Instant::now(),
             check_interval,
+            pool_min,
+            pool_max,
         }
     }
     
@@ -288,7 +292,7 @@ impl HealthCheckManager {
     ) -> Result<(), Box<dyn std::error::Error>> {
         use tracing::warn;
         warn!("Attempting to reconnect to database...");
-        match VesselDatabase::reconnect_with_retry(db_url, 3) {
+        match VesselDatabase::reconnect_with_retry(db_url, 3, self.pool_min, self.pool_max) {
             Some(new_db) => {
                 // Acquire write lock to replace the database
                 let mut db_write = db.write().unwrap_or_else(|e| e.into_inner());

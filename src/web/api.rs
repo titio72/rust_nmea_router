@@ -1131,7 +1131,7 @@ mod tests {
         let db_url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| "mysql://nmea:nmea@localhost:3306/nmea_router".to_string());
         
-        VesselDatabase::new(&db_url).expect("Failed to connect to test database")
+        VesselDatabase::new(&db_url, 2, 10).expect("Failed to connect to test database")
     }
 
     // Helper function to create a test app

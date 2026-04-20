@@ -29,24 +29,28 @@ impl VesselDatabase {
     ///     INDEX idx_timestamp (timestamp)
     /// );
     /// ```
-    pub fn new(connection_url: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn new(connection_url: &str, pool_min: usize, pool_max: usize) -> Result<Self, crate::error::AppError> {
         use mysql::{Opts, OptsBuilder, Pool, PoolOpts, PoolConstraints};
 
-        let opts = Opts::from_url(connection_url)?;
+        let opts = Opts::from_url(connection_url)
+            .map_err(|e| crate::error::AppError::Database(e.to_string()))?;
 
-        // Configure connection pool with limits
         let pool_opts = PoolOpts::new()
-            .with_constraints(PoolConstraints::new(2, 10).unwrap());  // min 2, max 10 connections
+            .with_constraints(
+                PoolConstraints::new(pool_min, pool_max)
+                    .ok_or_else(|| crate::error::AppError::Database(
+                        format!("Invalid pool constraints: min={pool_min}, max={pool_max}")
+                    ))?
+            );
 
-        // Set session timezone to UTC to ensure all timestamps are handled consistently
-        // Configure timeouts to prevent hanging on unresponsive DB
         let opts_builder = OptsBuilder::from_opts(opts)
             .pool_opts(pool_opts)
-            .tcp_connect_timeout(Some(Duration::from_secs(5)))  // 5s to establish connection
-            .read_timeout(Some(Duration::from_secs(30)))        // 30s for query reads
-            .write_timeout(Some(Duration::from_secs(30)))       // 30s for query writes
+            .tcp_connect_timeout(Some(Duration::from_secs(5)))
+            .read_timeout(Some(Duration::from_secs(30)))
+            .write_timeout(Some(Duration::from_secs(30)))
             .init(vec!["SET time_zone = '+00:00'"]);
-        let pool = Pool::new(opts_builder)?;
+        let pool = Pool::new(opts_builder)
+            .map_err(|e| crate::error::AppError::Database(e.to_string()))?;
         
         let db = VesselDatabase { 
             pool, 
@@ -88,10 +92,10 @@ impl VesselDatabase {
     
     /// Attempt to reconnect to the database with exponential backoff
     /// Returns Some(VesselDatabase) if successful, None if all retries fail
-    pub fn reconnect_with_retry(db_url: &str, max_retries: u32) -> Option<Self> {
+    pub fn reconnect_with_retry(db_url: &str, max_retries: u32, pool_min: usize, pool_max: usize) -> Option<Self> {
         for attempt in 1..=max_retries {
             warn!("Attempting to reconnect to database (attempt {}/{})...", attempt, max_retries);
-            match Self::new(db_url) {
+            match Self::new(db_url, pool_min, pool_max) {
                 Ok(db) => {
                     info!("Database reconnection successful");
                     return Some(db);

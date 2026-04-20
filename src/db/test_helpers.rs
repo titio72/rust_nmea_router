@@ -47,7 +47,7 @@ pub fn reset_test_db(db: &VesselDatabase) -> Result<(), Box<dyn Error>> {
 
 /// Setup test database - creates schema if needed
 pub fn setup_test_db(connection_url: &str) -> Result<VesselDatabase, Box<dyn Error>> {
-    let db = VesselDatabase::new(connection_url)?;
+    let db = VesselDatabase::new(connection_url, 2, 10)?;
     
     // Ensure all tables exist (they should from schema.sql, but safe to check)
     let mut conn = db.pool.get_conn()?;

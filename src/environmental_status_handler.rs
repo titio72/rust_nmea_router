@@ -27,50 +27,31 @@ fn get_period(config: &EnvironmentalConfig, metric: MetricId) -> Duration {
 impl EnvironmentalStatusState {
     /// Create a new EnvironmentalStatusState with initial timing based on config
     fn new(environmental_config: &EnvironmentalConfig) -> Self {
-        let mut x = Self {
-            timing: HashMap::new(),
-            config: environmental_config.clone(),
-        };
         let now = Instant::now();
-        x.timing.insert(
-            MetricId::WindSpeed,
-            now.checked_sub(get_period(&environmental_config, MetricId::WindSpeed)).unwrap(),
-        );
-        x.timing.insert(
-            MetricId::WindDir,
-            now.checked_sub(get_period(&environmental_config, MetricId::WindDir)).unwrap(),
-        );
-        x.timing.insert(
-            MetricId::Roll,
-            now.checked_sub(get_period(&environmental_config, MetricId::Roll)).unwrap(),
-        );
-        x.timing.insert(
-            MetricId::Pressure,
-            now.checked_sub(get_period(&environmental_config, MetricId::Pressure)).unwrap(),    
-        );
-        x.timing.insert(
-            MetricId::CabinTemp,
-            now.checked_sub(get_period(&environmental_config, MetricId::CabinTemp)).unwrap(),
-        );
-        x.timing.insert(
-            MetricId::WaterTemp,
-            now.checked_sub(get_period(&environmental_config, MetricId::WaterTemp)).unwrap(),
-        );
-        x.timing.insert(
-            MetricId::Humidity,
-            now.checked_sub(get_period(&environmental_config, MetricId::Humidity)).unwrap(),
-        );
-        x
+        let mut timing = HashMap::new();
+        for &metric in MetricId::ALL_METRICS.iter() {
+            let period = get_period(environmental_config, metric);
+            // On overflow (period > elapsed since boot), fall back to now so the metric
+            // is immediately eligible for persistence on first check.
+            let last_persist = now.checked_sub(period).unwrap_or(now);
+            timing.insert(metric, last_persist);
+        }
+        Self {
+            timing,
+            config: environmental_config.clone(),
+        }
     }
 
     /// Get the list of metrics that should be persisted to the database now
     fn get_metrics_to_persist(&self, env_monitor: &EnvironmentalMonitor, now: Instant) -> Vec<MetricId> {
         let mut metrics_to_persist = Vec::new();
-        
         for metricid in MetricId::ALL_METRICS.iter() {
-            let last_persist = self.timing.get(metricid).unwrap();
-            if now.duration_since(*last_persist) >= get_period(&self.config, *metricid) && env_monitor.has_samples(*metricid) {
-                metrics_to_persist.push(*metricid);
+            if let Some(last_persist) = self.timing.get(metricid) {
+                if now.duration_since(*last_persist) >= get_period(&self.config, *metricid)
+                    && env_monitor.has_samples(*metricid)
+                {
+                    metrics_to_persist.push(*metricid);
+                }
             }
         }
         metrics_to_persist
@@ -78,7 +59,9 @@ impl EnvironmentalStatusState {
 
     /// Mark specific metrics as persisted to the database
     fn mark_metric_persisted(&mut self, metric: MetricId, now: Instant) {
-        *self.timing.get_mut(&metric).unwrap() = now;
+        if let Some(t) = self.timing.get_mut(&metric) {
+            *t = now;
+        }
     }
 }
 

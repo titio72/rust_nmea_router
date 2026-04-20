@@ -29,6 +29,9 @@ pub mod db;
 #[path = "../gap_filler/mod.rs"]
 pub mod gap_filler;
 
+#[path = "../error.rs"]
+pub mod error;
+
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -171,7 +174,7 @@ fn main() {
         config.database.connection.port,
         config.database.connection.database_name,
     );
-    let db = VesselDatabase::new(&conn_url).unwrap_or_else(|e| {
+    let db = VesselDatabase::new(&conn_url, config.database.connection.pool_min, config.database.connection.pool_max).unwrap_or_else(|e| {
         eprintln!("Cannot connect to database: {}", e);
         std::process::exit(1);
     });

@@ -78,9 +78,14 @@ async fn handle_signalk_socket(
     }
     debug!("Sent SignalK initialization messages to client");
 
+    // Disconnect a client that falls more than this many messages behind.
+    // Prevents unbounded divergence from a slow or stalled consumer.
+    const MAX_LAG_BEFORE_DISCONNECT: u64 = 500;
+
     // Spawn broadcast receiver task
     let tx_clone = tx.clone();
     let broadcast_task = tokio::spawn(async move {
+        let mut total_dropped: u64 = 0;
         loop {
             match msg_rx.recv().await {
                 Ok(delta) => {
@@ -94,8 +99,12 @@ async fn handle_signalk_socket(
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                    warn!("SignalK WebSocket client lagged, {} messages were dropped", skipped);
-                    continue;
+                    total_dropped += skipped;
+                    warn!("SignalK WebSocket client lagged, {} messages dropped ({} total)", skipped, total_dropped);
+                    if total_dropped >= MAX_LAG_BEFORE_DISCONNECT {
+                        warn!("SignalK WebSocket client exceeded lag threshold ({}), disconnecting", MAX_LAG_BEFORE_DISCONNECT);
+                        break;
+                    }
                 }
                 Err(broadcast::error::RecvError::Closed) => {
                     debug!("SignalK broadcast channel closed");

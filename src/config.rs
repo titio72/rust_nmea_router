@@ -302,6 +302,15 @@ pub struct DatabaseConnectionConfig {
     pub username: String,
     pub password: String,
     pub database_name: String,
+    #[serde(default = "DatabaseConnectionConfig::default_pool_min")]
+    pub pool_min: usize,
+    #[serde(default = "DatabaseConnectionConfig::default_pool_max")]
+    pub pool_max: usize,
+}
+
+impl DatabaseConnectionConfig {
+    fn default_pool_min() -> usize { 2 }
+    fn default_pool_max() -> usize { 10 }
 }
 
 impl Default for DatabaseConnectionConfig {
@@ -312,6 +321,8 @@ impl Default for DatabaseConnectionConfig {
             username: "nmea".to_string(),
             password: "nmea".to_string(),
             database_name: "nmea_router".to_string(),
+            pool_min: Self::default_pool_min(),
+            pool_max: Self::default_pool_max(),
         }
     }
 }
@@ -367,21 +378,22 @@ impl Config {
     }
     
     #[cfg(not(test))]
-    pub fn load_for_context() -> Result<Self, Box<dyn std::error::Error>> {
-        // Load configuration - try ./config.json first, then /etc/nmea_router/config.json
+    pub fn load_for_context() -> Result<Self, crate::error::AppError> {
         let config_path = if std::path::Path::new("./config.json").exists() {
-            "./config.json"        
+            "./config.json"
         } else {
             "/etc/nmea_router/config.json"
         };
         Self::from_file(config_path)
-    }    
-    
+            .map_err(|e| crate::error::AppError::Configuration(e.to_string()))
+    }
+
     /// Load configuration with automatic test mode detection
     /// When cfg(test) is active, loads test_config.json by default
     #[cfg(test)]
-    pub fn load_for_context() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load_for_context() -> Result<Self, crate::error::AppError> {
         Self::from_file("test_config.json")
+            .map_err(|e| crate::error::AppError::Configuration(e.to_string()))
     }
 
     
@@ -603,6 +615,8 @@ mod tests {
             username: "testuser".to_string(),
             password: "testpass".to_string(),
             database_name: "testdb".to_string(),
+            pool_min: DatabaseConnectionConfig::default_pool_min(),
+            pool_max: DatabaseConnectionConfig::default_pool_max(),
         };
         let url = config.connection_url();
         assert_eq!(url, "mysql://testuser:testpass@testhost:3307/testdb");

@@ -21,6 +21,8 @@ mod udp_broadcaster;
 mod signalk_broadcaster;
 pub mod utilities;
 mod router_loop;
+mod error;
+use error::AppError;
 
 use vessel_monitor::VesselMonitor;
 use time_monitor::TimeMonitor;
@@ -152,7 +154,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Create database connection using config
     let db_url = config.database.connection.connection_url();
 
-    let vessel_db = match VesselDatabase::new(&db_url) {
+    let vessel_db = match VesselDatabase::new(&db_url, config.database.connection.pool_min, config.database.connection.pool_max) {
         Ok(db) => {
             info!("Database connection established");
             Arc::new(RwLock::new(db))
@@ -208,7 +210,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     // Load the last trip from database
     {
-        let db = vessel_db.read().unwrap_or_else(|e| e.into_inner());
+        let db = vessel_db.read().unwrap_or_else(|poisoned| poisoned.into_inner());
         vessel_status_handler.load_last_trip(&db);
         vessel_status_handler.load_last_vessel_status(&db);
     }
@@ -224,21 +226,29 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         // Spawn web server in a separate thread
         std::thread::spawn(move || {
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(e) => {
-                    let _ = startup_tx.send(Err(format!("Failed to create tokio runtime: {}", e)));
-                    return;
-                }
-            };
-            rt.block_on(async {
-                match web::start_web_server(db_arc, config_arc, web_port, startup_tx).await {
-                    Ok(()) => {}
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
                     Err(e) => {
-                        warn!("Web server error: {}", e);
+                        let _ = startup_tx.send(Err(format!("Failed to create tokio runtime: {}", e)));
+                        return;
                     }
-                }
-            });
+                };
+                rt.block_on(async {
+                    match web::start_web_server(db_arc, config_arc, web_port, startup_tx).await {
+                        Ok(()) => {}
+                        Err(e) => {
+                            warn!("Web server error: {}", e);
+                        }
+                    }
+                });
+            }));
+            if let Err(e) = result {
+                let msg = e.downcast_ref::<&str>().copied()
+                    .or_else(|| e.downcast_ref::<String>().map(|s| s.as_str()))
+                    .unwrap_or("unknown panic");
+                warn!("Web server thread panicked: {}", msg);
+            }
         });
 
         // Wait for startup confirmation (with timeout)
@@ -265,7 +275,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let metrics_logger = MetricsLogger::new(Duration::from_secs(60));
 
     // Database health check manager
-    let db_health_check = HealthCheckManager::new(Duration::from_secs(60));
+    let db_health_check = HealthCheckManager::new(Duration::from_secs(60), config.database.connection.pool_min, config.database.connection.pool_max);
 
     // Create SignalK broadcaster (if enabled)
     let signalk_broadcaster = SignalKBroadcaster::new(config.signalk.rate_limit_ms, config.signalk.vessel_uuid.clone());
@@ -273,7 +283,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     RouterLoop::new(
         socket,
         reader,
-        config.clone(),
+        config,
         vessel_monitor,
         time_monitor,
         env_monitor,
