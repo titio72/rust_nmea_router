@@ -160,7 +160,7 @@ fn main() {
                 std::process::exit(1);
             })
         }
-        None => Config::load_for_context().unwrap_or_else(|e| {
+        None => Config::load_for_context(None).unwrap_or_else(|e| {
             eprintln!("Cannot load configuration: {}", e);
             std::process::exit(1);
         }),

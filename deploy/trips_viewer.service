@@ -1,0 +1,20 @@
+[Unit]
+Description=Trips Viewer Web Service
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=/opt/trips_viewer
+ExecStart=/usr/local/bin/trips_viewer --config /etc/trips_viewer/config.json
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

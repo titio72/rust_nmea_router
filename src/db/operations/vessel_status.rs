@@ -1,124 +1,11 @@
-use crate::db::types::{VesselDatabase, VesselStatusOperation, TripOperation};
+use crate::db::types::{TripOperation, VesselDatabase, VesselStatusOperation};
 use crate::trip::Trip;
+use crate::utilities::dirty_instant_to_systemtime;
+use chrono::NaiveDateTime;
+use mysql::params;
+use mysql::prelude::Queryable;
 use std::error::Error;
 use std::time::SystemTime;
-use mysql::params;
-use chrono::NaiveDateTime;
-use crate::utilities::dirty_instant_to_systemtime;
-use mysql::prelude::Queryable;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::db::test_helpers::{setup_db, add_test_trip, fetch_vessel_status_by_timestamp, assert_approx_equal};
-    use crate::db::types::TripOperation;
-    use crate::position_utils::Position;
-    use crate::trip::Trip;
-    use crate::utilities::EngineStatus;
-    use std::time::{Duration, Instant, SystemTime};
-    use std::ops::Add;
-    use mysql::prelude::Queryable;
-
-    fn make_status_op() -> VesselStatusOperation {
-        let ts = Instant::now() - Duration::from_secs(3600);
-        VesselStatusOperation {
-            timestamp: ts,
-            position: Position { latitude: 51.5, longitude: -0.1 },
-            average_speed_kn: 6.5,
-            max_speed_kn: 8.2,
-            is_moored: false,
-            engine_on: EngineStatus::Off,
-            total_distance_nm: 1.2,
-            total_time_ms: 600_000,
-            wind_speed_kn: Some(12.0),
-            wind_speed_variance: None,
-            wind_angle_deg: Some(45.0),
-            wind_angle_variance: None,
-            cog_deg: Some(90.0),
-            average_heading_deg: Some(92.0),
-        }
-    }
-
-    #[test]
-    #[ignore]
-    fn test_insert_status_no_trip_operation() {
-        let db = setup_db();
-        let op = make_status_op();
-        let result = db.insert_status_and_trip(&op, &TripOperation::None).unwrap();
-        assert!(result.is_none());
-        // vessel_status row was inserted
-        let ts_sys = dirty_instant_to_systemtime(op.timestamp);
-        let record = fetch_vessel_status_by_timestamp(&db, ts_sys).unwrap();
-        assert!(record.is_some(), "vessel_status row should exist");
-        // trips table stays empty
-        let mut conn = db.pool.get_conn().unwrap();
-        let count: u64 = conn.query_first("SELECT COUNT(*) FROM trips").unwrap().unwrap();
-        assert_eq!(count, 0);
-    }
-
-    #[test]
-    #[ignore]
-    fn test_insert_status_creates_trip() {
-        let db = setup_db();
-        let op = make_status_op();
-        let ts_sys = dirty_instant_to_systemtime(op.timestamp);
-        let trip = Trip::new(ts_sys, "Test Create".to_string());
-        let result = db.insert_status_and_trip(&op, &TripOperation::CreateTrip(trip)).unwrap();
-        let trip_id = result.expect("CreateTrip should return Some(id)");
-        assert!(trip_id > 0);
-        // Both rows exist
-        let record = fetch_vessel_status_by_timestamp(&db, ts_sys).unwrap();
-        assert!(record.is_some(), "vessel_status row should exist");
-        let mut conn = db.pool.get_conn().unwrap();
-        let count: u64 = conn.query_first("SELECT COUNT(*) FROM trips").unwrap().unwrap();
-        assert_eq!(count, 1);
-        let desc: String = conn
-            .exec_first("SELECT description FROM trips WHERE id = :id", mysql::params! { "id" => trip_id })
-            .unwrap()
-            .unwrap();
-        assert_eq!(desc, "Test Create");
-    }
-
-    #[test]
-    #[ignore]
-    fn test_insert_status_updates_trip() {
-        let db = setup_db();
-        let now = SystemTime::now();
-        let trip_id = add_test_trip(&db, "Original".to_string(), now, now.add(Duration::from_secs(3600)), 1.0, 0.0, 3600000, 0, 0).unwrap();
-        let op = make_status_op();
-        let mut trip = Trip::new(now, "Updated".to_string());
-        trip.id = Some(trip_id as i64);
-        trip.total_distance_sailed = 5.5;
-        trip.end_timestamp = now.add(Duration::from_secs(7200));
-        let result = db.insert_status_and_trip(&op, &TripOperation::UpdateTrip(trip)).unwrap();
-        assert!(result.is_none(), "UpdateTrip should return None");
-        // Still exactly 1 trip row — no duplicate
-        let mut conn = db.pool.get_conn().unwrap();
-        let count: u64 = conn.query_first("SELECT COUNT(*) FROM trips").unwrap().unwrap();
-        assert_eq!(count, 1);
-        // Distance was updated
-        let dist: f64 = conn
-            .exec_first("SELECT total_distance_sailed FROM trips WHERE id = :id", mysql::params! { "id" => trip_id })
-            .unwrap()
-            .unwrap();
-        assert_approx_equal(dist, 5.5, 0.001, "total_distance_sailed should be updated");
-    }
-
-    #[test]
-    #[ignore]
-    fn test_insert_status_fields_persisted() {
-        let db = setup_db();
-        let op = make_status_op();
-        let ts_sys = dirty_instant_to_systemtime(op.timestamp);
-        db.insert_status_and_trip(&op, &TripOperation::None).unwrap();
-        let rec = fetch_vessel_status_by_timestamp(&db, ts_sys).unwrap().unwrap();
-        assert_approx_equal(rec.latitude.unwrap_or(0.0), 51.5, 0.001, "latitude");
-        assert_approx_equal(rec.longitude.unwrap_or(0.0), -0.1, 0.001, "longitude");
-        assert_approx_equal(rec.average_speed_kn, 6.5, 0.001, "average_speed_kn");
-        assert_approx_equal(rec.total_distance_nm, 1.2, 0.001, "total_distance_nm");
-        assert!(!rec.is_moored, "is_moored should be false");
-    }
-}
 
 impl VesselDatabase {
     /// Insert vessel status and create/update trip in a single transaction
@@ -130,12 +17,13 @@ impl VesselDatabase {
     ) -> Result<Option<i64>, Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
         let mut tx = conn.start_transaction(mysql::TxOpts::default())?;
-        
+
         // Insert vessel status
-        let timestamp = chrono::DateTime::<chrono::Utc>::from(dirty_instant_to_systemtime(status_op.timestamp));
-               
+        let timestamp =
+            chrono::DateTime::<chrono::Utc>::from(dirty_instant_to_systemtime(status_op.timestamp));
+
         tx.exec_drop(
-            r"INSERT INTO vessel_status 
+            r"INSERT INTO vessel_status
                 (timestamp, latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on, total_distance_nm, total_time_ms, average_wind_speed_kn, average_wind_angle_deg, cog_deg, average_heading_deg)
                 VALUES (:timestamp, :latitude, :longitude, :avg_speed, :max_speed, :is_moored, :engine_on, :total_distance, :total_time, :avg_wind_speed, :avg_wind_angle, :cog_deg, :avg_heading_deg)",
             params! {
@@ -154,20 +42,19 @@ impl VesselDatabase {
                 "avg_heading_deg" => status_op.average_heading_deg,
             },
         )?;
-        
+
         // Handle trip operation
         let trip_id = match trip_operation {
             TripOperation::CreateTrip(trip) => {
-               
                 let start_timestamp = chrono::DateTime::<chrono::Utc>::from(trip.start_timestamp);
                 let end_timestamp = chrono::DateTime::<chrono::Utc>::from(trip.end_timestamp);
-                
+
                 tx.exec_drop(
-                    r"INSERT INTO trips 
-                      (description, start_timestamp, end_timestamp, 
+                    r"INSERT INTO trips
+                      (description, start_timestamp, end_timestamp,
                        total_distance_sailed, total_distance_motoring,
                        total_time_sailing, total_time_motoring, total_time_moored, uuid)
-                      VALUES (:description, :start_ts, :end_ts, 
+                      VALUES (:description, :start_ts, :end_ts,
                               :distance_sailed, :distance_motoring,
                               :time_sailing, :time_motoring, :time_moored, :uuid)",
                     params! {
@@ -182,15 +69,15 @@ impl VesselDatabase {
                         "uuid" => &trip.uuid,
                     },
                 )?;
-                
+
                 tx.last_insert_id().map(|id| id as i64)
             }
             TripOperation::UpdateTrip(trip) => {
                 if let Some(trip_id) = trip.id {
                     let end_timestamp = chrono::DateTime::<chrono::Utc>::from(trip.end_timestamp);
-                    
+
                     tx.exec_drop(
-                        r"UPDATE trips 
+                        r"UPDATE trips
                           SET end_timestamp = :end_ts,
                               total_distance_sailed = :distance_sailed,
                               total_distance_motoring = :distance_motoring,
@@ -213,7 +100,7 @@ impl VesselDatabase {
             }
             TripOperation::None => None,
         };
-        
+
         tx.commit()?;
         Ok(trip_id)
     }
@@ -236,9 +123,9 @@ impl VesselDatabase {
     /// ```
     pub fn get_last_trip(&self) -> Result<Option<Trip>, Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
-        
+
         let row: Option<mysql::Row> = conn.exec_first(
-            r"SELECT id, description, 
+            r"SELECT id, description,
                      DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as start_ts,
                      DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
                      total_distance_sailed, total_distance_motoring,
@@ -248,28 +135,40 @@ impl VesselDatabase {
               LIMIT 1",
             (),
         )?;
-        
+
         if let Some(mut row) = row {
             let id: i64 = row.take("id").ok_or("Missing id")?;
             let description: String = row.take("description").ok_or("Missing description")?;
             let start_ts: String = row.take("start_ts").ok_or("Missing start_ts")?;
             let end_ts: String = row.take("end_ts").ok_or("Missing end_ts")?;
-            let total_distance_sailed: f64 = row.take("total_distance_sailed").ok_or("Missing total_distance_sailed")?;
-            let total_distance_motoring: f64 = row.take("total_distance_motoring").ok_or("Missing total_distance_motoring")?;
-            let total_time_sailing: u64 = row.take("total_time_sailing").ok_or("Missing total_time_sailing")?;
-            let total_time_motoring: u64 = row.take("total_time_motoring").ok_or("Missing total_time_moored")?;
-            let total_time_moored: u64 = row.take("total_time_moored").ok_or("Missing total_time_moored")?;
+            let total_distance_sailed: f64 = row
+                .take("total_distance_sailed")
+                .ok_or("Missing total_distance_sailed")?;
+            let total_distance_motoring: f64 = row
+                .take("total_distance_motoring")
+                .ok_or("Missing total_distance_motoring")?;
+            let total_time_sailing: u64 = row
+                .take("total_time_sailing")
+                .ok_or("Missing total_time_sailing")?;
+            let total_time_motoring: u64 = row
+                .take("total_time_motoring")
+                .ok_or("Missing total_time_moored")?;
+            let total_time_moored: u64 = row
+                .take("total_time_moored")
+                .ok_or("Missing total_time_moored")?;
             let uuid: Option<String> = row.take("uuid").unwrap_or(None);
-            
+
             // Parse timestamps - remove 'Z' suffix and parse ISO 8601 format
             let start_ts_clean = start_ts.trim_end_matches('Z');
             let end_ts_clean = end_ts.trim_end_matches('Z');
             let start_dt = NaiveDateTime::parse_from_str(start_ts_clean, "%Y-%m-%dT%H:%M:%S%.f")?;
             let end_dt = NaiveDateTime::parse_from_str(end_ts_clean, "%Y-%m-%dT%H:%M:%S%.f")?;
-            
+
             // Convert to SystemTime then to Instant (approximate)
-            let start_datetime = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start_dt, chrono::Utc);
-            let end_datetime = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(end_dt, chrono::Utc);
+            let start_datetime =
+                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start_dt, chrono::Utc);
+            let end_datetime =
+                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(end_dt, chrono::Utc);
             let start_timestamp = SystemTime::from(start_datetime);
             let end_timestamp = SystemTime::from(end_datetime);
 
@@ -294,11 +193,11 @@ impl VesselDatabase {
     /// Returns the most recent vessel status record as a VesselStatusOperation
     pub fn get_last_vessel_status(&self) -> Result<Option<VesselStatusOperation>, Box<dyn Error>> {
         use crate::position_utils::Position;
-        
+
         let mut conn = self.pool.get_conn()?;
-        
+
         let row: Option<mysql::Row> = conn.query_first(
-            r"SELECT 
+            r"SELECT
                 timestamp,
                 latitude,
                 longitude,
@@ -316,7 +215,7 @@ impl VesselDatabase {
              ORDER BY timestamp DESC
              LIMIT 1",
         )?;
-        
+
         if let Some(row) = row {
             let timestamp_str: String = row.get(0).ok_or("Failed to get timestamp")?;
             let latitude: Option<f64> = row.get_opt(1).and_then(|v| v.ok()).flatten();
@@ -336,9 +235,13 @@ impl VesselDatabase {
             // Convert timestamp string to Instant via SystemTime
             let ts_clean = timestamp_str.trim_end_matches('Z');
             let dt = NaiveDateTime::parse_from_str(ts_clean, "%Y-%m-%d %H:%M:%S%.f")?;
-            let datetime = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc);
+            let datetime =
+                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc);
             let system_time = SystemTime::from(datetime);
-            let timestamp = system_time.elapsed().map(|d| std::time::Instant::now() - d).unwrap_or_else(|_| std::time::Instant::now());
+            let timestamp = system_time
+                .elapsed()
+                .map(|d| std::time::Instant::now() - d)
+                .unwrap_or_else(|_| std::time::Instant::now());
 
             Ok(Some(VesselStatusOperation {
                 timestamp,
@@ -362,5 +265,158 @@ impl VesselDatabase {
         } else {
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::{
+        add_test_trip, assert_approx_equal, fetch_vessel_status_by_timestamp, setup_db,
+    };
+    use crate::db::types::TripOperation;
+    use crate::position_utils::Position;
+    use crate::trip::Trip;
+    use crate::utilities::EngineStatus;
+    use mysql::prelude::Queryable;
+    use std::ops::Add;
+    use std::time::{Duration, Instant, SystemTime};
+
+    fn make_status_op() -> VesselStatusOperation {
+        let ts = Instant::now() - Duration::from_secs(3600);
+        VesselStatusOperation {
+            timestamp: ts,
+            position: Position {
+                latitude: 51.5,
+                longitude: -0.1,
+            },
+            average_speed_kn: 6.5,
+            max_speed_kn: 8.2,
+            is_moored: false,
+            engine_on: EngineStatus::Off,
+            total_distance_nm: 1.2,
+            total_time_ms: 600_000,
+            wind_speed_kn: Some(12.0),
+            wind_speed_variance: None,
+            wind_angle_deg: Some(45.0),
+            wind_angle_variance: None,
+            cog_deg: Some(90.0),
+            average_heading_deg: Some(92.0),
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn test_insert_status_no_trip_operation() {
+        let db = setup_db();
+        let op = make_status_op();
+        let result = db
+            .insert_status_and_trip(&op, &TripOperation::None)
+            .unwrap();
+        assert!(result.is_none());
+        // vessel_status row was inserted
+        let ts_sys = dirty_instant_to_systemtime(op.timestamp);
+        let record = fetch_vessel_status_by_timestamp(&db, ts_sys).unwrap();
+        assert!(record.is_some(), "vessel_status row should exist");
+        // trips table stays empty
+        let mut conn = db.pool.get_conn().unwrap();
+        let count: u64 = conn
+            .query_first("SELECT COUNT(*) FROM trips")
+            .unwrap()
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_insert_status_creates_trip() {
+        let db = setup_db();
+        let op = make_status_op();
+        let ts_sys = dirty_instant_to_systemtime(op.timestamp);
+        let trip = Trip::new(ts_sys, "Test Create".to_string());
+        let result = db
+            .insert_status_and_trip(&op, &TripOperation::CreateTrip(trip))
+            .unwrap();
+        let trip_id = result.expect("CreateTrip should return Some(id)");
+        assert!(trip_id > 0);
+        // Both rows exist
+        let record = fetch_vessel_status_by_timestamp(&db, ts_sys).unwrap();
+        assert!(record.is_some(), "vessel_status row should exist");
+        let mut conn = db.pool.get_conn().unwrap();
+        let count: u64 = conn
+            .query_first("SELECT COUNT(*) FROM trips")
+            .unwrap()
+            .unwrap();
+        assert_eq!(count, 1);
+        let desc: String = conn
+            .exec_first(
+                "SELECT description FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(desc, "Test Create");
+    }
+
+    #[test]
+    #[ignore]
+    fn test_insert_status_updates_trip() {
+        let db = setup_db();
+        let now = SystemTime::now();
+        let trip_id = add_test_trip(
+            &db,
+            "Original".to_string(),
+            now,
+            now.add(Duration::from_secs(3600)),
+            1.0,
+            0.0,
+            3600000,
+            0,
+            0,
+        )
+        .unwrap();
+        let op = make_status_op();
+        let mut trip = Trip::new(now, "Updated".to_string());
+        trip.id = Some(trip_id as i64);
+        trip.total_distance_sailed = 5.5;
+        trip.end_timestamp = now.add(Duration::from_secs(7200));
+        let result = db
+            .insert_status_and_trip(&op, &TripOperation::UpdateTrip(trip))
+            .unwrap();
+        assert!(result.is_none(), "UpdateTrip should return None");
+        // Still exactly 1 trip row — no duplicate
+        let mut conn = db.pool.get_conn().unwrap();
+        let count: u64 = conn
+            .query_first("SELECT COUNT(*) FROM trips")
+            .unwrap()
+            .unwrap();
+        assert_eq!(count, 1);
+        // Distance was updated
+        let dist: f64 = conn
+            .exec_first(
+                "SELECT total_distance_sailed FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_approx_equal(dist, 5.5, 0.001, "total_distance_sailed should be updated");
+    }
+
+    #[test]
+    #[ignore]
+    fn test_insert_status_fields_persisted() {
+        let db = setup_db();
+        let op = make_status_op();
+        let ts_sys = dirty_instant_to_systemtime(op.timestamp);
+        db.insert_status_and_trip(&op, &TripOperation::None)
+            .unwrap();
+        let rec = fetch_vessel_status_by_timestamp(&db, ts_sys)
+            .unwrap()
+            .unwrap();
+        assert_approx_equal(rec.latitude.unwrap_or(0.0), 51.5, 0.001, "latitude");
+        assert_approx_equal(rec.longitude.unwrap_or(0.0), -0.1, 0.001, "longitude");
+        assert_approx_equal(rec.average_speed_kn, 6.5, 0.001, "average_speed_kn");
+        assert_approx_equal(rec.total_distance_nm, 1.2, 0.001, "total_distance_nm");
+        assert!(!rec.is_moored, "is_moored should be false");
     }
 }

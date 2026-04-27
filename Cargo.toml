@@ -32,6 +32,7 @@ futures-util = "0.3"
 rand = "0.8"
 jsonwebtoken = "9"
 uuid = { version = "1", features = ["v4"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 [[bin]]
 name = "nmea_router"

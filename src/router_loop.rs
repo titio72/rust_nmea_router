@@ -170,10 +170,10 @@ impl RouterLoop {
                         warn!("Error reading CAN frame: {}", e);
                         warn!("CAN bus connection lost. Attempting to reconnect...");
 
-                        self.socket = CanBus::open_can_socket_with_retry(&self.config.can_interface);
+                        self.socket = CanBus::open_can_socket_with_retry(&self.config.can.interface);
                         if let Err(e) = CanBus::configure_nmea2k_socket(&mut self.socket) {
                             eprintln!("Fatal: Failed to configure CAN socket after reconnect: {}", e);
-                            eprintln!("CAN interface: {}", self.config.can_interface);
+                            eprintln!("CAN interface: {}", self.config.can.interface);
                             std::process::exit(1);
                         }
 

@@ -1,22 +1,32 @@
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, Query, State, Multipart},
-    http::{header, StatusCode},
-    response::{Json, Response},
+    extract::{DefaultBodyLimit, Multipart, Query, State},
+    http::{header, HeaderMap, StatusCode},
+    response::{IntoResponse, Json, Response},
+    routing::delete,
     routing::get,
     routing::post,
-    routing::delete,
     Router,
 };
 use serde::{Deserialize, Serialize};
-use tracing::{info, error, Span};
-use std::{backtrace::Backtrace, sync::Arc, sync::atomic::{AtomicBool, Ordering}, sync::RwLock, time::Duration};
+use std::{
+    backtrace::Backtrace,
+    sync::atomic::{AtomicBool, Ordering},
+    sync::Arc,
+    sync::RwLock,
+    time::Duration,
+};
 use tower_http::trace::TraceLayer;
+use tracing::{error, info, warn, Span};
 
-use crate::db::{VesselDatabase, TripSummary, TrackPoint, WebMetricData, MultiMetricData, SpeedDistributionData, WindStatisticsData, TripLegsData, TrackAnalytics, HeatmapData};
 use crate::config::Config;
-use crate::web::broadcast_manager::SignalKBroadcastChannels;
+use crate::db::{
+    HeatmapData, MultiMetricData, SpeedDistributionData, TrackAnalytics, TrackPoint, TripLegsData,
+    TripSummary, VesselDatabase, WebMetricData, WindStatisticsData,
+};
+use crate::db::operations::sync::{SyncManifestPayload, SyncManifestResult, SyncResult};
 use crate::web::auth::JwtSecret;
+use crate::web::broadcast_manager::SignalKBroadcastChannels;
 use chrono::{DateTime, NaiveDate, Utc};
 
 const MAX_IMPORT_TRIP_UPLOAD_BYTES: usize = 100 * 1024 * 1024; // 100 MiB
@@ -38,7 +48,7 @@ impl AppState {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ApiResponse<T> {
     pub status: String,
     pub data: Option<T>,
@@ -100,7 +110,7 @@ pub struct MetricsQuery {
 
 #[derive(Debug, Deserialize)]
 pub struct BatchMetricsQuery {
-    pub metrics: String,  // comma-separated metric_id values, e.g. "1,2,4,5,6"
+    pub metrics: String, // comma-separated metric_id values, e.g. "1,2,4,5,6"
     pub trip_id: Option<u32>,
     pub start: Option<String>,
     pub end: Option<String>,
@@ -134,7 +144,7 @@ pub struct TimeRangeRequiredQuery {
 
 #[derive(Debug, Deserialize)]
 pub struct HeatmapQuery {
-    pub date: String,  // Date in YYYY-MM-DD format
+    pub date: String, // Date in YYYY-MM-DD format
 }
 
 #[derive(Debug, Serialize)]
@@ -242,7 +252,10 @@ pub async fn get_trip(
                 Ok(Json(ApiResponse::ok(trip)))
             } else {
                 error!(trip_id = params.id, "Trip not found");
-                Ok(Json(ApiResponse::error(format!("Trip {} not found", params.id))))
+                Ok(Json(ApiResponse::error(format!(
+                    "Trip {} not found",
+                    params.id
+                ))))
             }
         }
         Err(e) => {
@@ -260,7 +273,10 @@ pub async fn get_trip_by_uuid(
         Ok(Some(trip)) => Ok(Json(ApiResponse::ok(trip))),
         Ok(None) => {
             error!(uuid = %params.uuid, "Trip not found by UUID");
-            Ok(Json(ApiResponse::error(format!("Trip with UUID {} not found", params.uuid))))
+            Ok(Json(ApiResponse::error(format!(
+                "Trip with UUID {} not found",
+                params.uuid
+            ))))
         }
         Err(e) => {
             error!(error = %e, "Failed to fetch trip by UUID");
@@ -323,13 +339,18 @@ pub async fn get_metrics_batch(
     Query(params): Query<BatchMetricsQuery>,
 ) -> Result<Json<ApiResponse<MultiMetricData>>, StatusCode> {
     // Parse comma-separated metric ids into u8 values
-    let metric_ids: Result<Vec<u8>, _> = params.metrics
+    let metric_ids: Result<Vec<u8>, _> = params
+        .metrics
         .split(',')
         .map(|s| s.trim().parse::<u8>())
         .collect();
     let metric_ids = match metric_ids {
         Ok(ids) if !ids.is_empty() => ids,
-        _ => return Ok(Json(ApiResponse::error("Invalid or empty metrics parameter".to_string()))),
+        _ => {
+            return Ok(Json(ApiResponse::error(
+                "Invalid or empty metrics parameter".to_string(),
+            )))
+        }
     };
     let start = parse_optional_datetime(&params.start)?;
     let end = parse_optional_datetime(&params.end)?;
@@ -354,11 +375,7 @@ pub async fn get_speed_distribution(
 ) -> Result<Json<ApiResponse<SpeedDistributionData>>, StatusCode> {
     let start = parse_optional_datetime(&params.start)?;
     let end = parse_optional_datetime(&params.end)?;
-    match state.db().fetch_speed_distribution(
-        params.id,
-        start,
-        end,
-    ) {
+    match state.db().fetch_speed_distribution(params.id, start, end) {
         Ok(distribution) => Ok(Json(ApiResponse::ok(distribution))),
         Err(e) => {
             error!(error = %e, "Failed to fetch speed distribution");
@@ -377,11 +394,7 @@ pub async fn get_wind_statistics(
 ) -> Result<Json<ApiResponse<WindStatisticsData>>, StatusCode> {
     let start = parse_optional_datetime(&params.start)?;
     let end = parse_optional_datetime(&params.end)?;
-    match state.db().fetch_wind_statistics(
-        params.id,
-        start,
-        end,
-    ) {
+    match state.db().fetch_wind_statistics(params.id, start, end) {
         Ok(statistics) => Ok(Json(ApiResponse::ok(statistics))),
         Err(e) => {
             error!(error = %e, "Failed to fetch wind statistics");
@@ -450,14 +463,16 @@ pub async fn update_trip_description(
     State(state): State<AppState>,
     Json(params): Json<TripDescriptionQuery>,
 ) -> Result<Json<ApiResponse<()>>, StatusCode> {
-
     info!(?params, "POST /api/trip_description called");
-    
-    match state.db().update_trip_description(params.id as i64, &params.description) {
+
+    match state
+        .db()
+        .update_trip_description(params.id as i64, &params.description)
+    {
         Ok(()) => {
             info!(trip_id = params.id, description = %params.description, "Trip description updated successfully");
             Ok(Json(ApiResponse::ok(())))
-        },
+        }
         Err(e) => {
             error!(error = %e, trip_id = params.id, "Failed to update trip description");
             {
@@ -477,7 +492,7 @@ pub async fn delete_trip(
         Ok(()) => {
             info!(trip_id = params.id, "Trip deleted successfully");
             Ok(Json(ApiResponse::ok(())))
-        },
+        }
         Err(e) => {
             error!(error = %e, trip_id = params.id, "Failed to delete trip");
             {
@@ -497,7 +512,7 @@ pub async fn trim_trip(
         Ok(()) => {
             info!(trip_id = params.id, "Trip trimmed successfully");
             Ok(Json(ApiResponse::ok(())))
-        },
+        }
         Err(e) => {
             error!(error = %e, trip_id = params.id, "Failed to trim trip");
             {
@@ -525,11 +540,14 @@ pub async fn export_trip(
     };
 
     info!(trip_id = params.id, path = %export_path, "Exporting trip");
-    
+
     match state.db().export_trip(params.id as i64, &export_path) {
         Ok(()) => {
             info!(trip_id = params.id, path = %export_path, "Trip exported successfully");
-            Ok(Json(ApiResponse::ok(format!("Trip {} exported to {}", params.id, export_path))))
+            Ok(Json(ApiResponse::ok(format!(
+                "Trip {} exported to {}",
+                params.id, export_path
+            ))))
         }
         Err(e) => {
             error!(error = %e, trip_id = params.id, "Failed to export trip");
@@ -552,17 +570,20 @@ pub async fn import_trip(
             Ok(Some(field)) => {
                 let field_name = field.name().unwrap_or("unknown").to_string();
                 info!("Received field: {}", field_name);
-                
+
                 // Only process the "file" field
                 if field_name != "file" {
                     continue;
                 }
-                
+
                 // Read the field as bytes to better handle large files
                 match field.bytes().await {
                     Ok(file_bytes) => {
-                        info!("Processing uploaded JSON file for trip import, content size: {} bytes", file_bytes.len());
-                        
+                        info!(
+                            "Processing uploaded JSON file for trip import, content size: {} bytes",
+                            file_bytes.len()
+                        );
+
                         // Convert bytes to UTF-8 string
                         let json_content = match std::str::from_utf8(&file_bytes) {
                             Ok(content) => content,
@@ -573,11 +594,14 @@ pub async fn import_trip(
                                 )));
                             }
                         };
-                        
+
                         match state.db().import_trip(json_content) {
                             Ok(trip_id) => {
                                 info!(trip_id = trip_id, "Trip imported successfully");
-                                return Ok(Json(ApiResponse::ok(format!("Trip imported successfully with ID: {}", trip_id))));
+                                return Ok(Json(ApiResponse::ok(format!(
+                                    "Trip imported successfully with ID: {}",
+                                    trip_id
+                                ))));
                             }
                             Err(e) => {
                                 error!(error = %e, "Failed to import trip");
@@ -604,68 +628,63 @@ pub async fn import_trip(
             }
         }
     }
-    
+
     Ok(Json(ApiResponse::error("No file uploaded".to_string())))
 }
 
 pub async fn list_exports() -> Result<Json<ApiResponse<Vec<ExportFileInfo>>>, StatusCode> {
     use std::fs;
     use std::path::Path;
-    
+
     let export_dir = Path::new("static/exports");
-    
+
     // Create the directory if it doesn't exist
     if !export_dir.exists() {
         match fs::create_dir_all(export_dir) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => {
                 error!(error = %e, "Failed to create exports directory");
                 return Ok(Json(ApiResponse::error(e.to_string())));
             }
         }
     }
-    
+
     match fs::read_dir(export_dir) {
         Ok(entries) => {
             let mut files = Vec::new();
-            
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    if path.is_file() {
-                        if let Ok(metadata) = path.metadata() {
-                            if let Some(name) = path.file_name() {
-                                if let Some(name_str) = name.to_str() {
-                                    // Only include JSON files
-                                    if name_str.ends_with(".json") {
-                                        let modified = match metadata.modified() {
-                                            Ok(time) => {
-                                                match chrono::DateTime::<chrono::Utc>::from(time)
-                                                    .format("%Y-%m-%d %H:%M:%S UTC")
-                                                    .to_string()
-                                                {
-                                                    s => s,
-                                                }
-                                            }
-                                            Err(_) => "Unknown".to_string(),
-                                        };
-                                        
-                                        files.push(ExportFileInfo {
-                                            name: name_str.to_string(),
-                                            size: metadata.len(),
-                                            modified,
-                                        });
-                                    }
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Ok(metadata) = path.metadata() {
+                        if let Some(name) = path.file_name() {
+                            if let Some(name_str) = name.to_str() {
+                                // Only include JSON files
+                                if name_str.ends_with(".json") {
+                                    let modified = metadata
+                                        .modified()
+                                        .map(|time| {
+                                            chrono::DateTime::<chrono::Utc>::from(time)
+                                                .format("%Y-%m-%d %H:%M:%S UTC")
+                                                .to_string()
+                                        })
+                                        .unwrap_or_else(|_| "Unknown".to_string());
+
+                                    files.push(ExportFileInfo {
+                                        name: name_str.to_string(),
+                                        size: metadata.len(),
+                                        modified,
+                                    });
                                 }
                             }
                         }
                     }
                 }
             }
-            
+
             // Sort by name (most recent first, assuming naming convention)
             files.sort_by(|a, b| b.name.cmp(&a.name));
-            
+
             info!("Found {} export files", files.len());
             Ok(Json(ApiResponse::ok(files)))
         }
@@ -689,8 +708,8 @@ pub async fn get_heatmap(
     State(state): State<AppState>,
     Query(params): Query<HeatmapQuery>,
 ) -> Result<Json<ApiResponse<HeatmapData>>, StatusCode> {
-    let date = NaiveDate::parse_from_str(&params.date, "%Y-%m-%d")
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let date =
+        NaiveDate::parse_from_str(&params.date, "%Y-%m-%d").map_err(|_| StatusCode::BAD_REQUEST)?;
     match state.db().fetch_heatmap(date) {
         Ok(heatmap) => Ok(Json(ApiResponse::ok(heatmap))),
         Err(e) => {
@@ -704,9 +723,11 @@ pub async fn get_tracking_status(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<TrackingStatusResponse>>, StatusCode> {
     // Get tracking status from database
-    let enabled = state.db().get_system_status("tracking_enabled")
+    let enabled = state
+        .db()
+        .get_system_status("tracking_enabled")
         .unwrap_or(true);
-    
+
     let response = TrackingStatusResponse { enabled };
     Ok(Json(ApiResponse::ok(response)))
 }
@@ -716,13 +737,16 @@ pub async fn set_tracking_status(
     Json(request): Json<TrackingStatusRequest>,
 ) -> Result<Json<ApiResponse<TrackingStatusResponse>>, StatusCode> {
     info!(?request, "POST /api/tracking/status called");
-    
+
     // Save tracking status to database
-    if let Err(e) = state.db().set_system_status("tracking_enabled", request.enabled) {
+    if let Err(e) = state
+        .db()
+        .set_system_status("tracking_enabled", request.enabled)
+    {
         error!(error = %e, "Failed to set tracking status in database");
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    
+
     let response = TrackingStatusResponse {
         enabled: request.enabled,
     };
@@ -734,9 +758,11 @@ pub async fn get_metrics_status(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<MetricsStatusResponse>>, StatusCode> {
     // Get metrics status from database
-    let enabled = state.db().get_system_status("metrics_enabled")
+    let enabled = state
+        .db()
+        .get_system_status("metrics_enabled")
         .unwrap_or(true);
-    
+
     let response = MetricsStatusResponse { enabled };
     Ok(Json(ApiResponse::ok(response)))
 }
@@ -746,17 +772,20 @@ pub async fn set_metrics_status(
     Json(request): Json<MetricsStatusRequest>,
 ) -> Result<Json<ApiResponse<MetricsStatusResponse>>, StatusCode> {
     info!(?request, "POST /api/metrics/status called");
-    
+
     // Save metrics status to database (persistent across restarts)
-    if let Err(e) = state.db().set_system_status("metrics_enabled", request.enabled) {
+    if let Err(e) = state
+        .db()
+        .set_system_status("metrics_enabled", request.enabled)
+    {
         error!("Failed to save metrics status to database: {}", e);
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    
+
     let response = MetricsStatusResponse {
         enabled: request.enabled,
     };
-    
+
     info!("Metrics status updated to: {}", request.enabled);
     Ok(Json(ApiResponse::ok(response)))
 }
@@ -765,9 +794,11 @@ pub async fn get_signalk_status(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<SignalKStatusResponse>>, StatusCode> {
     // Get signalk status from database
-    let enabled = state.db().get_system_status("signalk_enabled")
+    let enabled = state
+        .db()
+        .get_system_status("signalk_enabled")
         .unwrap_or(false);
-    
+
     let response = SignalKStatusResponse { enabled };
     Ok(Json(ApiResponse::ok(response)))
 }
@@ -777,17 +808,20 @@ pub async fn set_udp_broadcast_status(
     Json(request): Json<SignalKStatusRequest>,
 ) -> Result<Json<ApiResponse<SignalKStatusResponse>>, StatusCode> {
     info!(?request, "POST /api/udp_broadcast/status called");
-    
+
     // Save UDP broadcast status to database
-    if let Err(e) = state.db().set_system_status("udp_broadcast_enabled", request.enabled) {
+    if let Err(e) = state
+        .db()
+        .set_system_status("udp_broadcast_enabled", request.enabled)
+    {
         error!(error = %e, "Failed to set UDP broadcast status in database");
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    
+
     let response = SignalKStatusResponse {
         enabled: request.enabled,
     };
-    
+
     info!("UDP broadcast status updated to: {}", request.enabled);
     Ok(Json(ApiResponse::ok(response)))
 }
@@ -796,9 +830,11 @@ pub async fn get_udp_broadcast_status(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<SignalKStatusResponse>>, StatusCode> {
     // Get UDP broadcast status from database
-    let enabled = state.db().get_system_status("udp_broadcast_enabled")
+    let enabled = state
+        .db()
+        .get_system_status("udp_broadcast_enabled")
         .unwrap_or(false);
-    
+
     let response = SignalKStatusResponse { enabled };
     Ok(Json(ApiResponse::ok(response)))
 }
@@ -808,17 +844,20 @@ pub async fn set_signalk_status(
     Json(request): Json<SignalKStatusRequest>,
 ) -> Result<Json<ApiResponse<SignalKStatusResponse>>, StatusCode> {
     info!(?request, "POST /api/signalk/status called");
-    
+
     // Save signalk status to database
-    if let Err(e) = state.db().set_system_status("signalk_enabled", request.enabled) {
+    if let Err(e) = state
+        .db()
+        .set_system_status("signalk_enabled", request.enabled)
+    {
         error!(error = %e, "Failed to set signalk status");
         return Ok(Json(ApiResponse::error(e.to_string())));
     }
-    
+
     let response = SignalKStatusResponse {
         enabled: request.enabled,
     };
-    
+
     info!("SignalK status updated to: {}", request.enabled);
     Ok(Json(ApiResponse::ok(response)))
 }
@@ -870,10 +909,9 @@ pub async fn list_backups() -> Result<Json<ApiResponse<Vec<BackupFileInfo>>>, St
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_file() {
-                    if let (Ok(metadata), Some(name_str)) = (
-                        path.metadata(),
-                        path.file_name().and_then(|n| n.to_str()),
-                    ) {
+                    if let (Ok(metadata), Some(name_str)) =
+                        (path.metadata(), path.file_name().and_then(|n| n.to_str()))
+                    {
                         let modified = metadata
                             .modified()
                             .map(|t| {
@@ -945,7 +983,10 @@ pub async fn delete_backup(
             }
             Err(e) => {
                 error!(error = %e, file = %filename, "Failed to delete backup");
-                Ok(Json(ApiResponse::error(format!("Failed to delete {}: {}", filename, e))))
+                Ok(Json(ApiResponse::error(format!(
+                    "Failed to delete {}: {}",
+                    filename, e
+                ))))
             }
         }
     } else {
@@ -959,7 +1000,8 @@ pub async fn post_backup(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<BackupResponse>>, StatusCode> {
     // Reject concurrent backup requests atomically
-    if state.backup_in_progress
+    if state
+        .backup_in_progress
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         .is_err()
     {
@@ -974,15 +1016,13 @@ pub async fn post_backup(
             state.backup_in_progress.store(false, Ordering::Release);
             error!(error = %e, "Failed to create backup directory");
             return Ok(Json(ApiResponse::error(format!(
-                "Failed to create backup directory: {}", e
+                "Failed to create backup directory: {}",
+                e
             ))));
         }
     }
 
-    let filename = format!(
-        "backup_{}.gz",
-        chrono::Utc::now().format("%Y%m%d_%H%M%S")
-    );
+    let filename = format!("backup_{}.gz", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
     let output_path = backup_dir.join(&filename);
     let output_str = output_path.to_string_lossy().to_string();
 
@@ -1009,12 +1049,16 @@ pub async fn post_backup(
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             error!(stderr = %stderr, "Backup script failed");
-            Ok(Json(ApiResponse::error(format!("Backup failed: {}", stderr))))
+            Ok(Json(ApiResponse::error(format!(
+                "Backup failed: {}",
+                stderr
+            ))))
         }
         Err(e) => {
             error!(error = %e, "Failed to execute backup script");
             Ok(Json(ApiResponse::error(format!(
-                "Failed to execute backup script: {}", e
+                "Failed to execute backup script: {}",
+                e
             ))))
         }
     }
@@ -1047,6 +1091,270 @@ async fn get_read_only(State(state): State<AppState>) -> Json<serde_json::Value>
     Json(serde_json::json!({ "read_only": state.config.web.read_only }))
 }
 
+// ---------------------------------------------------------------------------
+// Sync endpoints
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct SyncStatusResponse {
+    last_synced_at: Option<String>,
+    push_enabled: bool,
+}
+
+pub async fn get_sync_status(
+    State(state): State<AppState>,
+) -> Json<ApiResponse<SyncStatusResponse>> {
+    match state.db().get_sync_status() {
+        Ok(status) => Json(ApiResponse::ok(SyncStatusResponse {
+            last_synced_at: status.last_synced_at,
+            push_enabled: state.config.sync.enabled,
+        })),
+        Err(e) => {
+            error!(error = %e, "Failed to get sync status");
+            Json(ApiResponse::error(e.to_string()))
+        }
+    }
+}
+
+fn err_chain(e: &dyn std::error::Error) -> String {
+    let mut msg = e.to_string();
+    let mut cause = e.source();
+    while let Some(c) = cause {
+        msg.push_str(": ");
+        msg.push_str(&c.to_string());
+        cause = c.source();
+    }
+    msg
+}
+
+pub async fn post_sync_push(
+    State(state): State<AppState>,
+) -> Json<ApiResponse<SyncResult>> {
+    let sync_cfg = &state.config.sync;
+
+    if !sync_cfg.enabled {
+        return Json(ApiResponse::error("Sync push is not enabled in config".to_string()));
+    }
+    if sync_cfg.target_url.is_empty() {
+        return Json(ApiResponse::error("sync.target_url is not configured".to_string()));
+    }
+    let api_key = match &sync_cfg.api_key {
+        Some(k) => k.clone(),
+        None => return Json(ApiResponse::error("sync.api_key is not configured".to_string())),
+    };
+
+    let all_uuids = match state.db().get_all_trip_uuids() {
+        Ok(v) => v,
+        Err(e) => {
+            error!(error = %e, "Sync: failed to get trip UUIDs");
+            return Json(ApiResponse::error(format!("DB error: {}", e)));
+        }
+    };
+
+    let synced_at = chrono::Utc::now().to_rfc3339();
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(sync_cfg.timeout_secs))
+        .danger_accept_invalid_certs(sync_cfg.accept_invalid_certs)
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            error!(error = %e, "Sync: failed to build HTTP client");
+            return Json(ApiResponse::error(format!("HTTP client error: {}", e)));
+        }
+    };
+
+    let base_url = sync_cfg.target_url.trim_end_matches('/').to_string();
+
+    // Step 1: Send manifest so the viewer can delete orphaned trips
+    let manifest_url = format!("{}/api/sync/manifest", base_url);
+    let manifest = SyncManifestPayload { all_uuids, synced_at: synced_at.clone() };
+    let manifest_resp = match client
+        .post(&manifest_url)
+        .bearer_auth(&api_key)
+        .json(&manifest)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let detail = err_chain(&e);
+            error!(url = %manifest_url, error = %detail, "Sync: manifest HTTP request failed");
+            return Json(ApiResponse::error(format!("Manifest push failed: {}", detail)));
+        }
+    };
+    if !manifest_resp.status().is_success() {
+        let http_status = manifest_resp.status().as_u16();
+        let body = manifest_resp.text().await.unwrap_or_default();
+        error!(http_status, body = %body, "Sync: manifest rejected by remote");
+        return Json(ApiResponse::error(format!("Remote returned HTTP {}: {}", http_status, body)));
+    }
+    let manifest_result: ApiResponse<SyncManifestResult> = match manifest_resp.json().await {
+        Ok(r) => r,
+        Err(e) => {
+            let detail = err_chain(&e);
+            error!(error = %detail, "Sync: failed to parse manifest response");
+            return Json(ApiResponse::error(format!("Bad manifest response: {}", detail)));
+        }
+    };
+    if manifest_result.status != "ok" {
+        return Json(ApiResponse::error(
+            manifest_result.error.unwrap_or_else(|| "Manifest step failed".to_string()),
+        ));
+    }
+    let (deleted_count, missing_uuids) = match manifest_result.data {
+        Some(r) => (r.deleted_count, r.missing_uuids),
+        None => (0, vec![]),
+    };
+
+    // Step 2: Fetch and send the trips the viewer reported as missing.
+    let updated_trips = match state.db().get_trips_by_uuids(&missing_uuids) {
+        Ok(v) => v,
+        Err(e) => {
+            error!(error = %e, "Sync: failed to fetch trips by UUID");
+            return Json(ApiResponse::error(format!("DB error: {}", e)));
+        }
+    };
+
+    let trip_url = format!("{}/api/sync/trip", base_url);
+    let mut upserted_count = 0usize;
+    for trip_value in &updated_trips {
+        let trip_resp = match client
+            .post(&trip_url)
+            .bearer_auth(&api_key)
+            .json(trip_value)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let uuid = trip_value["trip"]["uuid"].as_str().unwrap_or("unknown");
+                error!(uuid, error = %err_chain(&e), "Sync: trip send failed");
+                continue;
+            }
+        };
+        if !trip_resp.status().is_success() {
+            let uuid = trip_value["trip"]["uuid"].as_str().unwrap_or("unknown");
+            let http_status = trip_resp.status().as_u16();
+            error!(uuid, http_status, "Sync: remote rejected trip");
+            continue;
+        }
+        let trip_result: ApiResponse<serde_json::Value> = match trip_resp.json().await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %err_chain(&e), "Sync: failed to parse trip response");
+                continue;
+            }
+        };
+        if trip_result.status == "ok" {
+            upserted_count += 1;
+        } else {
+            let uuid = trip_value["trip"]["uuid"].as_str().unwrap_or("unknown");
+            warn!(uuid, error = ?trip_result.error, "Sync: remote failed to upsert trip");
+        }
+    }
+
+    // Step 3: Record last_synced_at locally
+    if let Err(e) = state.db().set_system_status_string("last_synced_at", &synced_at) {
+        error!(error = %e, "Sync: failed to persist last_synced_at locally");
+    }
+
+    info!(deleted_count, upserted_count, "Sync push complete");
+    Json(ApiResponse::ok(SyncResult { deleted_count, upserted_count, synced_at }))
+}
+
+/// Returns Some(Response) with a 401 body if auth fails, None if auth passes.
+fn verify_sync_token(state: &AppState, headers: &HeaderMap) -> Option<Response> {
+    let reason: &str = match &state.config.sync.api_key {
+        None => "sync.api_key not configured on this server",
+        Some(expected) => {
+            let token = headers
+                .get(header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.strip_prefix("Bearer "));
+            match token {
+                Some(t) if t == expected.as_str() => return None,
+                None => "Authorization header missing",
+                Some(_) => "API key mismatch",
+            }
+        }
+    };
+    error!("Sync auth failed: {}", reason);
+    Some(
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"status": "error", "error": reason})),
+        )
+            .into_response(),
+    )
+}
+
+pub async fn post_sync_manifest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SyncManifestPayload>,
+) -> Response {
+    if let Some(err) = verify_sync_token(&state, &headers) {
+        return err;
+    }
+
+    let deleted_count = match state.db().delete_trips_not_in_uuids(&payload.all_uuids) {
+        Ok(n) => n,
+        Err(e) => {
+            error!(error = %e, "Sync manifest: delete orphans failed");
+            return Json(ApiResponse::<SyncManifestResult>::error(e.to_string())).into_response();
+        }
+    };
+
+    // Determine which UUIDs the boat listed that we don't yet have.
+    let missing_uuids = match state.db().get_all_trip_uuids() {
+        Ok(existing) => {
+            let existing_set: std::collections::HashSet<String> = existing.into_iter().collect();
+            payload.all_uuids
+                .iter()
+                .filter(|u| !existing_set.contains(*u))
+                .cloned()
+                .collect::<Vec<_>>()
+        }
+        Err(e) => {
+            error!(error = %e, "Sync manifest: failed to get existing UUIDs");
+            return Json(ApiResponse::<SyncManifestResult>::error(e.to_string())).into_response();
+        }
+    };
+
+    if let Err(e) = state.db().set_system_status_string("last_synced_at", &payload.synced_at) {
+        error!(error = %e, "Sync manifest: failed to persist synced_at");
+    }
+
+    let missing_count = missing_uuids.len();
+    info!(deleted_count, missing_count, "Sync manifest applied");
+    Json(ApiResponse::ok(SyncManifestResult { deleted_count, missing_uuids })).into_response()
+}
+
+pub async fn post_sync_trip(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(trip_value): Json<serde_json::Value>,
+) -> Response {
+    if let Some(err) = verify_sync_token(&state, &headers) {
+        return err;
+    }
+
+    let json_str = match serde_json::to_string(&trip_value) {
+        Ok(s) => s,
+        Err(e) => return Json(ApiResponse::<()>::error(e.to_string())).into_response(),
+    };
+
+    match state.db().import_trip(&json_str) {
+        Ok(_) => Json(ApiResponse::ok(())).into_response(),
+        Err(e) => {
+            error!(error = %e, "Sync trip: import failed");
+            Json(ApiResponse::<()>::error(e.to_string())).into_response()
+        }
+    }
+}
+
 pub fn create_api_router(state: AppState) -> Router {
     let read_only = state.config.web.read_only;
 
@@ -1064,7 +1372,13 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/monthly_statistics", get(get_monthly_statistics))
         .route("/heatmap", get(get_heatmap))
         .route("/config/google_maps_key", get(get_google_maps_key))
-        .route("/config/read_only", get(get_read_only));
+        .route("/config/read_only", get(get_read_only))
+        .route("/sync/status", get(get_sync_status))
+        .route("/sync/manifest", post(post_sync_manifest))
+        .route(
+            "/sync/trip",
+            post(post_sync_trip).layer(DefaultBodyLimit::max(MAX_IMPORT_TRIP_UPLOAD_BYTES)),
+        );
 
     if !read_only {
         router = router
@@ -1089,7 +1403,8 @@ pub fn create_api_router(state: AppState) -> Router {
             .route("/backup", post(post_backup))
             .route("/backup", delete(delete_backup))
             .route("/backup/download", get(download_backup))
-            .route("/system/shutdown", post(system_shutdown));
+            .route("/system/shutdown", post(system_shutdown))
+            .route("/sync/push", post(post_sync_push));
     }
 
     router
@@ -1098,20 +1413,22 @@ pub fn create_api_router(state: AppState) -> Router {
                 .on_request(|request: &axum::http::Request<_>, _span: &Span| {
                     info!(method = %request.method(), uri = %request.uri(), "API call");
                 })
-                .on_response(|response: &axum::http::Response<_>, latency: Duration, _span: &Span| {
-                    let bytes = response
-                        .headers()
-                        .get(axum::http::header::CONTENT_LENGTH)
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(0);
-                    info!(
-                        status = %response.status(),
-                        latency_ms = latency.as_millis(),
-                        bytes,
-                        "API response"
-                    );
-                })
+                .on_response(
+                    |response: &axum::http::Response<_>, latency: Duration, _span: &Span| {
+                        let bytes = response
+                            .headers()
+                            .get(axum::http::header::CONTENT_LENGTH)
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or(0);
+                        info!(
+                            status = %response.status(),
+                            latency_ms = latency.as_millis(),
+                            bytes,
+                            "API response"
+                        );
+                    },
+                ),
         )
         .with_state(state)
 }
@@ -1122,22 +1439,22 @@ mod tests {
         body::Body,
         http::{Request, StatusCode},
     };
-    use tower::ServiceExt;
     use serde_json::json;
+    use tower::ServiceExt;
 
     // Helper function to create a test database connection
     fn create_test_db() -> VesselDatabase {
         // Read database URL from environment or use default
         let db_url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| "mysql://nmea:nmea@localhost:3306/nmea_router".to_string());
-        
+
         VesselDatabase::new(&db_url, 2, 10).expect("Failed to connect to test database")
     }
 
     // Helper function to create a test app
     fn create_test_app() -> Router {
         let db = create_test_db();
-        let mut config = crate::config::Config::default();
+        let mut config = crate::config::Config::new_default_instance();
         config.web.google_maps_api_key = Some("your_google_maps_api_key_here".to_string());
         let signalk_broadcast = Arc::new(SignalKBroadcastChannels::new());
         let state = AppState {
@@ -1255,7 +1572,7 @@ mod tests {
                 let response = app
                     .oneshot(
                         Request::builder()
-                            .uri(&format!("/trip?id={}", trip_id))
+                            .uri(format!("/trip?id={}", trip_id))
                             .body(Body::empty())
                             .unwrap(),
                     )
@@ -1439,7 +1756,9 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/speed_distribution?start=2026-02-02%2006:00:00&end=2026-02-02%2008:00:00")
+                    .uri(
+                        "/speed_distribution?start=2026-02-02%2006:00:00&end=2026-02-02%2008:00:00",
+                    )
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1585,7 +1904,7 @@ mod tests {
         assert_eq!(json["status"], "ok");
         assert!(json["data"].is_object());
         assert!(json["data"]["legs"].is_array());
-        
+
         // Verify leg structure if legs exist
         if let Some(legs) = json["data"]["legs"].as_array() {
             if !legs.is_empty() {
@@ -1600,7 +1919,7 @@ mod tests {
                 assert!(leg["motoring_time_ms"].is_number());
                 assert!(leg["sailing_time_formatted"].is_string());
                 assert!(leg["motoring_time_formatted"].is_string());
-                
+
                 // Verify UTC ISO format timestamp
                 let timestamp = leg["start_timestamp"].as_str().unwrap();
                 assert!(timestamp.ends_with('Z'));
@@ -1710,7 +2029,7 @@ mod tests {
 
         assert_eq!(json["status"], "ok");
         assert!(json["data"].is_object());
-        
+
         // Verify structure
         let data = &json["data"];
         assert!(data["max_speed_kn"].is_number() || data["max_speed_kn"].is_null());
@@ -1718,7 +2037,7 @@ mod tests {
         assert!(data["fastest_1nm"].is_object() || data["fastest_1nm"].is_null());
         assert!(data["fastest_5nm"].is_object() || data["fastest_5nm"].is_null());
         assert!(data["fastest_10nm"].is_object() || data["fastest_10nm"].is_null());
-        
+
         // If fastest segments exist, verify their structure
         if let Some(segment) = data["fastest_1nm"].as_object() {
             assert!(segment.contains_key("distance_nm"));
@@ -1779,7 +2098,7 @@ mod tests {
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        
+
         assert_eq!(json["status"], "ok");
         assert_eq!(json["data"], "your_google_maps_api_key_here");
         assert!(json["error"].is_null());
@@ -1808,14 +2127,14 @@ mod tests {
 
         assert_eq!(json["status"], "ok");
         assert!(json["data"].is_object());
-        
+
         // Verify heatmap data structure
         let data = &json["data"];
         assert!(data["total_distance"].is_number());
         assert!(data["max_distance"].is_number());
         assert!(data["min_distance"].is_number());
         assert!(data["days"].is_array());
-        
+
         // Verify day structure if days exist
         if let Some(days) = data["days"].as_array() {
             if !days.is_empty() {
@@ -1972,7 +2291,7 @@ mod tests {
                 let response = app
                     .oneshot(
                         Request::builder()
-                            .uri(&format!("/trip_by_uuid?uuid={}", uuid))
+                            .uri(format!("/trip_by_uuid?uuid={}", uuid))
                             .body(Body::empty())
                             .unwrap(),
                     )
@@ -1987,8 +2306,14 @@ mod tests {
 
                 assert_eq!(json["status"], "ok");
                 assert!(json["data"].is_object());
-                assert_eq!(json["data"]["id"], trip_id, "UUID lookup must return the correct trip");
-                assert_eq!(json["data"]["uuid"], uuid, "Returned uuid must match queried uuid");
+                assert_eq!(
+                    json["data"]["id"], trip_id,
+                    "UUID lookup must return the correct trip"
+                );
+                assert_eq!(
+                    json["data"]["uuid"], uuid,
+                    "Returned uuid must match queried uuid"
+                );
             }
         }
     }
@@ -2027,7 +2352,7 @@ mod tests {
     fn create_clean_test_app() -> (Router, Arc<RwLock<crate::db::types::VesselDatabase>>) {
         use crate::db::test_helpers::setup_db;
         let db = Arc::new(RwLock::new(setup_db()));
-        let config = Arc::new(crate::config::Config::load_for_context().unwrap());
+        let config = Arc::new(crate::config::Config::load_for_context(None).unwrap());
         let signalk_broadcast = Arc::new(SignalKBroadcastChannels::new());
         let state = AppState {
             db: db.clone(),
@@ -2039,10 +2364,15 @@ mod tests {
         (create_api_router(state), db)
     }
 
-    async fn call_api(app: Router, req: axum::http::Request<Body>) -> (StatusCode, serde_json::Value) {
+    async fn call_api(
+        app: Router,
+        req: axum::http::Request<Body>,
+    ) -> (StatusCode, serde_json::Value) {
         let resp = app.oneshot(req).await.unwrap();
         let status = resp.status();
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
         (status, json)
     }
@@ -2051,16 +2381,45 @@ mod tests {
     #[ignore]
     async fn test_get_trips_seeded() {
         use crate::db::test_helpers::add_test_trip;
-        use std::time::{SystemTime, Duration};
         use std::ops::Add;
+        use std::time::{Duration, SystemTime};
         let (app, db) = create_clean_test_app();
         let now = SystemTime::now();
         {
             let db = db.read().unwrap();
-            add_test_trip(&db, "Trip A".to_string(), now, now.add(Duration::from_secs(3600)), 10.0, 2.0, 3600000, 600000, 0).unwrap();
-            add_test_trip(&db, "Trip B".to_string(), now.add(Duration::from_secs(7200)), now.add(Duration::from_secs(10800)), 5.0, 0.0, 1800000, 0, 0).unwrap();
+            add_test_trip(
+                &db,
+                "Trip A".to_string(),
+                now,
+                now.add(Duration::from_secs(3600)),
+                10.0,
+                2.0,
+                3600000,
+                600000,
+                0,
+            )
+            .unwrap();
+            add_test_trip(
+                &db,
+                "Trip B".to_string(),
+                now.add(Duration::from_secs(7200)),
+                now.add(Duration::from_secs(10800)),
+                5.0,
+                0.0,
+                1800000,
+                0,
+                0,
+            )
+            .unwrap();
         }
-        let (status, json) = call_api(app, axum::http::Request::builder().uri("/trips").body(Body::empty()).unwrap()).await;
+        let (status, json) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri("/trips")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["status"], "ok");
         assert_eq!(json["data"].as_array().unwrap().len(), 2);
@@ -2070,15 +2429,33 @@ mod tests {
     #[ignore]
     async fn test_get_trip_by_id_seeded() {
         use crate::db::test_helpers::add_test_trip;
-        use std::time::{SystemTime, Duration};
         use std::ops::Add;
+        use std::time::{Duration, SystemTime};
         let (app, db) = create_clean_test_app();
         let now = SystemTime::now();
         let trip_id = {
             let db = db.read().unwrap();
-            add_test_trip(&db, "Seeded Trip".to_string(), now, now.add(Duration::from_secs(7200)), 12.5, 3.0, 7200000, 1800000, 0).unwrap()
+            add_test_trip(
+                &db,
+                "Seeded Trip".to_string(),
+                now,
+                now.add(Duration::from_secs(7200)),
+                12.5,
+                3.0,
+                7200000,
+                1800000,
+                0,
+            )
+            .unwrap()
         };
-        let (status, json) = call_api(app, axum::http::Request::builder().uri(&format!("/trip?id={}", trip_id)).body(Body::empty()).unwrap()).await;
+        let (status, json) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri(format!("/trip?id={}", trip_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["status"], "ok");
         assert_eq!(json["data"]["id"].as_u64().unwrap(), trip_id as u64);
@@ -2089,18 +2466,44 @@ mod tests {
     #[ignore]
     async fn test_delete_trip_seeded() {
         use crate::db::test_helpers::add_test_trip;
-        use std::time::{SystemTime, Duration};
         use std::ops::Add;
+        use std::time::{Duration, SystemTime};
         let (app, db) = create_clean_test_app();
         let now = SystemTime::now();
         let trip_id = {
             let db = db.read().unwrap();
-            add_test_trip(&db, "To Delete".to_string(), now, now.add(Duration::from_secs(3600)), 1.0, 0.0, 3600000, 0, 0).unwrap()
+            add_test_trip(
+                &db,
+                "To Delete".to_string(),
+                now,
+                now.add(Duration::from_secs(3600)),
+                1.0,
+                0.0,
+                3600000,
+                0,
+                0,
+            )
+            .unwrap()
         };
-        let (status, json) = call_api(app.clone(), axum::http::Request::builder().method("DELETE").uri(&format!("/delete_trip?id={}", trip_id)).body(Body::empty()).unwrap()).await;
+        let (status, json) = call_api(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("DELETE")
+                .uri(format!("/delete_trip?id={}", trip_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["status"], "ok");
-        let (_, json2) = call_api(app, axum::http::Request::builder().uri(&format!("/trip?id={}", trip_id)).body(Body::empty()).unwrap()).await;
+        let (_, json2) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri(format!("/trip?id={}", trip_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(json2["status"], "error");
     }
 
@@ -2108,20 +2511,50 @@ mod tests {
     #[ignore]
     async fn test_update_trip_description_seeded() {
         use crate::db::test_helpers::add_test_trip;
-        use std::time::{SystemTime, Duration};
         use std::ops::Add;
+        use std::time::{Duration, SystemTime};
         let (app, db) = create_clean_test_app();
         let now = SystemTime::now();
         let trip_id = {
             let db = db.read().unwrap();
-            add_test_trip(&db, "Original".to_string(), now, now.add(Duration::from_secs(3600)), 1.0, 0.0, 3600000, 0, 0).unwrap()
+            add_test_trip(
+                &db,
+                "Original".to_string(),
+                now,
+                now.add(Duration::from_secs(3600)),
+                1.0,
+                0.0,
+                3600000,
+                0,
+                0,
+            )
+            .unwrap()
         };
         let body = json!({"id": trip_id, "description": "Updated Description"}).to_string();
-        let (status, json) = call_api(app.clone(), axum::http::Request::builder().method("POST").uri("/trip_description").header("content-type", "application/json").body(Body::from(body)).unwrap()).await;
+        let (status, json) = call_api(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/trip_description")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["status"], "ok");
-        let (_, json2) = call_api(app, axum::http::Request::builder().uri(&format!("/trip?id={}", trip_id)).body(Body::empty()).unwrap()).await;
-        assert_eq!(json2["data"]["description"].as_str().unwrap(), "Updated Description");
+        let (_, json2) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri(format!("/trip?id={}", trip_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            json2["data"]["description"].as_str().unwrap(),
+            "Updated Description"
+        );
     }
 
     #[tokio::test]
@@ -2129,19 +2562,53 @@ mod tests {
     async fn test_get_track_seeded() {
         use crate::db::test_helpers::{add_test_trip, add_test_vessel_status};
         use crate::utilities::EngineStatus;
-        use std::time::{SystemTime, Duration};
         use std::ops::Add;
+        use std::time::{Duration, SystemTime};
         let (app, db) = create_clean_test_app();
         let now = SystemTime::now();
         let trip_id = {
             let db = db.read().unwrap();
-            let tid = add_test_trip(&db, "Track Test".to_string(), now, now.add(Duration::from_secs(3600)), 5.0, 0.0, 3600000, 0, 0).unwrap();
+            let tid = add_test_trip(
+                &db,
+                "Track Test".to_string(),
+                now,
+                now.add(Duration::from_secs(3600)),
+                5.0,
+                0.0,
+                3600000,
+                0,
+                0,
+            )
+            .unwrap();
             for i in 0..5u64 {
-                add_test_vessel_status(&db, now.add(Duration::from_secs(i * 600)), 51.5 + (i as f64) * 0.01, -0.1, 6.0, 7.0, None, None, false, EngineStatus::Off, 1.0, 600000, Some(90.0), None).unwrap();
+                add_test_vessel_status(
+                    &db,
+                    now.add(Duration::from_secs(i * 600)),
+                    51.5 + (i as f64) * 0.01,
+                    -0.1,
+                    6.0,
+                    7.0,
+                    None,
+                    None,
+                    false,
+                    EngineStatus::Off,
+                    1.0,
+                    600000,
+                    Some(90.0),
+                    None,
+                )
+                .unwrap();
             }
             tid
         };
-        let (status, json) = call_api(app, axum::http::Request::builder().uri(&format!("/track?trip_id={}", trip_id)).body(Body::empty()).unwrap()).await;
+        let (status, json) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri(format!("/track?trip_id={}", trip_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["status"], "ok");
         assert_eq!(json["data"].as_array().unwrap().len(), 5);
@@ -2153,27 +2620,62 @@ mod tests {
     #[ignore]
     async fn test_get_track_bad_datetime() {
         let (app, _) = create_clean_test_app();
-        let resp = app.oneshot(axum::http::Request::builder().uri("/track?start=not-a-date").body(Body::empty()).unwrap()).await.unwrap();
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/track?start=not-a-date")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_get_metrics_seeded() {
-        use crate::db::test_helpers::{add_test_trip, add_test_env};
-        use std::time::{SystemTime, Duration};
+        use crate::db::test_helpers::{add_test_env, add_test_trip};
         use std::ops::Add;
+        use std::time::{Duration, SystemTime};
         let (app, db) = create_clean_test_app();
         let now = SystemTime::now();
         let trip_id = {
             let db = db.read().unwrap();
-            let tid = add_test_trip(&db, "Metrics Trip".to_string(), now, now.add(Duration::from_secs(3600)), 1.0, 0.0, 3600000, 0, 0).unwrap();
+            let tid = add_test_trip(
+                &db,
+                "Metrics Trip".to_string(),
+                now,
+                now.add(Duration::from_secs(3600)),
+                1.0,
+                0.0,
+                3600000,
+                0,
+                0,
+            )
+            .unwrap();
             for i in 0..3u64 {
-                add_test_env(&db, now.add(Duration::from_secs(i * 300)), 2, Some(20.0 + i as f64), Some(22.0), Some(18.0), "C").unwrap();
+                add_test_env(
+                    &db,
+                    now.add(Duration::from_secs(i * 300)),
+                    2,
+                    Some(20.0 + i as f64),
+                    Some(22.0),
+                    Some(18.0),
+                    "C",
+                )
+                .unwrap();
             }
             tid
         };
-        let (status, json) = call_api(app, axum::http::Request::builder().uri(&format!("/metrics?metric=2&trip_id={}", trip_id)).body(Body::empty()).unwrap()).await;
+        let (status, json) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri(format!("/metrics?metric=2&trip_id={}", trip_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["status"], "ok");
         assert!(!json["data"].as_array().unwrap().is_empty());
@@ -2183,10 +2685,21 @@ mod tests {
     #[ignore]
     async fn test_get_metrics_batch_invalid_param() {
         let (app, _) = create_clean_test_app();
-        let (status, json) = call_api(app, axum::http::Request::builder().uri("/metrics/batch?metrics=not-ids").body(Body::empty()).unwrap()).await;
+        let (status, json) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri("/metrics/batch?metrics=not-ids")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["status"], "error");
-        assert!(json["error"].as_str().unwrap().to_lowercase().contains("invalid"));
+        assert!(json["error"]
+            .as_str()
+            .unwrap()
+            .to_lowercase()
+            .contains("invalid"));
     }
 
     #[tokio::test]
@@ -2194,7 +2707,14 @@ mod tests {
     async fn test_get_signalk_status_defaults_true() {
         // All system_status keys (including signalk_enabled) default to true when absent from cache/DB
         let (app, _) = create_clean_test_app();
-        let (status, json) = call_api(app, axum::http::Request::builder().uri("/signalk/status").body(Body::empty()).unwrap()).await;
+        let (status, json) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri("/signalk/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["data"]["enabled"], true);
     }
@@ -2203,7 +2723,14 @@ mod tests {
     #[ignore]
     async fn test_get_tracking_status_defaults_true() {
         let (app, _) = create_clean_test_app();
-        let (status, json) = call_api(app, axum::http::Request::builder().uri("/tracking/status").body(Body::empty()).unwrap()).await;
+        let (status, json) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri("/tracking/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["data"]["enabled"], true);
     }
@@ -2213,10 +2740,26 @@ mod tests {
     async fn test_set_and_get_tracking_status_seeded() {
         let (app, _) = create_clean_test_app();
         let body = json!({"enabled": false}).to_string();
-        let (status, json) = call_api(app.clone(), axum::http::Request::builder().method("POST").uri("/tracking/status").header("content-type", "application/json").body(Body::from(body)).unwrap()).await;
+        let (status, json) = call_api(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/tracking/status")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["data"]["enabled"], false);
-        let (_, json2) = call_api(app, axum::http::Request::builder().uri("/tracking/status").body(Body::empty()).unwrap()).await;
+        let (_, json2) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri("/tracking/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(json2["data"]["enabled"], false);
     }
 
@@ -2224,7 +2767,14 @@ mod tests {
     #[ignore]
     async fn test_list_exports_returns_array() {
         let (app, _) = create_clean_test_app();
-        let (status, json) = call_api(app, axum::http::Request::builder().uri("/list_exports").body(Body::empty()).unwrap()).await;
+        let (status, json) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri("/list_exports")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["status"], "ok");
         assert!(json["data"].is_array());
@@ -2234,7 +2784,14 @@ mod tests {
     #[ignore]
     async fn test_get_monthly_statistics_empty_db() {
         let (app, _) = create_clean_test_app();
-        let (status, json) = call_api(app, axum::http::Request::builder().uri("/monthly_statistics").body(Body::empty()).unwrap()).await;
+        let (status, json) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri("/monthly_statistics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["status"], "ok");
         assert!(json["data"]["months"].is_array());
@@ -2244,7 +2801,15 @@ mod tests {
     #[ignore]
     async fn test_delete_backup_path_traversal() {
         let (app, _) = create_clean_test_app();
-        let (status, json) = call_api(app, axum::http::Request::builder().method("DELETE").uri("/backup?file=../../../etc/passwd").body(Body::empty()).unwrap()).await;
+        let (status, json) = call_api(
+            app,
+            axum::http::Request::builder()
+                .method("DELETE")
+                .uri("/backup?file=../../../etc/passwd")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["status"], "error");
         assert_eq!(json["error"].as_str().unwrap(), "Invalid filename");
@@ -2254,7 +2819,15 @@ mod tests {
     #[ignore]
     async fn test_download_backup_not_found() {
         let (app, _) = create_clean_test_app();
-        let resp = app.oneshot(axum::http::Request::builder().uri("/backup/download?file=nonexistent_test_file.gz").body(Body::empty()).unwrap()).await.unwrap();
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/backup/download?file=nonexistent_test_file.gz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
@@ -2262,7 +2835,15 @@ mod tests {
     #[ignore]
     async fn test_download_backup_path_traversal() {
         let (app, _) = create_clean_test_app();
-        let resp = app.oneshot(axum::http::Request::builder().uri("/backup/download?file=../config.json").body(Body::empty()).unwrap()).await.unwrap();
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/backup/download?file=../config.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -2274,7 +2855,7 @@ mod tests {
 
     fn create_test_app_read_only() -> Router {
         let db = create_test_db();
-        let mut config = crate::config::Config::default();
+        let mut config = crate::config::Config::new_default_instance();
         config.web.read_only = true;
         let signalk_broadcast = Arc::new(SignalKBroadcastChannels::new());
         let state = AppState {
@@ -2288,23 +2869,54 @@ mod tests {
     }
 
     async fn get_status(app: Router, uri: &str) -> StatusCode {
-        app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap()).await.unwrap().status()
+        app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
     }
 
     async fn post_status(app: Router, uri: &str) -> StatusCode {
-        app.oneshot(Request::builder().method("POST").uri(uri).body(Body::empty()).unwrap()).await.unwrap().status()
+        app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
     }
 
     async fn delete_status(app: Router, uri: &str) -> StatusCode {
-        app.oneshot(Request::builder().method("DELETE").uri(uri).body(Body::empty()).unwrap()).await.unwrap().status()
+        app.oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
     }
 
     #[tokio::test]
     async fn test_read_only_config_endpoint_returns_true() {
         let app = create_test_app_read_only();
-        let resp = app.oneshot(Request::builder().uri("/config/read_only").body(Body::empty()).unwrap()).await.unwrap();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/config/read_only")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["read_only"], true);
     }
@@ -2312,9 +2924,19 @@ mod tests {
     #[tokio::test]
     async fn test_non_read_only_config_endpoint_returns_false() {
         let app = create_test_app();
-        let resp = app.oneshot(Request::builder().uri("/config/read_only").body(Body::empty()).unwrap()).await.unwrap();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/config/read_only")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["read_only"], false);
     }
@@ -2335,7 +2957,11 @@ mod tests {
         for uri in &read_routes {
             let app = create_test_app_read_only();
             let status = get_status(app, uri).await;
-            assert_ne!(status, StatusCode::NOT_FOUND, "RO mode: read route {uri} must not return 404");
+            assert_ne!(
+                status,
+                StatusCode::NOT_FOUND,
+                "RO mode: read route {uri} must not return 404"
+            );
         }
     }
 
@@ -2357,7 +2983,11 @@ mod tests {
         for uri in &post_routes {
             let app = create_test_app_read_only();
             let status = post_status(app, uri).await;
-            assert_eq!(status, StatusCode::NOT_FOUND, "RO mode: POST {uri} must return 404");
+            assert_eq!(
+                status,
+                StatusCode::NOT_FOUND,
+                "RO mode: POST {uri} must return 404"
+            );
         }
 
         // DELETE routes that should not exist in RO mode
@@ -2365,7 +2995,11 @@ mod tests {
         for uri in &delete_routes {
             let app = create_test_app_read_only();
             let status = delete_status(app, uri).await;
-            assert_eq!(status, StatusCode::NOT_FOUND, "RO mode: DELETE {uri} must return 404");
+            assert_eq!(
+                status,
+                StatusCode::NOT_FOUND,
+                "RO mode: DELETE {uri} must return 404"
+            );
         }
 
         // GET routes that should not exist in RO mode
@@ -2382,7 +3016,11 @@ mod tests {
         for uri in &get_routes {
             let app = create_test_app_read_only();
             let status = get_status(app, uri).await;
-            assert_eq!(status, StatusCode::NOT_FOUND, "RO mode: GET {uri} must return 404");
+            assert_eq!(
+                status,
+                StatusCode::NOT_FOUND,
+                "RO mode: GET {uri} must return 404"
+            );
         }
     }
 
@@ -2401,7 +3039,11 @@ mod tests {
         for uri in &get_routes {
             let app = create_test_app();
             let status = get_status(app, uri).await;
-            assert_ne!(status, StatusCode::NOT_FOUND, "Full mode: GET {uri} must not return 404");
+            assert_ne!(
+                status,
+                StatusCode::NOT_FOUND,
+                "Full mode: GET {uri} must not return 404"
+            );
         }
     }
 }

@@ -6,3 +6,4 @@ logs/
 /static/exports/
 /backups/
 package-lock.json
+.mcp.json

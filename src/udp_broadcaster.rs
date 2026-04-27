@@ -1,32 +1,34 @@
+use chrono::{Datelike, TimeZone, Timelike, Utc};
+use nmea2k::pgns::N2kMessage;
+use nmea2k::pgns::{
+    AisClassAPositionReport, AisClassAStaticData, AisClassBPositionReport,
+    AisClassBStaticDataPartA, AisClassBStaticDataPartB,
+};
+use nmea2k::pgns::{GnssMethod, HeadingReference, WindReference};
+use nmea2k::{MessageHandler, N2kFrame};
+use std::collections::HashMap;
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 use std::time::Instant;
 use tracing::{debug, warn};
-use nmea2k::pgns::N2kMessage;
-use nmea2k::pgns::{HeadingReference, WindReference, GnssMethod};
-use nmea2k::pgns::{AisClassAPositionReport, AisClassBPositionReport,
-    AisClassAStaticData, AisClassBStaticDataPartA, AisClassBStaticDataPartB};
-use nmea2k::{MessageHandler, N2kFrame};
-use chrono::{Datelike, TimeZone, Timelike, Utc};
 
 /// Aggregated state used to build RMC and GGA sentences
 #[derive(Debug, Clone, Default)]
 struct RmcState {
-    latitude: Option<f64>,           // decimal degrees
-    longitude: Option<f64>,          // decimal degrees
-    sog_knots: Option<f64>,          // speed over ground in knots
-    cog_true_deg: Option<f64>,       // course over ground in degrees
-    altitude_m: Option<f64>,         // altitude in meters (from GNSS)
-    num_svs: Option<u8>,             // number of satellites
-    hdop: Option<f64>,               // horizontal dilution of precision
-    n2k_date: Option<u16>,           // N2K date (days since 1970-01-01)
-    n2k_time_secs: Option<f64>,      // N2K time (seconds since midnight)
-    fix_quality: Option<u8>,         // 0=invalid,1=GPS,2=DGPS,etc.
+    latitude: Option<f64>,      // decimal degrees
+    longitude: Option<f64>,     // decimal degrees
+    sog_knots: Option<f64>,     // speed over ground in knots
+    cog_true_deg: Option<f64>,  // course over ground in degrees
+    altitude_m: Option<f64>,    // altitude in meters (from GNSS)
+    num_svs: Option<u8>,        // number of satellites
+    hdop: Option<f64>,          // horizontal dilution of precision
+    n2k_date: Option<u16>,      // N2K date (days since 1970-01-01)
+    n2k_time_secs: Option<f64>, // N2K time (seconds since midnight)
+    fix_quality: Option<u8>,    // 0=invalid,1=GPS,2=DGPS,etc.
 }
 
 /// UDP broadcaster for NMEA2000 messages
-/// 
+///
 /// Converts incoming NMEA2000 messages to NMEA0183 format and broadcasts them
 /// over UDP to a configured destination address. Rate-limited to 1 message per
 /// second per topic.
@@ -39,7 +41,6 @@ pub struct UdpBroadcaster {
     rate_limiter: HashMap<String, Instant>,
     rmc_state: RmcState,
 }
-
 
 impl UdpBroadcaster {
     /// Create a new UDP broadcaster
@@ -56,11 +57,17 @@ impl UdpBroadcaster {
         let socket = if enabled {
             match Self::create_socket(&destination, &bind_address) {
                 Ok(sock) => {
-                    debug!("UDP broadcaster initialized: {} -> {}", bind_address, destination);
+                    debug!(
+                        "UDP broadcaster initialized: {} -> {}",
+                        bind_address, destination
+                    );
                     Some(sock)
                 }
                 Err(e) => {
-                    return Err(format!("Failed to bind UDP socket to {}: {}", bind_address, e));
+                    return Err(format!(
+                        "Failed to bind UDP socket to {}: {}",
+                        bind_address, e
+                    ));
                 }
             }
         } else {
@@ -82,15 +89,15 @@ impl UdpBroadcaster {
     /// Create and configure a UDP socket
     fn create_socket(destination: &str, bind_address: &str) -> Result<UdpSocket, std::io::Error> {
         let socket = UdpSocket::bind(bind_address)?;
-        
+
         // Enable broadcast if destination is a broadcast address
         if destination.contains(".255") {
             socket.set_broadcast(true)?;
         }
-        
+
         // Set non-blocking mode to prevent blocking the main loop
         socket.set_nonblocking(true)?;
-        
+
         Ok(socket)
     }
 
@@ -111,7 +118,9 @@ impl UdpBroadcaster {
 
         // Check if we should send (1 second rate limit per topic)
         if let Some(last) = last_send {
-            if now.duration_since(last).as_millis() < 900 /* account for some wiggle room, otherwise we end up with 2s period instead of 1s */ {
+            if now.duration_since(last).as_millis() < 900
+            /* account for some wiggle room, otherwise we end up with 2s period instead of 1s */
+            {
                 return;
             }
         }
@@ -138,7 +147,10 @@ impl UdpBroadcaster {
                     self.message_count += 1;
                     self.rate_limiter.insert(topic.to_string(), now);
                     if self.message_count % 1000 == 0 {
-                        debug!("Broadcasted {} NMEA0183 messages via UDP", self.message_count);
+                        debug!(
+                            "Broadcasted {} NMEA0183 messages via UDP",
+                            self.message_count
+                        );
                     }
                 }
                 Err(e) => {
@@ -157,13 +169,16 @@ impl UdpBroadcaster {
         let stale_threshold = std::time::Duration::from_secs(300); // 5 minutes
         let before_count = self.rate_limiter.len();
 
-        self.rate_limiter.retain(|_, last_send| {
-            now.duration_since(*last_send) < stale_threshold
-        });
+        self.rate_limiter
+            .retain(|_, last_send| now.duration_since(*last_send) < stale_threshold);
 
         let removed = before_count - self.rate_limiter.len();
         if removed > 0 {
-            debug!("Cleaned up {} stale rate limiter entries, {} remaining", removed, self.rate_limiter.len());
+            debug!(
+                "Cleaned up {} stale rate limiter entries, {} remaining",
+                removed,
+                self.rate_limiter.len()
+            );
         }
     }
 
@@ -174,8 +189,6 @@ impl UdpBroadcaster {
         (self.message_count, self.error_count)
     }
 }
-
-
 
 // ============================================================================
 // NMEA0183 Helper Functions
@@ -193,10 +206,14 @@ fn nmea0183_checksum(sentence: &str) -> String {
 /// Convert N2K date (days since 1970-01-01) to NMEA0183 date string (DDMMYY)
 fn format_n2k_date(days_since_epoch: u16) -> Result<String, Box<dyn std::error::Error>> {
     use chrono::Duration;
-    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-        .ok_or("Invalid epoch date")?;
+    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).ok_or("Invalid epoch date")?;
     let date = epoch + Duration::days(days_since_epoch as i64);
-    Ok(format!("{:02}{:02}{:02}", date.day(), date.month(), date.year() % 100))
+    Ok(format!(
+        "{:02}{:02}{:02}",
+        date.day(),
+        date.month(),
+        date.year() % 100
+    ))
 }
 
 /// Convert N2K time (seconds since midnight) to NMEA0183 time string (HHMMSS.ss)
@@ -205,8 +222,8 @@ fn format_n2k_time(seconds_since_midnight: f64) -> String {
     let hours = total_secs / 3600;
     let minutes = (total_secs % 3600) / 60;
     let secs = total_secs % 60;
-//    let frac = (seconds_since_midnight - total_secs as f64) * 100.0;
-//    format!("{:02}{:02}{:02}.{:02}", hours, minutes, secs, frac as u8)
+    //    let frac = (seconds_since_midnight - total_secs as f64) * 100.0;
+    //    format!("{:02}{:02}{:02}.{:02}", hours, minutes, secs, frac as u8)
     format!("{:02}{:02}{:02}", hours, minutes, secs)
 }
 
@@ -227,11 +244,19 @@ fn format_longitude(degrees: f64) -> String {
 
 /// Determine N or S for latitude, E or W for longitude
 fn lat_direction(lat: f64) -> &'static str {
-    if lat >= 0.0 { "N" } else { "S" }
+    if lat >= 0.0 {
+        "N"
+    } else {
+        "S"
+    }
 }
 
 fn lon_direction(lon: f64) -> &'static str {
-    if lon >= 0.0 { "E" } else { "W" }
+    if lon >= 0.0 {
+        "E"
+    } else {
+        "W"
+    }
 }
 
 /// Format an RMC sentence (Recommended Minimum Navigation Information)
@@ -253,8 +278,10 @@ fn format_rmc(state: &RmcState) -> Option<String> {
     let sentence_body = format!(
         "IIRMC,{},A,{},{},{},{},{},{:.0},{}",
         time_str,
-        lat_str, lat_direction(lat),
-        lon_str, lon_direction(lon),
+        lat_str,
+        lat_direction(lat),
+        lon_str,
+        lon_direction(lon),
         sog_kn,
         cog,
         date_str
@@ -280,8 +307,10 @@ fn format_gga(state: &RmcState) -> Option<String> {
     let sentence_body = format!(
         "IIGGA,{},{},{},{},{},{},{},{:.1},{:.1},M,0.0,M,,",
         time_str,
-        lat_str, lat_direction(lat),
-        lon_str, lon_direction(lon),
+        lat_str,
+        lat_direction(lat),
+        lon_str,
+        lon_direction(lon),
         fix_quality,
         num_sats,
         hdop,
@@ -300,7 +329,11 @@ fn format_zda(date_n2k: u16, time_n2k: f64) -> Option<String> {
     let day: u32 = date_str[0..2].parse().ok()?;
     let month: u32 = date_str[2..4].parse().ok()?;
     let year_short: u32 = date_str[4..6].parse().ok()?;
-    let year = if year_short >= 70 { 1900 + year_short } else { 2000 + year_short };
+    let year = if year_short >= 70 {
+        1900 + year_short
+    } else {
+        2000 + year_short
+    };
 
     // $IIZDA,HHMMSS.ss,DD,MM,YYYY,00,00*checksum
     let sentence_body = format!(
@@ -314,24 +347,27 @@ fn format_zda(date_n2k: u16, time_n2k: f64) -> Option<String> {
 /// Format an MWV sentence (Wind Speed and Angle)
 fn format_mwv(angle_rad: f64, speed_ms: f64, reference: &WindReference) -> Option<String> {
     let angle_deg = angle_rad.to_degrees();
-    let speed_kn = speed_ms * 1.94384;  // m/s to knots
+    let speed_kn = speed_ms * 1.94384; // m/s to knots
     let ref_str = match reference {
         WindReference::Apparent => "R",
-        WindReference::TrueBoat | WindReference::TrueWater | WindReference::TrueGroundNorth | WindReference::Magnetic => "T",
+        WindReference::TrueBoat
+        | WindReference::TrueWater
+        | WindReference::TrueGroundNorth
+        | WindReference::Magnetic => "T",
     };
 
-    let sentence_body = format!(
-        "IIMWV,{:.1},{},{:.1},N,A",
-        angle_deg, ref_str, speed_kn
-    );
+    let sentence_body = format!("IIMWV,{:.1},{},{:.1},N,A", angle_deg, ref_str, speed_kn);
     let checksum = nmea0183_checksum(&sentence_body);
     Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
 
 /// Format HDT (True Heading) or HDM (Magnetic Heading) sentence
-fn format_heading(heading_rad: f64, reference: &HeadingReference) -> (Option<String>, Option<String>) {
+fn format_heading(
+    heading_rad: f64,
+    reference: &HeadingReference,
+) -> (Option<String>, Option<String>) {
     let heading_deg = heading_rad.to_degrees() % 360.0;
-    
+
     let hdt = if matches!(reference, HeadingReference::True) {
         let sentence_body = format!("IIHDT,{:.1},T", heading_deg);
         let checksum = nmea0183_checksum(&sentence_body);
@@ -368,7 +404,8 @@ fn format_xdr_attitude(yaw: Option<f64>, pitch: Option<f64>, roll: Option<f64>) 
         yaw.map(|y| format!("A,{:.1},D,YAW", y.to_degrees()))
             .or_else(|| Some(String::new()))
             .filter(|s| !s.is_empty()),
-        pitch.map(|p| format!("A,{:.1},D,PITCH", p.to_degrees()))
+        pitch
+            .map(|p| format!("A,{:.1},D,PITCH", p.to_degrees()))
             .or_else(|| Some(String::new()))
             .filter(|s| !s.is_empty()),
         roll.map(|r| format!("A,{:.1},D,ROLL", r.to_degrees()))
@@ -376,13 +413,13 @@ fn format_xdr_attitude(yaw: Option<f64>, pitch: Option<f64>, roll: Option<f64>) 
             .filter(|s| !s.is_empty()),
     ]
     .into_iter()
-    .filter_map(|x| x)
+    .flatten()
     .collect();
-    
+
     if body_parts.is_empty() {
         return None;
     }
-    
+
     let sentence_body = format!("IIXDR,{}", body_parts.join(","));
     let checksum = nmea0183_checksum(&sentence_body);
     Some(format!("${}*{}\r\n", sentence_body, checksum))
@@ -391,10 +428,7 @@ fn format_xdr_attitude(yaw: Option<f64>, pitch: Option<f64>, roll: Option<f64>) 
 /// Format RPM sentence
 fn format_rpm(engine_instance: u8, rpm: Option<f64>) -> Option<String> {
     let rpm_val = rpm?;
-    let sentence_body = format!(
-        "IIRPM,E,{},{:.0},,A",
-        engine_instance, rpm_val
-    );
+    let sentence_body = format!("IIRPM,E,{},{:.0},,A", engine_instance, rpm_val);
     let checksum = nmea0183_checksum(&sentence_body);
     Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
@@ -417,7 +451,12 @@ fn format_dpt(depth_m: f64, offset_m: f64) -> Option<String> {
 /// Format DBT sentence (Water Depth)
 #[allow(dead_code)]
 fn format_dbt(depth_m: f64) -> Option<String> {
-    let sentence_body = format!("IIDBT,{:.1},f,{:.1},M,{:.1},F", depth_m * 3.28084, depth_m, depth_m * 0.546807);
+    let sentence_body = format!(
+        "IIDBT,{:.1},f,{:.1},M,{:.1},F",
+        depth_m * 3.28084,
+        depth_m,
+        depth_m * 0.546807
+    );
     let checksum = nmea0183_checksum(&sentence_body);
     Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
@@ -425,7 +464,7 @@ fn format_dbt(depth_m: f64) -> Option<String> {
 /// Format XDR transducer sentence for temperature
 fn format_xdr_temperature(instance: u8, source: u8, kelvin: f64) -> Option<String> {
     let celsius = kelvin - 273.15;
-    
+
     // Map source to transducer name
     let transducer_name = match source {
         0 => "WATER",
@@ -434,20 +473,14 @@ fn format_xdr_temperature(instance: u8, source: u8, kelvin: f64) -> Option<Strin
         _ => &format!("TEMP_{}", instance),
     };
 
-    let sentence_body = format!(
-        "IIXDR,C,{:.1},C,{}",
-        celsius, transducer_name
-    );
+    let sentence_body = format!("IIXDR,C,{:.1},C,{}", celsius, transducer_name);
     let checksum = nmea0183_checksum(&sentence_body);
     Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
 
 /// Format XDR transducer sentence for humidity
 fn format_xdr_humidity(instance: u8, humidity_pct: f64) -> Option<String> {
-    let sentence_body = format!(
-        "IIXDR,H,{:.1},P,HUMIDITY_{}",
-        humidity_pct, instance
-    );
+    let sentence_body = format!("IIXDR,H,{:.1},P,HUMIDITY_{}", humidity_pct, instance);
     let checksum = nmea0183_checksum(&sentence_body);
     Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
@@ -455,10 +488,7 @@ fn format_xdr_humidity(instance: u8, humidity_pct: f64) -> Option<String> {
 /// Format XDR transducer sentence for barometric pressure (Pa to bar)
 fn format_xdr_pressure(instance: u8, pressure_pa: f64) -> Option<String> {
     let pressure_bar = pressure_pa / 100000.0;
-    let sentence_body = format!(
-        "IIXDR,P,{:.4},B,BARO_{}",
-        pressure_bar, instance
-    );
+    let sentence_body = format!("IIXDR,P,{:.4},B,BARO_{}", pressure_bar, instance);
     let checksum = nmea0183_checksum(&sentence_body);
     Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
@@ -506,7 +536,7 @@ impl BitWriter {
     /// Returns `(payload, fill_bits)` where `fill_bits` pads to a 6-bit boundary.
     fn to_payload(&self) -> (String, u8) {
         let total = self.bits.len();
-        let padded = (total + 5) / 6 * 6;
+        let padded = total.div_ceil(6) * 6;
         let fill = (padded - total) as u8;
         let mut payload = String::new();
         let mut i = 0usize;
@@ -517,7 +547,11 @@ impl BitWriter {
                 i += 1;
             }
             // AIS armoring: 0-39 → ASCII 48-87, 40-63 → ASCII 96-119
-            payload.push(if v < 40 { (v + 48) as char } else { (v + 56) as char });
+            payload.push(if v < 40 {
+                (v + 48) as char
+            } else {
+                (v + 56) as char
+            });
         }
         (payload, fill)
     }
@@ -631,11 +665,16 @@ fn format_vdm_class_b_position(msg: &AisClassBPositionReport) -> String {
 fn format_vdm_class_a_static(msg: &AisClassAStaticData) -> String {
     // Derive ETA fields from eta_date_time when available
     let (eta_month, eta_day, eta_hour, eta_minute) = if let Some(ref dt) = msg.eta_date_time {
-        let utc = Utc.timestamp_opt(
-            (dt.date as i64) * 86400 + dt.time as i64, 0
-        ).single();
+        let utc = Utc
+            .timestamp_opt((dt.date as i64) * 86400 + dt.time as i64, 0)
+            .single();
         if let Some(t) = utc {
-            (t.month() as u8, t.day() as u8, t.hour() as u8, t.minute() as u8)
+            (
+                t.month() as u8,
+                t.day() as u8,
+                t.hour() as u8,
+                t.minute() as u8,
+            )
         } else {
             (0u8, 0u8, 24u8, 60u8) // not available
         }
@@ -644,10 +683,16 @@ fn format_vdm_class_a_static(msg: &AisClassAStaticData) -> String {
     };
 
     let to_bow = ((msg.position_ref_bow as f64 * 0.1).round() as u16).min(511);
-    let to_stern = ((msg.length_raw as f64 * 0.1 - to_bow as f64).max(0.0).round() as u16).min(511);
+    let to_stern = ((msg.length_raw as f64 * 0.1 - to_bow as f64)
+        .max(0.0)
+        .round() as u16)
+        .min(511);
     let to_starboard = ((msg.position_ref_starboard as f64 * 0.1).round() as u16).min(63);
-    let to_port = ((msg.beam_raw as f64 * 0.1 - to_starboard as f64).max(0.0).round() as u16).min(63);
-    let draught_ais = ((msg.get_draft_meters() * 10.0).round() as u8).min(255);
+    let to_port = ((msg.beam_raw as f64 * 0.1 - to_starboard as f64)
+        .max(0.0)
+        .round() as u16)
+        .min(63);
+    let draught_ais = (msg.get_draft_meters() * 10.0).round() as u8;
 
     let mut bw = BitWriter::new();
     bw.write_u(msg.message_id as u64, 6);
@@ -691,9 +736,15 @@ fn format_vdm_class_b_static_a(msg: &AisClassBStaticDataPartA) -> String {
 /// Format !AIVDM sentence for AIS Type 24 Part B (Class B static, vessel details)
 fn format_vdm_class_b_static_b(msg: &AisClassBStaticDataPartB) -> String {
     let to_bow = ((msg.position_ref_bow as f64 * 0.1).round() as u16).min(511);
-    let to_stern = ((msg.length_raw as f64 * 0.1 - to_bow as f64).max(0.0).round() as u16).min(511);
+    let to_stern = ((msg.length_raw as f64 * 0.1 - to_bow as f64)
+        .max(0.0)
+        .round() as u16)
+        .min(511);
     let to_starboard = ((msg.position_ref_starboard as f64 * 0.1).round() as u16).min(63);
-    let to_port = ((msg.beam_raw as f64 * 0.1 - to_starboard as f64).max(0.0).round() as u16).min(63);
+    let to_port = ((msg.beam_raw as f64 * 0.1 - to_starboard as f64)
+        .max(0.0)
+        .round() as u16)
+        .min(63);
 
     let mut bw = BitWriter::new();
     bw.write_u(msg.message_id as u64, 6);
@@ -746,7 +797,7 @@ impl MessageHandler for UdpBroadcaster {
                 self.rmc_state.hdop = Some(msg.hdop);
                 self.rmc_state.n2k_date = Some(msg.date_time.date);
                 self.rmc_state.n2k_time_secs = Some(msg.date_time.time);
-                
+
                 // Map GnssMethod to fix quality: 0=invalid, 1=GPS, 2=DGPS
                 self.rmc_state.fix_quality = Some(match msg.method {
                     GnssMethod::NoGnss => 0,
@@ -829,7 +880,8 @@ impl MessageHandler for UdpBroadcaster {
             // Temperature - PGN 130312
             N2kMessage::Temperature(msg) => {
                 let topic = format!("xdr_temp_{}", msg.instance);
-                if let Some(xdr) = format_xdr_temperature(msg.instance, msg.source, msg.temperature) {
+                if let Some(xdr) = format_xdr_temperature(msg.instance, msg.source, msg.temperature)
+                {
                     self.maybe_send(&topic, &xdr);
                 }
             }
@@ -891,8 +943,6 @@ impl MessageHandler for UdpBroadcaster {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -941,13 +991,15 @@ mod tests {
 
     #[test]
     fn test_format_rmc_complete_state() {
-        let mut state = RmcState::default();
-        state.latitude = Some(52.373126);
-        state.longitude = Some(13.403818);
-        state.sog_knots = Some(5.2);
-        state.cog_true_deg = Some(45.0);
-        state.n2k_date = Some(19254); // Some date in N2K format
-        state.n2k_time_secs = Some(43200.0);
+        let state = RmcState {
+            latitude: Some(52.373126),
+            longitude: Some(13.403818),
+            sog_knots: Some(5.2),
+            cog_true_deg: Some(45.0),
+            n2k_date: Some(19254),
+            n2k_time_secs: Some(43200.0),
+            ..Default::default()
+        };
 
         let result = format_rmc(&state);
         assert!(result.is_some(), "RMC should format with complete state");
@@ -964,14 +1016,16 @@ mod tests {
 
     #[test]
     fn test_format_gga_complete_state() {
-        let mut state = RmcState::default();
-        state.latitude = Some(52.373126);
-        state.longitude = Some(13.403818);
-        state.n2k_time_secs = Some(43200.0);
-        state.altitude_m = Some(100.0);
-        state.fix_quality = Some(1);
-        state.num_svs = Some(12);
-        state.hdop = Some(1.5);
+        let state = RmcState {
+            latitude: Some(52.373126),
+            longitude: Some(13.403818),
+            n2k_time_secs: Some(43200.0),
+            altitude_m: Some(100.0),
+            fix_quality: Some(1),
+            num_svs: Some(12),
+            hdop: Some(1.5),
+            ..Default::default()
+        };
 
         let result = format_gga(&state);
         assert!(result.is_some(), "GGA should format with complete state");
@@ -1102,14 +1156,24 @@ mod tests {
 
     #[test]
     fn test_create_disabled_broadcaster() {
-        let broadcaster = UdpBroadcaster::new("127.0.0.1:10110".to_string(), "0.0.0.0:0".to_string(), false).unwrap();
+        let broadcaster = UdpBroadcaster::new(
+            "127.0.0.1:10110".to_string(),
+            "0.0.0.0:0".to_string(),
+            false,
+        )
+        .unwrap();
         assert!(!broadcaster.enabled);
         assert!(broadcaster.socket.lock().unwrap().is_none());
     }
 
     #[test]
     fn test_broadcaster_initialization() {
-        let broadcaster = UdpBroadcaster::new("127.0.0.1:10110".to_string(), "0.0.0.0:0".to_string(), false).unwrap();
+        let broadcaster = UdpBroadcaster::new(
+            "127.0.0.1:10110".to_string(),
+            "0.0.0.0:0".to_string(),
+            false,
+        )
+        .unwrap();
         assert_eq!(broadcaster.message_count, 0);
         assert_eq!(broadcaster.error_count, 0);
         assert!(broadcaster.rmc_state.latitude.is_none());
@@ -1171,7 +1235,11 @@ mod tests {
         // 10.0 degrees east = 10.0 * 600000 = 6000000
         let raw = (10.0 / 1e-7) as i32; // = 100_000_000
         let ais = n2k_lon_to_ais(raw);
-        assert!((ais - 6_000_000).abs() < 10, "expected ~6000000, got {}", ais);
+        assert!(
+            (ais - 6_000_000).abs() < 10,
+            "expected ~6000000, got {}",
+            ais
+        );
     }
 
     #[test]
@@ -1197,7 +1265,11 @@ mod tests {
             special_maneuver_indicator: 0,
         };
         let sentence = format_vdm_class_a_position(&msg);
-        assert!(sentence.starts_with("!AIVDM,1,1,,A,"), "unexpected prefix: {}", sentence);
+        assert!(
+            sentence.starts_with("!AIVDM,1,1,,A,"),
+            "unexpected prefix: {}",
+            sentence
+        );
         assert!(sentence.contains("*"), "missing checksum");
     }
 
@@ -1228,7 +1300,11 @@ mod tests {
             assigned: false,
         };
         let sentence = format_vdm_class_b_position(&msg);
-        assert!(sentence.starts_with("!AIVDM,1,1,,A,"), "unexpected prefix: {}", sentence);
+        assert!(
+            sentence.starts_with("!AIVDM,1,1,,A,"),
+            "unexpected prefix: {}",
+            sentence
+        );
     }
 
     #[test]
@@ -1246,4 +1322,3 @@ mod tests {
         assert_eq!(actual_cs, expected_cs, "checksum mismatch");
     }
 }
-

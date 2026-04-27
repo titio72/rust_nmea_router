@@ -1,0 +1,8 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/api/trips"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"

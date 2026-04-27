@@ -6,7 +6,7 @@ use axum::{
     Json,
 };
 use chrono::Utc;
-use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
@@ -51,7 +51,9 @@ pub fn validate_token(secret: &JwtSecret, token: &str) -> bool {
 
 pub fn build_session_cookie(token: &str, duration_secs: u64, secure: bool) -> String {
     let secure_flag = if secure { "; Secure" } else { "" };
-    format!("session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={duration_secs}{secure_flag}")
+    format!(
+        "session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={duration_secs}{secure_flag}"
+    )
 }
 
 pub fn build_clear_cookie(secure: bool) -> String {
@@ -74,16 +76,19 @@ const PUBLIC_PATHS: &[&str] = &[
     "/login.html",
     "/api/auth/login",
     "/api/auth/logout",
-    "/shared.css",
-    "/js/shared-theme.js",
-    "/images/Itaca_v3.svg",
-    "/images/Itaca_v3_dark.svg",
-    "/images/nmeasail.png",
-    "/js/sw.js",
+    "/api/sync/manifest",
+    "/api/sync/trip",
+];
+
+
+const PUBLIC_EXTENSIONS: &[&str] = &[
+    ".js", ".css", ".png", ".svg", ".ico",
+    ".jpg", ".jpeg", ".woff", ".woff2", ".ttf",
 ];
 
 fn is_public_path(path: &str) -> bool {
-    PUBLIC_PATHS.iter().any(|p| *p == path)
+    PUBLIC_PATHS.contains(&path)
+        || PUBLIC_EXTENSIONS.iter().any(|ext| path.ends_with(ext))
 }
 
 pub async fn auth_middleware(

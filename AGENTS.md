@@ -52,6 +52,7 @@ The software continuously monitors the NMEA2000 bus (the standard marine network
 5. **Maintenance & Diagnostics**: Monitor system health and performance trends
 6. **Data Integration**: Export vessel data to external systems via REST API
 7. **AIS Monitoring**: Track nearby vessels and navigation aids for collision avoidance and situational awareness
+8. **Remote Viewer Sync**: Push collected trips from the boat to a cloud-hosted trips_viewer instance for remote access
 
 ## Specs
 
@@ -171,6 +172,9 @@ The application converts NMEA2000 data to legacy NMEA0183 sentences and broadcas
 
 ### Web Interface
 The application provides a REST API for programmatic access to trip data, vessel tracks, environmental metrics, and speed distributions. An HTML dashboard offers interactive visualization with Google Maps integration for trip tracks and real-time AIS target monitoring.
+
+### Trip Synchronization
+When `sync.enabled: true` and `sync.target_url` point to a trips_viewer instance, the boat can push its complete trip history to the viewer via `POST /api/sync/push`. The push is incremental (only trips updated since the last sync are transferred) and performs full reconciliation (trips deleted on the boat are deleted on the viewer). Authentication uses a shared Bearer token (`sync.api_key`). The viewer's receive endpoint (`POST /api/sync/receive`) is always registered even in read-only mode. See `TRIPS_VIEWER.md` for configuration details.
 
 ## Logging
 The logs are written on daily files in a folder configurable (default is the application folder).

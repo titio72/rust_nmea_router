@@ -8,8 +8,8 @@ use crate::position_utils::Position;
 use crate::trip::Trip;
 use crate::utilities::{dirty_instant_to_systemtime, EngineStatus};
 use chrono::NaiveDateTime;
-use mysql::prelude::Queryable;
 use mysql::params;
+use mysql::prelude::Queryable;
 use std::error::Error;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -119,19 +119,26 @@ impl VesselDatabase {
                 let gap_duration = duration_between(p.ts, ts);
                 if gap_duration > threshold {
                     // Build the full VesselStatusOperation for the "after" record
-                    let avg_speed: Option<f64> = row.get_opt("average_speed_kn").and_then(|r| r.ok());
+                    let avg_speed: Option<f64> =
+                        row.get_opt("average_speed_kn").and_then(|r| r.ok());
                     let max_speed: Option<f64> = row.get_opt("max_speed_kn").and_then(|r| r.ok());
                     let is_moored: bool = row.get("is_moored").unwrap_or(false);
                     let engine_on_u8: u8 = row.get("engine_on").unwrap_or(2);
-                    let total_distance: Option<f64> = row.get_opt("total_distance_nm").and_then(|r| r.ok());
+                    let total_distance: Option<f64> =
+                        row.get_opt("total_distance_nm").and_then(|r| r.ok());
                     let total_time: u64 = row.get("total_time_ms").unwrap_or(0);
-                    let wind_speed: Option<f64> = row.get_opt("average_wind_speed_kn").and_then(|r| r.ok());
-                    let wind_angle: Option<f64> = row.get_opt("average_wind_angle_deg").and_then(|r| r.ok());
+                    let wind_speed: Option<f64> =
+                        row.get_opt("average_wind_speed_kn").and_then(|r| r.ok());
+                    let wind_angle: Option<f64> =
+                        row.get_opt("average_wind_angle_deg").and_then(|r| r.ok());
                     let cog_deg: Option<f64> = row.get_opt("cog_deg").and_then(|r| r.ok());
 
                     let after_record = VesselStatusOperation {
                         timestamp: systemtime_to_instant(ts)?,
-                        position: Position { latitude: lat, longitude: lon },
+                        position: Position {
+                            latitude: lat,
+                            longitude: lon,
+                        },
                         average_speed_kn: avg_speed.unwrap_or(0.0),
                         max_speed_kn: max_speed.unwrap_or(0.0),
                         is_moored,
@@ -149,7 +156,10 @@ impl VesselDatabase {
                     gaps.push(Gap {
                         before_id: p.id,
                         before_timestamp: p.ts,
-                        before_position: Position { latitude: p.lat, longitude: p.lon },
+                        before_position: Position {
+                            latitude: p.lat,
+                            longitude: p.lon,
+                        },
                         before_heading: p.heading_deg,
                         after_id: id,
                         after_timestamp: ts,
@@ -158,7 +168,13 @@ impl VesselDatabase {
                 }
             }
 
-            prev = Some(PrevRow { id, ts, lat, lon, heading_deg });
+            prev = Some(PrevRow {
+                id,
+                ts,
+                lat,
+                lon,
+                heading_deg,
+            });
         }
 
         Ok(gaps)
@@ -167,7 +183,10 @@ impl VesselDatabase {
     /// Delete a single vessel_status record by id.
     pub fn delete_vessel_status_by_id(&self, id: i64) -> Result<(), Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
-        conn.exec_drop("DELETE FROM vessel_status WHERE id = :id", params! { "id" => id })?;
+        conn.exec_drop(
+            "DELETE FROM vessel_status WHERE id = :id",
+            params! { "id" => id },
+        )?;
         Ok(())
     }
 
@@ -178,7 +197,8 @@ impl VesselDatabase {
     ) -> Result<(), Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
 
-        let timestamp = chrono::DateTime::<chrono::Utc>::from(dirty_instant_to_systemtime(op.timestamp));
+        let timestamp =
+            chrono::DateTime::<chrono::Utc>::from(dirty_instant_to_systemtime(op.timestamp));
 
         conn.exec_drop(
             r"INSERT INTO vessel_status
@@ -238,19 +258,31 @@ impl VesselDatabase {
             let description: String = row.take("description").ok_or("missing description")?;
             let start_ts: String = row.take("start_ts").ok_or("missing start_ts")?;
             let end_ts: String = row.take("end_ts").ok_or("missing end_ts")?;
-            let total_distance_sailed: f64 = row.take("total_distance_sailed").ok_or("missing total_distance_sailed")?;
-            let total_distance_motoring: f64 = row.take("total_distance_motoring").ok_or("missing total_distance_motoring")?;
-            let total_time_sailing: u64 = row.take("total_time_sailing").ok_or("missing total_time_sailing")?;
-            let total_time_motoring: u64 = row.take("total_time_motoring").ok_or("missing total_time_motoring")?;
-            let total_time_moored: u64 = row.take("total_time_moored").ok_or("missing total_time_moored")?;
+            let total_distance_sailed: f64 = row
+                .take("total_distance_sailed")
+                .ok_or("missing total_distance_sailed")?;
+            let total_distance_motoring: f64 = row
+                .take("total_distance_motoring")
+                .ok_or("missing total_distance_motoring")?;
+            let total_time_sailing: u64 = row
+                .take("total_time_sailing")
+                .ok_or("missing total_time_sailing")?;
+            let total_time_motoring: u64 = row
+                .take("total_time_motoring")
+                .ok_or("missing total_time_motoring")?;
+            let total_time_moored: u64 = row
+                .take("total_time_moored")
+                .ok_or("missing total_time_moored")?;
             let uuid: Option<String> = row.take("uuid").unwrap_or(None);
 
             let start_ts_clean = start_ts.trim_end_matches('Z');
             let end_ts_clean = end_ts.trim_end_matches('Z');
             let start_dt = NaiveDateTime::parse_from_str(start_ts_clean, "%Y-%m-%dT%H:%M:%S%.f")?;
             let end_dt = NaiveDateTime::parse_from_str(end_ts_clean, "%Y-%m-%dT%H:%M:%S%.f")?;
-            let start_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start_dt, chrono::Utc);
-            let end_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(end_dt, chrono::Utc);
+            let start_utc =
+                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start_dt, chrono::Utc);
+            let end_utc =
+                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(end_dt, chrono::Utc);
 
             Ok(Some(Trip {
                 id: Some(id),
@@ -307,9 +339,10 @@ impl VesselDatabase {
             // on context (aggregate vs plain column). Handle both to avoid a panic.
             let last_ts_val: mysql::Value = row.get("last_ts").unwrap_or(mysql::Value::NULL);
             let last_ts_str: Option<String> = match last_ts_val {
-                mysql::Value::Date(y, mo, d, h, m, s, us) => {
-                    Some(format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06}", y, mo, d, h, m, s, us))
-                }
+                mysql::Value::Date(y, mo, d, h, m, s, us) => Some(format!(
+                    "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06}",
+                    y, mo, d, h, m, s, us
+                )),
                 mysql::Value::Bytes(b) => String::from_utf8(b).ok(),
                 _ => None,
             };
@@ -349,7 +382,9 @@ impl VesselDatabase {
 
 // Convert SystemTime → millis since UNIX_EPOCH (for arithmetic)
 pub(crate) fn systemtime_to_millis(st: SystemTime) -> u64 {
-    st.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_millis() as u64
+    st.duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_millis() as u64
 }
 
 pub(crate) fn millis_to_systemtime(ms: u64) -> SystemTime {
@@ -359,7 +394,9 @@ pub(crate) fn millis_to_systemtime(ms: u64) -> SystemTime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::test_helpers::{setup_db, add_test_trip, add_test_vessel_status, assert_approx_equal};
+    use crate::db::test_helpers::{
+        add_test_trip, add_test_vessel_status, assert_approx_equal, setup_db,
+    };
     use crate::utilities::EngineStatus;
     use mysql::prelude::Queryable;
 
@@ -373,7 +410,13 @@ mod tests {
     fn test_find_gaps_empty_range() {
         let db = setup_db();
         let base = t0();
-        let gaps = db.find_gaps(base, base + Duration::from_secs(3600), Duration::from_secs(300)).unwrap();
+        let gaps = db
+            .find_gaps(
+                base,
+                base + Duration::from_secs(3600),
+                Duration::from_secs(300),
+            )
+            .unwrap();
         assert!(gaps.is_empty(), "No gaps expected in empty DB");
     }
 
@@ -384,10 +427,35 @@ mod tests {
         let base = t0();
         // 5 records at 5-min intervals; threshold = 10 min → no gap
         for i in 0..5u64 {
-            add_test_vessel_status(&db, base + Duration::from_secs(i * 300), 51.0, -1.0, 5.0, 6.0, None, None, false, EngineStatus::Off, 1.0, 300_000, None, None).unwrap();
+            add_test_vessel_status(
+                &db,
+                base + Duration::from_secs(i * 300),
+                51.0,
+                -1.0,
+                5.0,
+                6.0,
+                None,
+                None,
+                false,
+                EngineStatus::Off,
+                1.0,
+                300_000,
+                None,
+                None,
+            )
+            .unwrap();
         }
-        let gaps = db.find_gaps(base - Duration::from_secs(1), base + Duration::from_secs(1300), Duration::from_secs(600)).unwrap();
-        assert!(gaps.is_empty(), "No gap expected when all intervals are below threshold");
+        let gaps = db
+            .find_gaps(
+                base - Duration::from_secs(1),
+                base + Duration::from_secs(1300),
+                Duration::from_secs(600),
+            )
+            .unwrap();
+        assert!(
+            gaps.is_empty(),
+            "No gap expected when all intervals are below threshold"
+        );
     }
 
     #[test]
@@ -396,17 +464,78 @@ mod tests {
         let db = setup_db();
         let base = t0();
         // Records at T0, T0+45min, T0+50min; threshold=30min → one gap between T0 and T0+45min
-        add_test_vessel_status(&db, base, 51.0, -1.0, 5.0, 6.0, None, None, false, EngineStatus::Off, 0.5, 300_000, None, None).unwrap();
-        add_test_vessel_status(&db, base + Duration::from_secs(2700), 51.1, -1.0, 5.0, 6.0, None, None, false, EngineStatus::Off, 0.5, 300_000, None, None).unwrap();
-        add_test_vessel_status(&db, base + Duration::from_secs(3000), 51.2, -1.0, 5.0, 6.0, None, None, false, EngineStatus::Off, 0.5, 300_000, None, None).unwrap();
-        let gaps = db.find_gaps(base - Duration::from_secs(1), base + Duration::from_secs(3100), Duration::from_secs(1800)).unwrap();
+        add_test_vessel_status(
+            &db,
+            base,
+            51.0,
+            -1.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            0.5,
+            300_000,
+            None,
+            None,
+        )
+        .unwrap();
+        add_test_vessel_status(
+            &db,
+            base + Duration::from_secs(2700),
+            51.1,
+            -1.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            0.5,
+            300_000,
+            None,
+            None,
+        )
+        .unwrap();
+        add_test_vessel_status(
+            &db,
+            base + Duration::from_secs(3000),
+            51.2,
+            -1.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            0.5,
+            300_000,
+            None,
+            None,
+        )
+        .unwrap();
+        let gaps = db
+            .find_gaps(
+                base - Duration::from_secs(1),
+                base + Duration::from_secs(3100),
+                Duration::from_secs(1800),
+            )
+            .unwrap();
         assert_eq!(gaps.len(), 1, "Expected exactly 1 gap");
         let gap = &gaps[0];
         // MySQL stores timestamps with millisecond precision so compare with 1s tolerance
         let before_ms = systemtime_to_millis(gap.before_timestamp) as i64;
         let base_ms = systemtime_to_millis(base) as i64;
-        assert!((before_ms - base_ms).abs() < 1000, "Gap start should be approximately T0");
-        let gap_secs = gap.after_timestamp.duration_since(gap.before_timestamp).unwrap().as_secs();
+        assert!(
+            (before_ms - base_ms).abs() < 1000,
+            "Gap start should be approximately T0"
+        );
+        let gap_secs = gap
+            .after_timestamp
+            .duration_since(gap.before_timestamp)
+            .unwrap()
+            .as_secs();
         assert_eq!(gap_secs, 2700, "Gap should span 45 minutes");
     }
 
@@ -417,9 +546,31 @@ mod tests {
         let base = t0();
         // Records at T0, T0+45m, T0+90m, T0+135m; 30-min threshold → 3 gaps
         for i in 0..4u64 {
-            add_test_vessel_status(&db, base + Duration::from_secs(i * 2700), 51.0 + i as f64 * 0.1, -1.0, 5.0, 6.0, None, None, false, EngineStatus::Off, 0.5, 300_000, None, None).unwrap();
+            add_test_vessel_status(
+                &db,
+                base + Duration::from_secs(i * 2700),
+                51.0 + i as f64 * 0.1,
+                -1.0,
+                5.0,
+                6.0,
+                None,
+                None,
+                false,
+                EngineStatus::Off,
+                0.5,
+                300_000,
+                None,
+                None,
+            )
+            .unwrap();
         }
-        let gaps = db.find_gaps(base - Duration::from_secs(1), base + Duration::from_secs(10000), Duration::from_secs(1800)).unwrap();
+        let gaps = db
+            .find_gaps(
+                base - Duration::from_secs(1),
+                base + Duration::from_secs(10000),
+                Duration::from_secs(1800),
+            )
+            .unwrap();
         assert_eq!(gaps.len(), 3, "Expected 3 gaps");
     }
 
@@ -428,9 +579,25 @@ mod tests {
     fn test_find_trip_for_gap_overlapping() {
         let db = setup_db();
         let base = t0();
-        let trip_id = add_test_trip(&db, "Gap Trip".to_string(), base, base + Duration::from_secs(7200), 5.0, 0.0, 7200_000, 0, 0).unwrap();
+        let trip_id = add_test_trip(
+            &db,
+            "Gap Trip".to_string(),
+            base,
+            base + Duration::from_secs(7200),
+            5.0,
+            0.0,
+            7_200_000,
+            0,
+            0,
+        )
+        .unwrap();
         // Gap window T0+30min to T0+60min falls inside the trip
-        let trip = db.find_trip_for_gap(base + Duration::from_secs(1800), base + Duration::from_secs(3600)).unwrap();
+        let trip = db
+            .find_trip_for_gap(
+                base + Duration::from_secs(1800),
+                base + Duration::from_secs(3600),
+            )
+            .unwrap();
         assert!(trip.is_some(), "Should find trip for overlapping gap");
         assert_eq!(trip.unwrap().id.unwrap(), trip_id as i64);
     }
@@ -440,10 +607,29 @@ mod tests {
     fn test_find_trip_for_gap_no_overlap() {
         let db = setup_db();
         let base = t0();
-        add_test_trip(&db, "Trip Far".to_string(), base, base + Duration::from_secs(3600), 5.0, 0.0, 3600_000, 0, 0).unwrap();
+        add_test_trip(
+            &db,
+            "Trip Far".to_string(),
+            base,
+            base + Duration::from_secs(3600),
+            5.0,
+            0.0,
+            3_600_000,
+            0,
+            0,
+        )
+        .unwrap();
         // Gap window after the trip ends
-        let trip = db.find_trip_for_gap(base + Duration::from_secs(7200), base + Duration::from_secs(10800)).unwrap();
-        assert!(trip.is_none(), "Should not find trip outside its time range");
+        let trip = db
+            .find_trip_for_gap(
+                base + Duration::from_secs(7200),
+                base + Duration::from_secs(10800),
+            )
+            .unwrap();
+        assert!(
+            trip.is_none(),
+            "Should not find trip outside its time range"
+        );
     }
 
     #[test]
@@ -451,13 +637,35 @@ mod tests {
     fn test_delete_vessel_status_by_id() {
         let db = setup_db();
         let base = t0();
-        add_test_vessel_status(&db, base, 51.0, -1.0, 5.0, 6.0, None, None, false, EngineStatus::Off, 1.0, 600_000, None, None).unwrap();
+        add_test_vessel_status(
+            &db,
+            base,
+            51.0,
+            -1.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            1.0,
+            600_000,
+            None,
+            None,
+        )
+        .unwrap();
         let mut conn = db.pool.get_conn().unwrap();
-        let id: i64 = conn.query_first("SELECT id FROM vessel_status LIMIT 1").unwrap().unwrap();
+        let id: i64 = conn
+            .query_first("SELECT id FROM vessel_status LIMIT 1")
+            .unwrap()
+            .unwrap();
         drop(conn);
         db.delete_vessel_status_by_id(id).unwrap();
         let mut conn = db.pool.get_conn().unwrap();
-        let count: u64 = conn.query_first("SELECT COUNT(*) FROM vessel_status").unwrap().unwrap();
+        let count: u64 = conn
+            .query_first("SELECT COUNT(*) FROM vessel_status")
+            .unwrap()
+            .unwrap();
         assert_eq!(count, 0, "vessel_status should be empty after deletion");
     }
 
@@ -470,7 +678,10 @@ mod tests {
         let ts_instant = Instant::now() - Duration::from_secs(3600);
         let op = VesselStatusOperation {
             timestamp: ts_instant,
-            position: Position { latitude: 48.0, longitude: 2.0 },
+            position: Position {
+                latitude: 48.0,
+                longitude: 2.0,
+            },
             average_speed_kn: 4.0,
             max_speed_kn: 5.0,
             is_moored: true,
@@ -486,7 +697,10 @@ mod tests {
         };
         db.insert_synthetic_vessel_status(&op).unwrap();
         let mut conn = db.pool.get_conn().unwrap();
-        let count: u64 = conn.query_first("SELECT COUNT(*) FROM vessel_status").unwrap().unwrap();
+        let count: u64 = conn
+            .query_first("SELECT COUNT(*) FROM vessel_status")
+            .unwrap()
+            .unwrap();
         assert_eq!(count, 1, "One synthetic row should exist");
     }
 
@@ -496,19 +710,84 @@ mod tests {
         let db = setup_db();
         let base = t0();
         // Trip with zeroed totals — recalculate from status rows
-        let trip_id = add_test_trip(&db, "Recalc".to_string(), base, base + Duration::from_secs(3600), 0.0, 0.0, 0, 0, 0).unwrap();
+        let trip_id = add_test_trip(
+            &db,
+            "Recalc".to_string(),
+            base,
+            base + Duration::from_secs(3600),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
         // 2 sailing rows (engine off, not moored), 1 motoring row (engine on)
-        add_test_vessel_status(&db, base + Duration::from_secs(300), 51.0, -1.0, 5.0, 6.0, None, None, false, EngineStatus::Off, 2.0, 300_000, None, None).unwrap();
-        add_test_vessel_status(&db, base + Duration::from_secs(600), 51.1, -1.0, 5.0, 6.0, None, None, false, EngineStatus::Off, 2.0, 300_000, None, None).unwrap();
-        add_test_vessel_status(&db, base + Duration::from_secs(900), 51.2, -1.0, 5.0, 6.0, None, None, false, EngineStatus::On, 1.5, 300_000, None, None).unwrap();
-        db.recalculate_and_update_trip(trip_id as i64, base, base + Duration::from_secs(3600)).unwrap();
+        add_test_vessel_status(
+            &db,
+            base + Duration::from_secs(300),
+            51.0,
+            -1.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            2.0,
+            300_000,
+            None,
+            None,
+        )
+        .unwrap();
+        add_test_vessel_status(
+            &db,
+            base + Duration::from_secs(600),
+            51.1,
+            -1.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            2.0,
+            300_000,
+            None,
+            None,
+        )
+        .unwrap();
+        add_test_vessel_status(
+            &db,
+            base + Duration::from_secs(900),
+            51.2,
+            -1.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::On,
+            1.5,
+            300_000,
+            None,
+            None,
+        )
+        .unwrap();
+        db.recalculate_and_update_trip(trip_id as i64, base, base + Duration::from_secs(3600))
+            .unwrap();
         let mut conn = db.pool.get_conn().unwrap();
-        let row: mysql::Row = conn.query_first(&format!("SELECT total_distance_sailed, total_distance_motoring, total_time_sailing, total_time_motoring FROM trips WHERE id = {}", trip_id)).unwrap().unwrap();
+        let row: mysql::Row = conn.query_first(format!("SELECT total_distance_sailed, total_distance_motoring, total_time_sailing, total_time_motoring FROM trips WHERE id = {}", trip_id)).unwrap().unwrap();
         let dist_sailed: f64 = row.get("total_distance_sailed").unwrap();
         let dist_motor: f64 = row.get("total_distance_motoring").unwrap();
         let time_sail: u64 = row.get("total_time_sailing").unwrap();
         let time_motor: u64 = row.get("total_time_motoring").unwrap();
-        assert_approx_equal(dist_sailed, 4.0, 0.01, "sailing distance should sum to 4.0 NM");
+        assert_approx_equal(
+            dist_sailed,
+            4.0,
+            0.01,
+            "sailing distance should sum to 4.0 NM",
+        );
         assert_approx_equal(dist_motor, 1.5, 0.01, "motoring distance should be 1.5 NM");
         assert_eq!(time_sail, 600_000, "sailing time should be 600s");
         assert_eq!(time_motor, 300_000, "motoring time should be 300s");

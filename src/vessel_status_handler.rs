@@ -4,12 +4,12 @@
 // Testing: Use test infrastructure from db::test_helpers for consistent test data.
 // See: AGENTS.md for database patterns and testing strategy
 //
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
+use crate::db::{TripOperation, VesselDatabase, VesselStatusOperation};
+use crate::trip::Trip;
 use crate::utilities::dirty_instant_to_systemtime;
 use crate::vessel_monitor::VesselStatus;
-use crate::db::{VesselDatabase, TripOperation, VesselStatusOperation};
-use crate::trip::Trip;
 
 /// State for tracking vessel status between reports
 pub struct VesselStatusState {
@@ -40,10 +40,7 @@ impl VesselStatusHandler {
         self.state.load_last_vessel_status(vessel_db);
     }
 
-    fn generate_vessel_status_operation(
-        &mut self,
-        status: &VesselStatus
-    ) -> VesselStatusOperation {
+    fn generate_vessel_status_operation(&mut self, status: &VesselStatus) -> VesselStatusOperation {
         if !self.shall_accept_last_status(&self.state.last_persisted_status, status) {
             debug!("Previous vessel status is too old or too far from last persisted status, ignoring for vector calculations");
             self.state.reset_last_persisted_status(); // Clear last persisted status to avoid future comparisons until we get a valid one
@@ -54,16 +51,30 @@ impl VesselStatusHandler {
             None
         };
         let position = status.get_effective_position();
-        let total_distance_nm = if let Some(ref vessel_vector) = vessel_vector { vessel_vector.distance_nm } else { 0.0 };
-        let total_time_ms = if let Some(ref vessel_vector) = vessel_vector { vessel_vector.delta_time_ms } else { status.period.as_millis() as u64};
-        let average_speed_kn = if let Some(ref vessel_vector) = vessel_vector { vessel_vector.average_speed_kn() } else { 0.0 };
-        let cog_deg: Option<f64> = if let Some(ref vessel_vector) = vessel_vector { Some(vessel_vector.course_deg) } else { None };
+        let total_distance_nm = if let Some(ref vessel_vector) = vessel_vector {
+            vessel_vector.distance_nm
+        } else {
+            0.0
+        };
+        let total_time_ms = if let Some(ref vessel_vector) = vessel_vector {
+            vessel_vector.delta_time_ms
+        } else {
+            status.period.as_millis() as u64
+        };
+        let average_speed_kn = if let Some(ref vessel_vector) = vessel_vector {
+            vessel_vector.average_speed_kn()
+        } else {
+            0.0
+        };
+        let cog_deg: Option<f64> = vessel_vector
+            .as_ref()
+            .map(|vessel_vector| vessel_vector.course_deg);
         let average_heading_deg: Option<f64> = status.average_heading_deg;
 
         VesselStatusOperation {
             timestamp: status.timestamp,
             position,
-            average_speed_kn: average_speed_kn,
+            average_speed_kn,
             max_speed_kn: status.max_speed_kn,
             is_moored: status.is_moored,
             engine_on: status.engine_on,
@@ -78,10 +89,18 @@ impl VesselStatusHandler {
         }
     }
 
-    fn shall_accept_last_status(&self, last_status: &Option<VesselStatusOperation>, new_status: &VesselStatus) -> bool {
+    fn shall_accept_last_status(
+        &self,
+        last_status: &Option<VesselStatusOperation>,
+        new_status: &VesselStatus,
+    ) -> bool {
         if let Some(last_status) = last_status {
-            new_status.timestamp.duration_since(last_status.timestamp) < std::time::Duration::from_secs(MAXIMUM_AGE_VALID_PREVIOUS_REPORT_SECS) 
-                && new_status.get_effective_position().distance_to_nm(&last_status.position) < 8.0
+            new_status.timestamp.duration_since(last_status.timestamp)
+                < std::time::Duration::from_secs(MAXIMUM_AGE_VALID_PREVIOUS_REPORT_SECS)
+                && new_status
+                    .get_effective_position()
+                    .distance_to_nm(&last_status.position)
+                    < 8.0
         } else {
             false
         }
@@ -105,11 +124,16 @@ impl VesselStatusHandler {
             status.is_moored);
 
         if status.is_valid() {
-            let status_operation = self.generate_vessel_status_operation(&status);
+            let status_operation = self.generate_vessel_status_operation(status);
             self.state.set_last_persisted_status(&status_operation);
 
             // Determine trip operation (create, update, or none)
-            let trip_operation = Self::determine_trip_operation(&mut self.state.current_trip, &status, status_operation.total_distance_nm, status_operation.total_time_ms);
+            let trip_operation = Self::determine_trip_operation(
+                &mut self.state.current_trip,
+                status,
+                status_operation.total_distance_nm,
+                status_operation.total_time_ms,
+            );
 
             // Perform atomic insert of vessel status and trip operation
             match vessel_db.insert_status_and_trip(&status_operation, &trip_operation) {
@@ -123,8 +147,13 @@ impl VesselStatusHandler {
                             info!("Created new trip: {} (ID: {})", trip.description, trip_id);
                         }
                     } else if let Some(ref trip) = self.state.current_trip {
-                        debug!("Updated trip: {} (ID: {}), total_distance={:.3}nm, total_time={}ms",
-                            trip.description, trip.id.unwrap_or(0), trip.total_distance(), trip.total_time());
+                        debug!(
+                            "Updated trip: {} (ID: {}), total_distance={:.3}nm, total_time={}ms",
+                            trip.description,
+                            trip.id.unwrap_or(0),
+                            trip.total_distance(),
+                            trip.total_time()
+                        );
                     }
 
                     // Note: Realtime data is now broadcast directly from NMEA message processing in main loop,
@@ -142,7 +171,12 @@ impl VesselStatusHandler {
     }
 
     /// Determine the trip operation to perform
-    fn determine_trip_operation(current_trip: &mut Option<Trip>, status: &VesselStatus, distance: f64, delta_time_ms: u64) -> TripOperation {
+    fn determine_trip_operation(
+        current_trip: &mut Option<Trip>,
+        status: &VesselStatus,
+        distance: f64,
+        delta_time_ms: u64,
+    ) -> TripOperation {
         let report_time = status.timestamp;
         let report_systemtime = dirty_instant_to_systemtime(report_time);
         // Check if we need to create a new trip or update existing
@@ -151,26 +185,38 @@ impl VesselStatusHandler {
         } else {
             true // No current trip, create new one
         };
-        
+
         let effective_distance = if status.is_moored { 0.0 } else { distance };
 
         if should_create_new {
             // Create new trip
             let start_time = report_systemtime;
-            
+
             // Format description with date
             let datetime = chrono::DateTime::<chrono::Utc>::from(start_time);
             let description = format!("Trip {}", datetime.format("%Y-%m-%d"));
-            
+
             let mut new_trip = Trip::new(start_time, description);
-            new_trip.update(report_systemtime, effective_distance, delta_time_ms, status.engine_on, status.is_moored);
-            
+            new_trip.update(
+                report_systemtime,
+                effective_distance,
+                delta_time_ms,
+                status.engine_on,
+                status.is_moored,
+            );
+
             *current_trip = Some(new_trip.clone());
             TripOperation::CreateTrip(new_trip)
         } else {
             // Update existing trip
             if let Some(ref mut trip) = *current_trip {
-                trip.update(report_systemtime, effective_distance, delta_time_ms, status.engine_on, status.is_moored);
+                trip.update(
+                    report_systemtime,
+                    effective_distance,
+                    delta_time_ms,
+                    status.engine_on,
+                    status.is_moored,
+                );
                 TripOperation::UpdateTrip(trip.clone())
             } else {
                 TripOperation::None
@@ -195,8 +241,7 @@ impl VesselStatusState {
         self.last_persisted_status = None;
     }
 
-     /// Load the last vessel status from database if available
-
+    /// Load the last vessel status from database if available
     fn load_last_vessel_status(&mut self, vessel_db: &VesselDatabase) {
         match vessel_db.get_last_vessel_status() {
             Ok(status) => {
@@ -218,7 +263,11 @@ impl VesselStatusState {
         match vessel_db.get_last_trip() {
             Ok(trip) => {
                 if let Some(t) = trip {
-                    info!("Loaded last trip from database: {} (ID: {})", t.description, t.id.unwrap_or(0));
+                    info!(
+                        "Loaded last trip from database: {} (ID: {})",
+                        t.description,
+                        t.id.unwrap_or(0)
+                    );
                     self.current_trip = Some(t);
                 } else {
                     info!("No existing trip found in database");
@@ -231,8 +280,6 @@ impl VesselStatusState {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,14 +288,17 @@ mod tests {
     #[test]
     fn test_set_last_persisted_status() {
         use crate::position_utils::Position;
-        
+
         let mut state = VesselStatusState::new();
-        
+
         assert!(state.last_persisted_status.is_none());
-        
+
         let status = VesselStatusOperation {
             timestamp: std::time::Instant::now(),
-            position: Position { latitude: 0.0, longitude: 0.0 },
+            position: Position {
+                latitude: 0.0,
+                longitude: 0.0,
+            },
             average_speed_kn: 0.0,
             max_speed_kn: 0.0,
             is_moored: true,
@@ -262,23 +312,42 @@ mod tests {
             cog_deg: None,
             average_heading_deg: None,
         };
-        
+
         state.set_last_persisted_status(&status);
-        
+
         assert!(state.last_persisted_status.is_some());
-        assert_eq!(state.last_persisted_status.as_ref().unwrap().position.latitude, 0.0);
-        assert_eq!(state.last_persisted_status.as_ref().unwrap().position.longitude, 0.0);
+        assert_eq!(
+            state
+                .last_persisted_status
+                .as_ref()
+                .unwrap()
+                .position
+                .latitude,
+            0.0
+        );
+        assert_eq!(
+            state
+                .last_persisted_status
+                .as_ref()
+                .unwrap()
+                .position
+                .longitude,
+            0.0
+        );
     }
 
     #[test]
     fn test_reset_last_persisted_status() {
         use crate::position_utils::Position;
-        
+
         let mut state = VesselStatusState::new();
-        
+
         let status = VesselStatusOperation {
             timestamp: std::time::Instant::now(),
-            position: Position { latitude: 45.0, longitude: -120.0 },
+            position: Position {
+                latitude: 45.0,
+                longitude: -120.0,
+            },
             average_speed_kn: 5.0,
             max_speed_kn: 10.0,
             is_moored: false,
@@ -292,10 +361,10 @@ mod tests {
             cog_deg: Some(090.0),
             average_heading_deg: Some(090.0),
         };
-        
+
         state.set_last_persisted_status(&status);
         assert!(state.last_persisted_status.is_some());
-        
+
         state.reset_last_persisted_status();
         assert!(state.last_persisted_status.is_none());
     }

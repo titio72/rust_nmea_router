@@ -2,17 +2,16 @@
 // Converts NMEA2000 messages to SignalK v1.7.0 delta format and broadcasts via WebSocket
 // For architectural guidance and coding conventions, see: AGENTS.md
 //
-use std::time::{Instant, Duration};
-use nmea2k::{MessageHandler, N2kFrame};
-use nmea2k::pgns::{N2kMessage, HeadingReference};
 use crate::position_utils::Position;
-use crate::web::signalk_messages::{
-    SignalKDelta, SignalKUpdate, SignalKValue, SignalKSource,
-    vessel_context
-};
-use crate::web::get_signalk_channels;
 use crate::utilities::calculate_true_wind;
+use crate::web::get_signalk_channels;
+use crate::web::signalk_messages::{
+    vessel_context, SignalKDelta, SignalKSource, SignalKUpdate, SignalKValue,
+};
+use nmea2k::pgns::{HeadingReference, N2kMessage};
+use nmea2k::{MessageHandler, N2kFrame};
 use serde_json::json;
+use std::time::{Duration, Instant};
 
 /// Broadcasts NMEA2000 messages as SignalK delta messages via WebSocket
 /// Converts native NMEA2000 units (already SI in most cases) to SignalK paths
@@ -20,20 +19,20 @@ use serde_json::json;
 pub struct SignalKBroadcaster {
     /// Vessel UUID for context path
     vessel_uuid: String,
-    
+
     /// Cached SOG in m/s for true wind calculations
     last_sog_ms: Option<f64>,
     last_sog_timestamp: Option<Instant>,
 
     /// Cached time sync status string ("synced" or "not_synced")
     last_time_sync_status: Option<String>,
-    
+
     /// Cached time skew in milliseconds
     last_time_skew_ms: Option<i64>,
-    
+
     /// Rate limiting interval in milliseconds
     rate_limit_ms: u64,
-    
+
     // Rate limiting: track last broadcast time for each SignalK path
     last_depth_broadcast: Option<Instant>,
     last_position_broadcast: Option<Instant>,
@@ -91,14 +90,14 @@ impl SignalKBroadcaster {
             last_variation_rad: None,
         }
     }
-    
+
     /// Update the cached time sync status and skew
     /// This should be called from the main loop with the latest values from TimeMonitor
     pub fn update_time_sync_status(&mut self, status: String, skew_ms: i64) {
         self.last_time_sync_status = Some(status);
         self.last_time_skew_ms = Some(skew_ms);
     }
-    
+
     /// Check if enough time has passed to broadcast this path
     fn should_broadcast(&self, last_broadcast: Option<Instant>, now: Instant) -> bool {
         match last_broadcast {
@@ -106,13 +105,13 @@ impl SignalKBroadcaster {
             Some(last) => now.duration_since(last) >= Duration::from_millis(self.rate_limit_ms),
         }
     }
-    
+
     /// Send a delta message with multiple values
     fn send_delta(&self, source: SignalKSource, timestamp: String, values: Vec<SignalKValue>) {
         let channels = get_signalk_channels();
-        
+
         let source_ref = format!("{}.{}", &source.label, &source.src);
-        
+
         let delta = SignalKDelta {
             context: vessel_context(&self.vessel_uuid),
             updates: vec![SignalKUpdate {
@@ -122,7 +121,7 @@ impl SignalKBroadcaster {
                 source_ref,
             }],
         };
-        
+
         // Silently ignore send errors - these occur when there are no subscribers,
         // which is normal during operation when no clients are connected
         let _ = channels.send(delta);
@@ -130,12 +129,18 @@ impl SignalKBroadcaster {
 
     /// Send a delta message with a custom context (for AIS targets)
     /// AIS targets use context: "vessels.urn:mrn:imo:mmsi:<MMSI>"
-    fn send_ais_delta(&self, mmsi: u32, source: SignalKSource, timestamp: String, values: Vec<SignalKValue>) {
+    fn send_ais_delta(
+        &self,
+        mmsi: u32,
+        source: SignalKSource,
+        timestamp: String,
+        values: Vec<SignalKValue>,
+    ) {
         let channels = get_signalk_channels();
-        
+
         let source_ref = format!("{}.{}", &source.label, &source.src);
         let ais_context = format!("vessels.urn:mrn:imo:mmsi:{}", mmsi);
-        
+
         let delta = SignalKDelta {
             context: ais_context,
             updates: vec![SignalKUpdate {
@@ -145,7 +150,7 @@ impl SignalKBroadcaster {
                 source_ref,
             }],
         };
-        
+
         // Silently ignore send errors
         let _ = channels.send(delta);
     }
@@ -155,7 +160,7 @@ impl MessageHandler for SignalKBroadcaster {
     fn handle_message(&mut self, frame: &N2kFrame, now: std::time::Instant) {
         let timestamp = crate::utilities::instant_to_rfc3339(now);
         let source = SignalKSource::nmea2000(frame.identifier.source(), frame.identifier.pgn());
-        
+
         match &frame.message {
             // Position data - PGN 129025
             // SignalK: navigation.position with {latitude, longitude} in decimal degrees
@@ -172,11 +177,11 @@ impl MessageHandler for SignalKBroadcaster {
                             "longitude": pos.longitude,
                         }),
                     }];
-                    
+
                     self.send_delta(source, timestamp, values);
                     self.last_position_broadcast = Some(now);
                 }
-            },
+            }
 
             // GNSS position data - PGN 129029
             // SignalK: navigation.gnss.methodQuality
@@ -189,14 +194,15 @@ impl MessageHandler for SignalKBroadcaster {
                         nmea2k::pgns::pgn129029::GnssMethod::PreciseGnss => "Precise GNSS",
                         nmea2k::pgns::pgn129029::GnssMethod::RtkFixed => "RTK Fixed",
                         nmea2k::pgns::pgn129029::GnssMethod::RtkFloat => "RTK Float",
-                    }.to_string();
+                    }
+                    .to_string();
                     let values = vec![SignalKValue {
                         path: "navigation.gnss.methodQuality".to_string(),
                         value: json!(gnss_method),
                     }];
                     self.send_delta(source, timestamp, values);
                 }
-            },
+            }
 
             // GNSS DOPs - PGN 129539
             // SignalK: navigation.gnss.horizontalDilution, verticalDilution, timeDilution, mode
@@ -228,7 +234,7 @@ impl MessageHandler for SignalKBroadcaster {
                     self.send_delta(source, timestamp, values);
                     self.last_gnss_dop_broadcast = Some(now);
                 }
-            },
+            }
 
             // COG/SOG data - PGN 129026
             // SignalK: navigation.speedOverGround (m/s), navigation.courseOverGroundTrue (radians)
@@ -236,9 +242,9 @@ impl MessageHandler for SignalKBroadcaster {
                 // Cache SOG for true wind calculations (store in m/s)
                 self.last_sog_ms = Some(cog_sog.sog);
                 self.last_sog_timestamp = Some(now);
-                
+
                 let mut values = Vec::new();
-                
+
                 // Speed over ground - use raw field (m/s)
                 if self.should_broadcast(self.last_sog_broadcast, now) {
                     values.push(SignalKValue {
@@ -247,7 +253,7 @@ impl MessageHandler for SignalKBroadcaster {
                     });
                     self.last_sog_broadcast = Some(now);
                 }
-                
+
                 // Course over ground - use raw field (radians)
                 if self.should_broadcast(self.last_cog_broadcast, now) {
                     values.push(SignalKValue {
@@ -256,50 +262,53 @@ impl MessageHandler for SignalKBroadcaster {
                     });
                     self.last_cog_broadcast = Some(now);
                 }
-                
+
                 if !values.is_empty() {
                     self.send_delta(source, timestamp, values);
                 }
-            },
-            
+            }
+
             // Heading - PGN 127250
             // SignalK: navigation.headingTrue (radians)
             N2kMessage::VesselHeading(heading) => {
                 // Only process magnetic heading and convert to true
-                if heading.reference == HeadingReference::Magnetic {
-                    if self.should_broadcast(self.last_heading_broadcast, now) {
-                        // Heading is stored in radians in the struct (already SI)
-                        let values = vec![SignalKValue {
-                            path: "navigation.headingMagnetic".to_string(),
-                            value: json!(heading.heading),
-                        }];
-                        
-                        self.send_delta(source.clone(), timestamp.clone(), values);
-                        self.last_heading_broadcast = Some(now);
+                if heading.reference == HeadingReference::Magnetic
+                    && self.should_broadcast(self.last_heading_broadcast, now)
+                {
+                    // Heading is stored in radians in the struct (already SI)
+                    let values = vec![SignalKValue {
+                        path: "navigation.headingMagnetic".to_string(),
+                        value: json!(heading.heading),
+                    }];
 
+                    self.send_delta(source.clone(), timestamp.clone(), values);
+                    self.last_heading_broadcast = Some(now);
 
-                        // Prefer variation from the NMEA packet (already radians, no conversion needed).
-                        // Fall back to the geomagnetic library only when the instrument doesn't provide it.
-                        // Cache the last good value so a temporary gap doesn't cause flickering.
-                        if let Some(v) = heading.variation {
-                            self.last_variation_rad = Some(v);
-                        } else if let Some(pos) = self.last_position {
-                            if let Ok(v) = crate::utilities::get_variation_deg(pos.latitude, pos.longitude, chrono::Utc::now()) {
-                                self.last_variation_rad = Some(v.to_radians());
-                            }
-                        }
-                        if let Some(var_rad) = self.last_variation_rad {
-                            let heading_true = heading.heading + var_rad;
-                            let values = vec![SignalKValue {
-                                path: "navigation.headingTrue".to_string(),
-                                value: json!(heading_true),
-                            }];
-                            self.send_delta(source, timestamp, values);
+                    // Prefer variation from the NMEA packet (already radians, no conversion needed).
+                    // Fall back to the geomagnetic library only when the instrument doesn't provide it.
+                    // Cache the last good value so a temporary gap doesn't cause flickering.
+                    if let Some(v) = heading.variation {
+                        self.last_variation_rad = Some(v);
+                    } else if let Some(pos) = self.last_position {
+                        if let Ok(v) = crate::utilities::get_variation_deg(
+                            pos.latitude,
+                            pos.longitude,
+                            chrono::Utc::now(),
+                        ) {
+                            self.last_variation_rad = Some(v.to_radians());
                         }
                     }
+                    if let Some(var_rad) = self.last_variation_rad {
+                        let heading_true = heading.heading + var_rad;
+                        let values = vec![SignalKValue {
+                            path: "navigation.headingTrue".to_string(),
+                            value: json!(heading_true),
+                        }];
+                        self.send_delta(source, timestamp, values);
+                    }
                 }
-            },
-            
+            }
+
             // Wind data - PGN 130306
             // SignalK: environment.wind.speedOverGround, environment.wind.angleTrueGround (true wind)
             //          environment.wind.speedApparent, environment.wind.angleApparent
@@ -308,12 +317,11 @@ impl MessageHandler for SignalKBroadcaster {
                     wind.reference,
                     nmea2k::pgns::pgn130306::WindReference::Apparent
                 );
-                
+
                 if is_apparent {
                     // Apparent wind - use raw fields (m/s and radians)
                     let aws_ms = wind.speed;
                     let awa_rad = wind.angle;
-                    
 
                     if let Some(sog_time) = self.last_sog_timestamp {
                         // Invalidate cached SOG if it's older than 1 second (the two measure must be contemporaneous for true wind calculation to be accurate)
@@ -328,18 +336,18 @@ impl MessageHandler for SignalKBroadcaster {
                         let aws_kn = aws_ms * 1.94384;
                         let awa_deg = awa_rad.to_degrees();
                         let sog_kn = sog_ms * 1.94384;
-                        
+
                         let (tws_kn, twa_deg) = calculate_true_wind(aws_kn, awa_deg, sog_kn);
-                        
+
                         // Convert back to SI units
                         (tws_kn / 1.94384, twa_deg.to_radians())
                     } else {
                         // No SOG available, use apparent as true
                         (aws_ms, awa_rad)
                     };
-                    
+
                     let mut values = Vec::new();
-                    
+
                     // True wind speed
                     if self.should_broadcast(self.last_wind_speed_true_broadcast, now) {
                         values.push(SignalKValue {
@@ -348,7 +356,7 @@ impl MessageHandler for SignalKBroadcaster {
                         });
                         self.last_wind_speed_true_broadcast = Some(now);
                     }
-                    
+
                     // True wind angle
                     if self.should_broadcast(self.last_wind_angle_true_broadcast, now) {
                         values.push(SignalKValue {
@@ -357,7 +365,7 @@ impl MessageHandler for SignalKBroadcaster {
                         });
                         self.last_wind_angle_true_broadcast = Some(now);
                     }
-                    
+
                     // Apparent wind speed
                     if self.should_broadcast(self.last_wind_speed_apparent_broadcast, now) {
                         values.push(SignalKValue {
@@ -366,7 +374,7 @@ impl MessageHandler for SignalKBroadcaster {
                         });
                         self.last_wind_speed_apparent_broadcast = Some(now);
                     }
-                    
+
                     // Apparent wind angle
                     if self.should_broadcast(self.last_wind_angle_apparent_broadcast, now) {
                         values.push(SignalKValue {
@@ -375,13 +383,13 @@ impl MessageHandler for SignalKBroadcaster {
                         });
                         self.last_wind_angle_apparent_broadcast = Some(now);
                     }
-                    
+
                     if !values.is_empty() {
                         self.send_delta(source, timestamp, values);
                     }
                 }
-            },
-            
+            }
+
             // Temperature sensors - PGN 130312
             // SignalK: environment.outside.temperature or environment.water.temperature (Kelvin)
             N2kMessage::Temperature(temp) => {
@@ -394,34 +402,34 @@ impl MessageHandler for SignalKBroadcaster {
                         4 => "environment.air.inside.maincabin.temperature",
                         _ => "environment.air.outside.temperature",
                     };
-                    
+
                     let values = vec![SignalKValue {
                         path: path.to_string(),
                         value: json!(temp.temperature),
                     }];
-                    
+
                     self.send_delta(source, timestamp, values);
                     self.last_temperature_broadcast = Some(now);
                 }
-            },
-            
+            }
+
             // Humidity sensor - PGN 130313
             // SignalK: environment.outside.relativeHumidity (ratio 0-1)
             N2kMessage::Humidity(humidity) => {
                 if self.should_broadcast(self.last_humidity_broadcast, now) {
                     // actual_humidity is stored as percentage (0-100), convert to ratio
                     let humidity_ratio = humidity.actual_humidity / 100.0;
-                    
+
                     let values = vec![SignalKValue {
                         path: "environment.outside.relativeHumidity".to_string(),
                         value: json!(humidity_ratio),
                     }];
-                    
+
                     self.send_delta(source, timestamp, values);
                     self.last_humidity_broadcast = Some(now);
                 }
-            },
-            
+            }
+
             // Pressure sensor - PGN 130314
             // SignalK: environment.outside.pressure (Pa)
             N2kMessage::ActualPressure(pressure) => {
@@ -431,30 +439,37 @@ impl MessageHandler for SignalKBroadcaster {
                         path: "environment.outside.pressure".to_string(),
                         value: json!(pressure.pressure),
                     }];
-                    
+
                     self.send_delta(source, timestamp, values);
                     self.last_pressure_broadcast = Some(now);
                 }
-            },
-            
+            }
+
             // System Time - PGN 126992
             // SignalK: navigation.datetime (ISO 8601 string) + time sync status
             N2kMessage::NMEASystemTime(system_time) => {
-                if self.should_broadcast(self.last_datetime_broadcast, now) || self.should_broadcast(self.last_timesync_broadcast, now) {
+                if self.should_broadcast(self.last_datetime_broadcast, now)
+                    || self.should_broadcast(self.last_timesync_broadcast, now)
+                {
                     // Convert NMEA datetime to ISO 8601
                     let gnss_secs = system_time.date_time.to_unix_timestamp();
                     let gnss_millis = system_time.date_time.milliseconds();
-                    
-                    let datetime = chrono::DateTime::from_timestamp(gnss_secs, gnss_millis * 1_000_000)
-                        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
-                    
-                    let iso_timestamp = format!("{}.{:03}Z", datetime.format("%Y-%m-%dT%H:%M:%S"), gnss_millis);
-                    
+
+                    let datetime =
+                        chrono::DateTime::from_timestamp(gnss_secs, gnss_millis * 1_000_000)
+                            .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+
+                    let iso_timestamp = format!(
+                        "{}.{:03}Z",
+                        datetime.format("%Y-%m-%dT%H:%M:%S"),
+                        gnss_millis
+                    );
+
                     let mut values = vec![SignalKValue {
                         path: "navigation.datetime".to_string(),
                         value: json!(iso_timestamp),
                     }];
-                    
+
                     // Include time sync status if available (set via update_time_sync_status)
                     if let Some(ref status) = self.last_time_sync_status {
                         values.push(SignalKValue {
@@ -468,18 +483,17 @@ impl MessageHandler for SignalKBroadcaster {
                             value: json!(skew),
                         });
                     }
-                    
+
                     self.send_delta(source, timestamp, values);
                     if self.should_broadcast(self.last_datetime_broadcast, now) {
                         self.last_datetime_broadcast = Some(now);
                     }
                     if self.should_broadcast(self.last_timesync_broadcast, now) {
                         self.last_timesync_broadcast = Some(now);
-
                     }
                 }
-            },
-            
+            }
+
             N2kMessage::WaterDepth(depth) => {
                 // PGN 128267 - Water Depth below transducer
                 // SignalK: environment.depth.belowTransducer (meters)
@@ -491,7 +505,7 @@ impl MessageHandler for SignalKBroadcaster {
                     self.send_delta(source.clone(), timestamp.clone(), values);
                     self.last_depth_broadcast = Some(now);
                 }
-            },
+            }
 
             N2kMessage::SpeedWaterReferenced(speed) => {
                 // PGN 128259 - Speed Water Referenced
@@ -504,7 +518,7 @@ impl MessageHandler for SignalKBroadcaster {
                     self.send_delta(source.clone(), timestamp.clone(), values);
                     self.last_stw_broadcast = Some(now);
                 }
-            },
+            }
 
             N2kMessage::AisClassAPositionReport(ais) => {
                 let values = vec![
@@ -536,9 +550,9 @@ impl MessageHandler for SignalKBroadcaster {
                         value: json!("A"),
                     },
                 ];
-                
+
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
-            },
+            }
 
             N2kMessage::AisClassBPositionReport(ais) => {
                 let values = vec![
@@ -566,9 +580,9 @@ impl MessageHandler for SignalKBroadcaster {
                         value: json!("B"),
                     },
                 ];
-                
+
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
-            },
+            }
 
             N2kMessage::AisClassBExtPositionReport(ais) => {
                 let values = vec![
@@ -604,9 +618,9 @@ impl MessageHandler for SignalKBroadcaster {
                         value: json!("B"),
                     },
                 ];
-                
+
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
-            },
+            }
 
             N2kMessage::AisAtonReport(ais) => {
                 let values = vec![
@@ -630,23 +644,21 @@ impl MessageHandler for SignalKBroadcaster {
                         value: json!(ais.name.trim()),
                     },
                 ];
-                
+
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
-            },
+            }
 
             N2kMessage::AisUtcDateReport(ais) => {
-                let values = vec![
-                    SignalKValue {
-                        path: "navigation.position".to_string(),
-                        value: json!({
-                            "latitude": ais.get_latitude_degrees(),
-                            "longitude": ais.get_longitude_degrees(),
-                        }),
-                    },
-                ];
-                
+                let values = vec![SignalKValue {
+                    path: "navigation.position".to_string(),
+                    value: json!({
+                        "latitude": ais.get_latitude_degrees(),
+                        "longitude": ais.get_longitude_degrees(),
+                    }),
+                }];
+
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
-            },
+            }
 
             N2kMessage::AisClassAStaticData(ais) => {
                 let values = vec![
@@ -683,9 +695,9 @@ impl MessageHandler for SignalKBroadcaster {
                         value: json!("A"),
                     },
                 ];
-                
+
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
-            },
+            }
 
             N2kMessage::AisClassBStaticDataPartA(ais) => {
                 let values = vec![
@@ -698,9 +710,9 @@ impl MessageHandler for SignalKBroadcaster {
                         value: json!("B"),
                     },
                 ];
-                
+
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
-            },
+            }
 
             N2kMessage::AisClassBStaticDataPartB(ais) => {
                 let values = vec![
@@ -725,9 +737,9 @@ impl MessageHandler for SignalKBroadcaster {
                         value: json!("B"),
                     },
                 ];
-                
+
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
-            },
+            }
 
             // Attitude data - PGN 127257
             // SignalK: navigation.roll (radians)
@@ -737,11 +749,11 @@ impl MessageHandler for SignalKBroadcaster {
                         path: "navigation.roll".to_string(),
                         value: json!(attitude.roll),
                     }];
-                    
+
                     self.send_delta(source, timestamp, values);
                     self.last_roll_broadcast = Some(now);
                 }
-            },
+            }
 
             // All other messages - ignore
             _ => {}

@@ -13,8 +13,8 @@ pub enum AppError {
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AppError::Database(msg)      => write!(f, "Database error: {}", msg),
-            AppError::Io(msg)            => write!(f, "IO error: {}", msg),
+            AppError::Database(msg) => write!(f, "Database error: {}", msg),
+            AppError::Io(msg) => write!(f, "IO error: {}", msg),
             AppError::Configuration(msg) => write!(f, "Configuration error: {}", msg),
         }
     }
@@ -24,10 +24,11 @@ impl std::error::Error for AppError {}
 
 impl AppError {
     /// Static category label for structured logging.
+    #[allow(dead_code)]
     pub fn category(&self) -> &'static str {
         match self {
-            AppError::Database(_)      => "database",
-            AppError::Io(_)            => "io",
+            AppError::Database(_) => "database",
+            AppError::Io(_) => "io",
             AppError::Configuration(_) => "configuration",
         }
     }

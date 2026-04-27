@@ -3,6 +3,7 @@
 A marine vessel data collection and monitoring system. Reads NMEA2000 (CAN bus) messages from onboard instruments, persists navigation and environmental data to MariaDB, and serves a REST/WebSocket API with a web dashboard.
 
 For full architecture, specs, and business rules see [AGENTS.md](AGENTS.md).
+For trip data analysis, modification protocols, and entity relationships see [DB_ANALYST.md](DB_ANALYST.md).
 
 ---
 

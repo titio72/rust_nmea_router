@@ -40,6 +40,7 @@ This project is a learning and production-grade effort, inspired by https://gith
 - **Comprehensive Unit Tests**: 80+ tests covering core functionality, wind calculations, configuration validation, and safe deserialization
 - **Advanced Wind Data Handling**: Calculates and persists true wind speed/angle, with robust rolling window averaging and test coverage
 - **AIS Target Tracking**: Decodes and broadcasts AIS position reports, static data, and navigation information via SignalK with live web dashboard for monitoring nearby vessels and navigation aids
+- **Trips Viewer Sync**: One-command push of collected trips from the boat to a cloud-hosted read-only viewer (`POST /api/sync/push`). Incremental transfer, full reconciliation (handles deletes), authenticated with a shared API key. See [TRIPS_VIEWER.md](TRIPS_VIEWER.md) for setup.
 
 ## Requirements
 

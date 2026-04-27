@@ -1,7 +1,7 @@
-use std::time::{SystemTime as StdSystemTime, UNIX_EPOCH};
-use nmea2k::pgns::NMEASystemTime;
-use nix::time::{ClockId, clock_settime};
 use nix::sys::time::TimeSpec;
+use nix::time::{clock_settime, ClockId};
+use nmea2k::pgns::NMEASystemTime;
+use std::time::{SystemTime as StdSystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeSyncStatus {
@@ -68,11 +68,11 @@ impl TimeMonitor {
                 status: TimeSyncStatus::NotInitialized,
                 skew: 0,
             }
-        } else if self.is_time_synchronized() == false {
+        } else if !self.is_time_synchronized() {
             TimeSyncStatusAndSkew {
                 status: TimeSyncStatus::TimeSkewDetected,
                 skew: self.last_measured_skew_ms,
-            }  
+            }
         } else {
             TimeSyncStatusAndSkew {
                 status: TimeSyncStatus::Synchronized,
@@ -104,7 +104,7 @@ impl TimeMonitor {
 
         if abs_skew > self.time_skew_threshold_ms {
             self.has_time_skew = true;
-            
+
             // Check if we should print a warning (respect cooldown period)
             let should_warn = if let Some(last_warn) = self.last_warning_time {
                 match now.duration_since(last_warn) {
@@ -116,9 +116,13 @@ impl TimeMonitor {
             };
 
             if should_warn {
-                self.print_time_skew_warning(time_skew_ms, system_timestamp, nmea_time.date_time.to_unix_timestamp());
+                self.print_time_skew_warning(
+                    time_skew_ms,
+                    system_timestamp,
+                    nmea_time.date_time.to_unix_timestamp(),
+                );
                 self.last_warning_time = Some(now);
-                
+
                 // Attempt to set system time if enabled
                 if self.set_system_time_enabled {
                     self.set_system_time(nmea_time);
@@ -140,15 +144,15 @@ impl TimeMonitor {
     fn set_system_time(&self, nmea_time: &NMEASystemTime) {
         let unix_timestamp = nmea_time.date_time.to_unix_timestamp();
         let millis = nmea_time.date_time.milliseconds() as i64;
-        
+
         // TimeSpec expects different types on 32-bit vs 64-bit systems
         // On 64-bit: (i64, i64), on 32-bit: (i32, i32)
         #[cfg(target_pointer_width = "64")]
         let timespec = TimeSpec::new(unix_timestamp, millis * 1_000_000);
-        
+
         #[cfg(target_pointer_width = "32")]
         let timespec = TimeSpec::new(unix_timestamp as i32, (millis * 1_000_000) as i32);
-        
+
         match clock_settime(ClockId::CLOCK_REALTIME, timespec) {
             Ok(_) => {
                 tracing::info!(
@@ -193,11 +197,8 @@ impl Default for TimeMonitor {
 
 impl nmea2k::MessageHandler for TimeMonitor {
     fn handle_message(&mut self, frame: &nmea2k::N2kFrame, _timestamp: std::time::Instant) {
-        match &frame.message {
-            nmea2k::pgns::N2kMessage::NMEASystemTime(sys_time) => {
-                self.process_system_time(sys_time);
-            }
-            _ => {} // Ignore messages we're not interested in
+        if let nmea2k::pgns::N2kMessage::NMEASystemTime(sys_time) = &frame.message {
+            self.process_system_time(sys_time);
         }
     }
 }
@@ -230,16 +231,16 @@ mod tests {
     fn test_time_skew_detection_within_threshold() {
         // Use a larger threshold to account for processing delays in tests
         let mut monitor = TimeMonitor::new(2000, false);
-        
+
         // Create a system time close to current time (within threshold)
         let now = StdSystemTime::now();
         let duration = now.duration_since(UNIX_EPOCH).unwrap();
         let current_days = (duration.as_secs() / 86400) as u16;
         let current_seconds = (duration.as_secs() % 86400) as u32;
-        
+
         // Convert to NMEA2000 units (0.0001 seconds)
         let nmea_time_units = current_seconds * 10000;
-        
+
         let nmea_time = NMEASystemTime {
             pgn: 126992,
             sid: 0,
@@ -249,9 +250,9 @@ mod tests {
                 time: nmea_time_units as f64,
             },
         };
-        
+
         monitor.process_system_time(&nmea_time);
-        
+
         // Time should be synchronized (skew within threshold)
         assert!(monitor.is_time_synchronized());
     }
@@ -259,7 +260,7 @@ mod tests {
     #[test]
     fn test_time_skew_detection_beyond_threshold() {
         let mut monitor = TimeMonitor::default();
-        
+
         // Create a system time far in the past (definitely beyond threshold)
         let old_date = 10000; // Days since 1970 (way in the past)
         let nmea_time = NMEASystemTime {
@@ -271,9 +272,9 @@ mod tests {
                 time: 0.0,
             },
         };
-        
+
         monitor.process_system_time(&nmea_time);
-        
+
         // Time should NOT be synchronized (large skew)
         assert!(!monitor.is_time_synchronized());
     }
@@ -287,11 +288,11 @@ mod tests {
             sid: 0,
             source: 0,
             date_time: nmea2k::pgns::nmea2000_date_time::N2kDateTime {
-                date: 1, // 1 day since epoch
+                date: 1,        // 1 day since epoch
                 time: 600000.0, // 60 seconds * 10000 (0.0001 second units)
             },
         };
-        
+
         let timestamp = nmea_time.date_time.to_unix_timestamp();
         // 1 day (86400 seconds) + 60 seconds = 86460
         assert_eq!(timestamp, 86460);
@@ -309,7 +310,7 @@ mod tests {
                 time: 12345.0, // 1.2345 seconds = 1234.5 ms
             },
         };
-        
+
         let ms = nmea_time.date_time.milliseconds();
         // 12345 * 0.0001 * 1000 = 1234.5 -> 1234 ms (integer part)
         assert_eq!(ms, 234); // 234 ms within the current second

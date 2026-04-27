@@ -1,11 +1,14 @@
 {
-  "can_interface": "vcan0",
-  "source_filter": {
-    "pgn_source_map": {
+  "can": {
+    "interface": "vcan0",
+    "enabled": true,
+    "source_filter": {
+      "pgn_source_map": {
         "129025": 22,
         "129026": 22,
         "126992": 22,
         "129029": 0
+      }
     }
   },
   "logging": {
@@ -36,6 +39,13 @@
     "rate_limit_ms": 100,
     "vessel_uuid": "e8bf264e-0321-46e5-8dfb-c1394ff974f8",
     "vessel_name": "Itaca"
+  },
+  "sync": {
+    "enabled": true,
+    "target_url": "https://your-trips-viewer.example.com",
+    "api_key": "change-me-use-32-chars-minimum",
+    "timeout_secs": 120,
+    "accept_invalid_certs": false
   },
   "database": {
     "connection": {

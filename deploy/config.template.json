@@ -1,0 +1,44 @@
+{
+  "can": { "interface": "vcan0", "enabled": false },
+  "time": { "skew_threshold_ms": 1000, "set_system_time": false },
+  "database": {
+    "connection": {
+      "host": "localhost",
+      "port": 3306,
+      "username": "trips",
+      "password": "CHANGE_ME",
+      "database_name": "nmea_router"
+    },
+    "vessel_status": {
+      "interval_moored_seconds": 1800,
+      "interval_underway_seconds": 30
+    },
+    "environmental": {
+      "wind_speed_seconds": 30,
+      "wind_direction_seconds": 30,
+      "roll_seconds": 30,
+      "pressure_seconds": 120,
+      "cabin_temp_seconds": 300,
+      "water_temp_seconds": 300,
+      "humidity_seconds": 300
+    }
+  },
+  "web": {
+    "enabled": true,
+    "port": 1115,
+    "read_only": true,
+    "secure_cookies": true,
+    "auth_password": ""
+  },
+  "logging": {
+    "directory": "/var/log/trips_viewer",
+    "file_prefix": "trips_viewer",
+    "level": "info"
+  },
+  "sync": {
+    "enabled": false,
+    "target_url": "",
+    "api_key": "SYNC_API_KEY",
+    "timeout_secs": 120
+  }
+}

@@ -1,9 +1,9 @@
 use std::time::{Duration, Instant};
-use tracing::{warn};
+use tracing::warn;
 
-use nmea2k::pgns::{ActualPressure, Attitude, Humidity, Temperature, VesselHeading, WindData};
-use crate::utilities::{calculate_true_wind, TimedQueue};
 use crate::position_utils::Position;
+use crate::utilities::{calculate_true_wind, TimedQueue};
+use nmea2k::pgns::{ActualPressure, Attitude, Humidity, Temperature, VesselHeading, WindData};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -33,7 +33,7 @@ impl MetricId {
             MetricId::Roll => 6,
         }
     }
-    
+
     pub fn unit(&self) -> &'static str {
         match self {
             MetricId::Pressure => "Pa",
@@ -45,7 +45,7 @@ impl MetricId {
             MetricId::Roll => "deg",
         }
     }
-    
+
     #[allow(dead_code)]
     pub fn name(&self) -> &'static str {
         match self {
@@ -93,7 +93,7 @@ impl EnvironmentalMonitor {
         let max_duration = Duration::from_secs(600); // 10 minutes
         Self {
             data_samples: [
-                TimedQueue::new(max_duration), // Pressure    
+                TimedQueue::new(max_duration), // Pressure
                 TimedQueue::new(max_duration), // CabinTemp
                 TimedQueue::new(max_duration), // WaterTemp
                 TimedQueue::new(max_duration), // Humidity
@@ -113,15 +113,16 @@ impl EnvironmentalMonitor {
     /// Process a temperature message (PGN 130312)
     /// Instance 0 is typically the cabin temperature (and source 4 is "Inside Ambient")
     pub fn process_temperature(&mut self, temp: &Temperature, now: Instant) {
-        if temp.instance == 0 { // Cabin temperature
+        if temp.instance == 0 {
+            // Cabin temperature
             let celsius = temp.temperature - 273.15;
             let source = temp.source;
             let instance = temp.instance;
-            
-            if source==4 && instance==0 {
+
+            if source == 4 && instance == 0 {
                 // Source 4 is "Inside Ambient"
                 self.data_samples[MetricId::CabinTemp.as_index()].add_sample(celsius, now);
-            } else if source==0 && instance==0 {
+            } else if source == 0 && instance == 0 {
                 // Source 0 is water temperature
                 self.data_samples[MetricId::WaterTemp.as_index()].add_sample(celsius, now);
             }
@@ -130,7 +131,6 @@ impl EnvironmentalMonitor {
 
     /// Process wind data message (PGN 130306)
     fn process_wind(&mut self, wind: &WindData, now: Instant) {
-        
         // To compute wind direction, we need boat heading and speed
         self.reset_stale_heading(now); // prevent using stale heading
         if self.last_boat_speed_knots.is_none() || self.last_heading_degrees.is_none() {
@@ -139,17 +139,23 @@ impl EnvironmentalMonitor {
         }
 
         //process wind speed
-        let boat_speed = if self.last_boat_speed_event.is_none() || now.duration_since(self.last_boat_speed_event.unwrap()) > Duration::from_secs(1) {
+        let boat_speed = if self.last_boat_speed_event.is_none()
+            || now.duration_since(self.last_boat_speed_event.unwrap()) > Duration::from_secs(1)
+        {
             // Boat speed data is stale
             return;
         } else {
             self.last_boat_speed_knots.unwrap()
         };
-        let (true_wind_speed, true_wind_angle_deg) = calculate_true_wind(wind.speed_knots(), wind.angle.to_degrees(), boat_speed);
+        let (true_wind_speed, true_wind_angle_deg) =
+            calculate_true_wind(wind.speed_knots(), wind.angle.to_degrees(), boat_speed);
         self.data_samples[MetricId::WindSpeed.as_index()].add_sample(true_wind_speed, now);
-        
+
         // now process wind angle
-        let boat_heading = if self.last_heading_degrees.is_none() || self.last_heading_event.is_none() || now.duration_since(self.last_heading_event.unwrap()) > Duration::from_secs(1) {
+        let boat_heading = if self.last_heading_degrees.is_none()
+            || self.last_heading_event.is_none()
+            || now.duration_since(self.last_heading_event.unwrap()) > Duration::from_secs(1)
+        {
             // Heading data is none or stale
             return;
         } else {
@@ -160,13 +166,13 @@ impl EnvironmentalMonitor {
         // Store wind direction
         self.data_samples[MetricId::WindDir.as_index()].add_sample(absolute_angle, now);
     }
-    
+
     /// Process a humidity message (PGN 130313)
     /// Standalone humidity sensor reading
     fn process_humidity(&mut self, hum: &Humidity, now: Instant) {
         self.data_samples[MetricId::Humidity.as_index()].add_sample(hum.actual_humidity, now);
     }
-    
+
     /// Process an actual pressure message (PGN 130314)
     /// Standalone pressure sensor reading
     fn process_actual_pressure(&mut self, pressure: &ActualPressure, now: Instant) {
@@ -178,7 +184,7 @@ impl EnvironmentalMonitor {
             self.data_samples[MetricId::Pressure.as_index()].add_sample(pressure.pressure, now);
         }
     }
-    
+
     /// Process an attitude message (PGN 127257)
     /// Extract roll angle in degrees
     fn process_attitude(&mut self, attitude: &Attitude, now: Instant) {
@@ -200,10 +206,12 @@ impl EnvironmentalMonitor {
         if msg_heading.reference == nmea2k::pgns::HeadingReference::Magnetic {
             if let Some(pos) = self.last_position {
                 let heading_deg = msg_heading.heading.to_degrees();
-                let var = match crate::utilities::get_variation_deg(pos.latitude, pos.longitude, chrono::Utc::now()) {
-                    Ok(v) => v,
-                    Err(_) => 0.0, // Unable to get variation, revert to magnetic - better than nothing
-                };
+                let var = crate::utilities::get_variation_deg(
+                    pos.latitude,
+                    pos.longitude,
+                    chrono::Utc::now(),
+                )
+                .unwrap_or(0.0);
                 let true_heading_deg = crate::utilities::normalize0_360(heading_deg + var);
                 self.last_heading_event = Some(now);
                 self.last_heading_degrees = Some(true_heading_deg);
@@ -211,7 +219,8 @@ impl EnvironmentalMonitor {
                 // No position available to calculate variation, but better magnetic than nothing
                 warn!("No position available to compute magnetic variation, using magnetic heading as-is");
                 self.last_heading_event = Some(now);
-                self.last_heading_degrees = Some(msg_heading.heading.to_degrees());}
+                self.last_heading_degrees = Some(msg_heading.heading.to_degrees());
+            }
         }
     }
 
@@ -236,14 +245,14 @@ impl EnvironmentalMonitor {
     pub fn calculate_metric_data(&self, metric_id: MetricId) -> Option<MetricData> {
         let queue = &self.data_samples[metric_id.as_index()];
         let now = Instant::now();
-        
+
         if queue.is_empty() {
             return None;
         }
-        
+
         // Use full time window for calculations (10 minutes)
         let time_window = Duration::from_secs(600);
-        
+
         Some(MetricData {
             avg: queue.get_average(time_window, now),
             max: queue.get_max(time_window, now),
@@ -251,13 +260,12 @@ impl EnvironmentalMonitor {
             count: Some(queue.len()),
         })
     }
-    
+
     /// Check if there are samples for a specific metric
     pub fn has_samples(&self, metric: MetricId) -> bool {
         !self.data_samples[metric.as_index()].is_empty()
     }
 }
-
 
 impl Default for EnvironmentalMonitor {
     fn default() -> Self {
@@ -338,13 +346,16 @@ mod tests {
     fn test_environmental_monitor_creation() {
         let monitor = EnvironmentalMonitor::new();
         assert_eq!(monitor.data_samples[MetricId::Pressure.as_index()].len(), 0);
-        assert_eq!(monitor.data_samples[MetricId::CabinTemp.as_index()].len(), 0);
+        assert_eq!(
+            monitor.data_samples[MetricId::CabinTemp.as_index()].len(),
+            0
+        );
     }
 
     #[test]
     fn test_process_pressure() {
         let mut monitor = EnvironmentalMonitor::new();
-        
+
         // Create pressure message using from_bytes: 101325 Pa (1 atm)
         let data = vec![
             0x01, // SID
@@ -353,7 +364,7 @@ mod tests {
             0x0D, 0x8B, 0x01, 0x00, // Pressure = 101325 Pa
         ];
         let pressure_msg = ActualPressure::from_bytes(&data).unwrap();
-        
+
         monitor.process_actual_pressure(&pressure_msg, Instant::now());
         assert_eq!(monitor.data_samples[MetricId::Pressure.as_index()].len(), 1);
     }
@@ -361,7 +372,7 @@ mod tests {
     #[test]
     fn test_process_temperature_cabin() {
         let mut monitor = EnvironmentalMonitor::new();
-        
+
         // Create temperature message: 20.5°C = 293.65 K
         // Source must be 4 (Inside Ambient) for cabin temp
         let data = vec![
@@ -372,15 +383,18 @@ mod tests {
             0x00, // Padding to reach 6 bytes
         ];
         let temp_msg = Temperature::from_bytes(&data).unwrap();
-        
+
         monitor.process_temperature(&temp_msg, Instant::now());
-        assert_eq!(monitor.data_samples[MetricId::CabinTemp.as_index()].len(), 1);
+        assert_eq!(
+            monitor.data_samples[MetricId::CabinTemp.as_index()].len(),
+            1
+        );
     }
 
     #[test]
     fn test_process_temperature_water() {
         let mut monitor = EnvironmentalMonitor::new();
-        
+
         // Create temperature message: 15.5°C = 288.65 K
         // Source must be 0 (Water) and instance=0 for water temp
         let data = vec![
@@ -391,15 +405,18 @@ mod tests {
             0x00, // Padding to reach 6 bytes
         ];
         let temp_msg = Temperature::from_bytes(&data).unwrap();
-        
+
         monitor.process_temperature(&temp_msg, Instant::now());
-        assert_eq!(monitor.data_samples[MetricId::WaterTemp.as_index()].len(), 1);
+        assert_eq!(
+            monitor.data_samples[MetricId::WaterTemp.as_index()].len(),
+            1
+        );
     }
 
     #[test]
     fn test_process_humidity() {
         let mut monitor = EnvironmentalMonitor::new();
-        
+
         // Create humidity message: 65.0%
         // Need at least 6 bytes for Humidity::from_bytes
         let data = vec![
@@ -410,7 +427,7 @@ mod tests {
             0x00, 0x00, // Padding to reach 6+ bytes
         ];
         let humidity_msg = Humidity::from_bytes(&data).unwrap();
-        
+
         monitor.process_humidity(&humidity_msg, Instant::now());
         assert_eq!(monitor.data_samples[MetricId::Humidity.as_index()].len(), 1);
     }
@@ -418,7 +435,7 @@ mod tests {
     #[test]
     fn test_process_wind_but_no_boat_speed() {
         let mut monitor = EnvironmentalMonitor::new();
-        
+
         // Create wind message: 5.5 m/s, 180° (pi radians)
         let data = vec![
             0x01, // SID
@@ -427,16 +444,19 @@ mod tests {
             0x02, // Reference (Apparent)
         ];
         let wind_msg = WindData::from_bytes(&data).unwrap();
-        
+
         monitor.process_wind(&wind_msg, Instant::now());
-        assert_eq!(monitor.data_samples[MetricId::WindSpeed.as_index()].len(), 0);
+        assert_eq!(
+            monitor.data_samples[MetricId::WindSpeed.as_index()].len(),
+            0
+        );
         assert_eq!(monitor.data_samples[MetricId::WindDir.as_index()].len(), 0);
     }
 
     #[test]
     fn test_process_wind_with_boat_speed_and_heading() {
         let mut monitor = EnvironmentalMonitor::new();
-        
+
         monitor.last_boat_speed_knots = Some(0.0); // Simulate boat speed available - boat is not moving
         monitor.last_boat_speed_event = Some(Instant::now());
 
@@ -451,23 +471,25 @@ mod tests {
             0x02, // Reference (Apparent)
         ];
         let wind_msg = WindData::from_bytes(&data).unwrap();
-        
+
         monitor.process_wind(&wind_msg, Instant::now());
-        assert_eq!(monitor.data_samples[MetricId::WindSpeed.as_index()].len(), 1);
+        assert_eq!(
+            monitor.data_samples[MetricId::WindSpeed.as_index()].len(),
+            1
+        );
         assert_eq!(monitor.data_samples[MetricId::WindDir.as_index()].len(), 1);
     }
 
     #[test]
     fn test_process_attitude_roll() {
         let mut monitor = EnvironmentalMonitor::new();
-        
-        let attitude_msg = Attitude::from_bytes(&vec![
-            0x01,
-            0x00, 0x00,
-            0x00, 0x00,
-            0xE8, 0x03, // Roll = 1000 * 0.0001 = 0.1 rad ≈ 5.73°
-        ]).unwrap();
-        
+
+        let attitude_msg = Attitude::from_bytes(&[
+            0x01, 0x00, 0x00, 0x00, 0x00, 0xE8,
+            0x03, // Roll = 1000 * 0.0001 = 0.1 rad ≈ 5.73°
+        ])
+        .unwrap();
+
         monitor.process_attitude(&attitude_msg, Instant::now());
         assert_eq!(monitor.data_samples[MetricId::Roll.as_index()].len(), 1);
     }
@@ -480,7 +502,7 @@ mod tests {
             min: None,
             count: None,
         };
-        
+
         assert!(data.avg.is_none());
         assert!(data.max.is_none());
         assert!(data.min.is_none());
@@ -495,7 +517,7 @@ mod tests {
             min: Some(18.0),
             count: Some(10),
         };
-        
+
         assert_eq!(data.avg.unwrap(), 20.5);
         assert_eq!(data.max.unwrap(), 25.0);
         assert_eq!(data.min.unwrap(), 18.0);

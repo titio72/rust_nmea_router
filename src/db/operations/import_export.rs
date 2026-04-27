@@ -119,10 +119,8 @@ fn mysql_datetime_to_iso(val: &mysql::Value) -> Result<String, Box<dyn Error>> {
 }
 
 impl VesselDatabase {
-    pub fn export_trip<P: AsRef<std::path::Path>>(&self, trip_id: i64, output_path: P) -> Result<(), Box<dyn Error>> {
-        use std::fs::File;
-        use std::io::BufWriter;
-
+    /// Serialize a trip and all its data to a compact JSON string (same format as export_trip).
+    pub fn export_trip_to_string(&self, trip_id: i64) -> Result<String, Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
 
         // Step 1: Fetch the trip record.
@@ -259,16 +257,26 @@ impl VesselDatabase {
             },
         };
 
+        Ok(serde_json::to_string(&export_data)?)
+    }
+
+    pub fn export_trip<P: AsRef<std::path::Path>>(&self, trip_id: i64, output_path: P) -> Result<(), Box<dyn Error>> {
+        use std::fs::File;
+        use std::io::BufWriter;
+
+        let json = self.export_trip_to_string(trip_id)?;
+
         if let Some(parent) = std::path::Path::new(output_path.as_ref()).parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)?;
             }
         }
 
-        // BufWriter batches small writes into fewer syscalls; compact JSON
-        // (to_writer vs to_writer_pretty) skips indentation computation entirely.
+        // BufWriter batches small writes into fewer syscalls.
         let file = File::create(&output_path)?;
-        serde_json::to_writer(BufWriter::new(file), &export_data)?;
+        file.metadata()?; // ensure file is created
+        let mut writer = BufWriter::new(file);
+        std::io::Write::write_all(&mut writer, json.as_bytes())?;
 
         info!("Trip {} exported successfully to: {}", trip_id, output_path.as_ref().display());
         Ok(())

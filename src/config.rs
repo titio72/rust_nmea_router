@@ -9,12 +9,40 @@ use std::time::Duration;
 use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
-    pub can_interface: String,
-    pub time: TimeConfig,
-    pub database: DatabaseConfig,
+pub struct CanConfig {
+    #[serde(default = "CanConfig::default_interface")]
+    pub interface: String,
+    #[serde(default = "CanConfig::default_enabled")]
+    pub enabled: bool,
     #[serde(default)]
     pub source_filter: SourceFilterConfig,
+}
+
+impl CanConfig {
+    fn default_interface() -> String {
+        "can0".to_string()
+    }
+    fn default_enabled() -> bool {
+        true
+    }
+}
+
+impl Default for CanConfig {
+    fn default() -> Self {
+        Self {
+            interface: Self::default_interface(),
+            enabled: Self::default_enabled(),
+            source_filter: SourceFilterConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    #[serde(default)]
+    pub can: CanConfig,
+    pub time: TimeConfig,
+    pub database: DatabaseConfig,
     #[serde(default)]
     pub logging: LogConfig,
     #[serde(default)]
@@ -23,6 +51,8 @@ pub struct Config {
     pub udp: UdpConfig,
     #[serde(default)]
     pub signalk: SignalKConfig,
+    #[serde(default)]
+    pub sync: SyncConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,7 +164,7 @@ fn default_signalk_enabled() -> bool {
 }
 
 fn default_signalk_rate_limit_ms() -> u64 {
-    100  // 10Hz default
+    100 // 10Hz default
 }
 
 fn default_vessel_uuid() -> String {
@@ -152,6 +182,40 @@ impl Default for SignalKConfig {
             rate_limit_ms: 100,
             vessel_uuid: "e8bf264e-0321-46e5-8dfb-c1394ff974f8".to_string(),
             vessel_name: "Itaca".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncConfig {
+    /// Enable push sync from this node to trips_viewer
+    #[serde(default)]
+    pub enabled: bool,
+    /// Base URL of the trips_viewer instance, e.g. "https://trips.example.com"
+    #[serde(default)]
+    pub target_url: String,
+    /// Shared secret used as Bearer token; None means receive endpoint rejects all requests
+    pub api_key: Option<String>,
+    /// HTTP timeout for the push call in seconds
+    #[serde(default = "default_sync_timeout_secs")]
+    pub timeout_secs: u64,
+    /// Skip TLS certificate verification — use only for local/self-signed setups, never in production
+    #[serde(default)]
+    pub accept_invalid_certs: bool,
+}
+
+fn default_sync_timeout_secs() -> u64 {
+    120
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            target_url: String::new(),
+            api_key: None,
+            timeout_secs: default_sync_timeout_secs(),
+            accept_invalid_certs: false,
         }
     }
 }
@@ -211,7 +275,9 @@ where
         type Value = bool;
 
         fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-            formatter.write_str("a boolean value (true/false), string (\"true\"/\"false\"), or number (1/0)")
+            formatter.write_str(
+                "a boolean value (true/false), string (\"true\"/\"false\"), or number (1/0)",
+            )
         }
 
         fn visit_bool<E>(self, value: bool) -> Result<bool, E>
@@ -309,8 +375,12 @@ pub struct DatabaseConnectionConfig {
 }
 
 impl DatabaseConnectionConfig {
-    fn default_pool_min() -> usize { 2 }
-    fn default_pool_max() -> usize { 10 }
+    fn default_pool_min() -> usize {
+        2
+    }
+    fn default_pool_max() -> usize {
+        10
+    }
 }
 
 impl Default for DatabaseConnectionConfig {
@@ -336,8 +406,8 @@ pub struct VesselStatusConfig {
 impl Default for VesselStatusConfig {
     fn default() -> Self {
         Self {
-            interval_moored_seconds: 1800,  // 30 minutes
-            interval_underway_seconds: 30,   // 30 seconds
+            interval_moored_seconds: 1800, // 30 minutes
+            interval_underway_seconds: 30, // 30 seconds
         }
     }
 }
@@ -376,51 +446,59 @@ impl Config {
         config.validate_and_fix()?;
         Ok(config)
     }
-    
+
     #[cfg(not(test))]
-    pub fn load_for_context() -> Result<Self, crate::error::AppError> {
-        let config_path = if std::path::Path::new("./config.json").exists() {
-            "./config.json"
+    pub fn load_for_context(config_path: Option<&str>) -> Result<Self, crate::error::AppError> {
+        let resolved = if let Some(path) = config_path {
+            path.to_string()
+        } else if std::path::Path::new("./config.json").exists() {
+            "./config.json".to_string()
         } else {
-            "/etc/nmea_router/config.json"
+            "/etc/nmea_router/config.json".to_string()
         };
-        Self::from_file(config_path)
-            .map_err(|e| crate::error::AppError::Configuration(e.to_string()))
+        let mut config = Self::from_file(&resolved)
+            .map_err(|e| crate::error::AppError::Configuration(e.to_string()))?;
+        config.apply_env_overrides();
+        Ok(config)
     }
 
     /// Load configuration with automatic test mode detection
     /// When cfg(test) is active, loads test_config.json by default
     #[cfg(test)]
-    pub fn load_for_context() -> Result<Self, crate::error::AppError> {
+    pub fn load_for_context(_config_path: Option<&str>) -> Result<Self, crate::error::AppError> {
         Self::from_file("test_config.json")
             .map_err(|e| crate::error::AppError::Configuration(e.to_string()))
     }
 
-    
     /// Validate configuration and fix invalid values by reverting to defaults
     /// Returns an error if CAN interface is invalid (unrecoverable)
     fn validate_and_fix(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Validate CAN interface - must not be empty
-        if self.can_interface.is_empty() {
-            return Err("Configuration error: CAN interface cannot be empty".into());
+        // Validate CAN interface only when CAN is enabled
+        if self.can.enabled {
+            if self.can.interface.is_empty() {
+                return Err("Configuration error: CAN interface cannot be empty".into());
+            }
+            if !self
+                .can
+                .interface
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            {
+                return Err(format!("Configuration error: Invalid CAN interface name '{}'. Must contain only alphanumeric characters, underscores, or hyphens.", self.can.interface).into());
+            }
         }
-        
-        // Validate CAN interface is a valid device name (basic check)
-        if !self.can_interface.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
-            return Err(format!("Configuration error: Invalid CAN interface name '{}'. Must contain only alphanumeric characters, underscores, or hyphens.", self.can_interface).into());
-        }
-        
+
         // Validate time skew threshold (must be >= 100 ms)
         if self.time.skew_threshold_ms < 100 {
             warn!("Configuration warning: skew_threshold_ms ({}) is below minimum 100ms. Reverting to default 500ms.", self.time.skew_threshold_ms);
             self.time.skew_threshold_ms = TimeConfig::default().skew_threshold_ms;
         }
-        
+
         // Validate PGN source filter
         let mut invalid_pgns = Vec::new();
         let mut invalid_sources = Vec::new();
-        
-        for (pgn, source) in &self.source_filter.pgn_source_map {
+
+        for (pgn, source) in &self.can.source_filter.pgn_source_map {
             // Check PGN range (50000-200000)
             if *pgn < 50000 || *pgn > 200000 {
                 invalid_pgns.push(*pgn);
@@ -431,108 +509,178 @@ impl Config {
                 invalid_sources.push((*pgn, *source));
             }
         }
-        
+
         // Remove invalid entries and warn
         for pgn in invalid_pgns {
             warn!("Configuration warning: Invalid PGN {} in source filter (must be 50000-200000). Removing entry.", pgn);
-            self.source_filter.pgn_source_map.remove(&pgn);
+            self.can.source_filter.pgn_source_map.remove(&pgn);
         }
-        
+
         for (pgn, source) in invalid_sources {
             warn!("Configuration warning: Invalid source {} for PGN {} (must be 0-255, excluding 251-253). Removing entry.", source, pgn);
-            self.source_filter.pgn_source_map.remove(&pgn);
+            self.can.source_filter.pgn_source_map.remove(&pgn);
         }
-        
+
         // Validate vessel status intervals
         self.validate_vessel_status_intervals();
-        
+
         // Validate environmental intervals (30 seconds - 10 minutes = 30-600 seconds)
         self.validate_environmental_intervals();
-        
+
         Ok(())
     }
-    
+
     fn validate_vessel_status_intervals(&mut self) {
         let defaults = VesselStatusConfig::default();
-        
+
         // Validate moored interval (30 seconds - 10 minutes)
-        if self.database.vessel_status.interval_moored_seconds < 30 || self.database.vessel_status.interval_moored_seconds > 600 {
-            warn!("Configuration warning: interval_moored_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+        if self.database.vessel_status.interval_moored_seconds < 30
+            || self.database.vessel_status.interval_moored_seconds > 600
+        {
+            warn!("Configuration warning: interval_moored_seconds ({}) is out of range (30-600). Reverting to default {}.",
                 self.database.vessel_status.interval_moored_seconds, defaults.interval_moored_seconds);
             self.database.vessel_status.interval_moored_seconds = defaults.interval_moored_seconds;
         }
-        
+
         // Validate underway interval (10 seconds - 10 minutes)
-        if self.database.vessel_status.interval_underway_seconds < 10 || self.database.vessel_status.interval_underway_seconds > 600 {
-            warn!("Configuration warning: interval_underway_seconds ({}) is out of range (10-600). Reverting to default {}.", 
+        if self.database.vessel_status.interval_underway_seconds < 10
+            || self.database.vessel_status.interval_underway_seconds > 600
+        {
+            warn!("Configuration warning: interval_underway_seconds ({}) is out of range (10-600). Reverting to default {}.",
                 self.database.vessel_status.interval_underway_seconds, defaults.interval_underway_seconds);
-            self.database.vessel_status.interval_underway_seconds = defaults.interval_underway_seconds;
+            self.database.vessel_status.interval_underway_seconds =
+                defaults.interval_underway_seconds;
         }
     }
-    
+
     fn validate_environmental_intervals(&mut self) {
         let defaults = EnvironmentalConfig::default();
-        
+
         // Validate each environmental interval (30 seconds - 10 minutes = 30-600 seconds)
-        if self.database.environmental.wind_speed_seconds < 30 || self.database.environmental.wind_speed_seconds > 600 {
-            warn!("Configuration warning: wind_speed_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+        if self.database.environmental.wind_speed_seconds < 30
+            || self.database.environmental.wind_speed_seconds > 600
+        {
+            warn!("Configuration warning: wind_speed_seconds ({}) is out of range (30-600). Reverting to default {}.",
                 self.database.environmental.wind_speed_seconds, defaults.wind_speed_seconds);
             self.database.environmental.wind_speed_seconds = defaults.wind_speed_seconds;
         }
-        
-        if self.database.environmental.wind_direction_seconds < 30 || self.database.environmental.wind_direction_seconds > 600 {
-            warn!("Configuration warning: wind_direction_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+
+        if self.database.environmental.wind_direction_seconds < 30
+            || self.database.environmental.wind_direction_seconds > 600
+        {
+            warn!("Configuration warning: wind_direction_seconds ({}) is out of range (30-600). Reverting to default {}.",
                 self.database.environmental.wind_direction_seconds, defaults.wind_direction_seconds);
             self.database.environmental.wind_direction_seconds = defaults.wind_direction_seconds;
         }
-        
-        if self.database.environmental.roll_seconds < 30 || self.database.environmental.roll_seconds > 600 {
-            warn!("Configuration warning: roll_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+
+        if self.database.environmental.roll_seconds < 30
+            || self.database.environmental.roll_seconds > 600
+        {
+            warn!("Configuration warning: roll_seconds ({}) is out of range (30-600). Reverting to default {}.",
                 self.database.environmental.roll_seconds, defaults.roll_seconds);
             self.database.environmental.roll_seconds = defaults.roll_seconds;
         }
-        
-        if self.database.environmental.pressure_seconds < 30 || self.database.environmental.pressure_seconds > 600 {
-            warn!("Configuration warning: pressure_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+
+        if self.database.environmental.pressure_seconds < 30
+            || self.database.environmental.pressure_seconds > 600
+        {
+            warn!("Configuration warning: pressure_seconds ({}) is out of range (30-600). Reverting to default {}.",
                 self.database.environmental.pressure_seconds, defaults.pressure_seconds);
             self.database.environmental.pressure_seconds = defaults.pressure_seconds;
         }
-        
-        if self.database.environmental.cabin_temp_seconds < 30 || self.database.environmental.cabin_temp_seconds > 600 {
-            warn!("Configuration warning: cabin_temp_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+
+        if self.database.environmental.cabin_temp_seconds < 30
+            || self.database.environmental.cabin_temp_seconds > 600
+        {
+            warn!("Configuration warning: cabin_temp_seconds ({}) is out of range (30-600). Reverting to default {}.",
                 self.database.environmental.cabin_temp_seconds, defaults.cabin_temp_seconds);
             self.database.environmental.cabin_temp_seconds = defaults.cabin_temp_seconds;
         }
-        
-        if self.database.environmental.water_temp_seconds < 30 || self.database.environmental.water_temp_seconds > 600 {
-            warn!("Configuration warning: water_temp_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+
+        if self.database.environmental.water_temp_seconds < 30
+            || self.database.environmental.water_temp_seconds > 600
+        {
+            warn!("Configuration warning: water_temp_seconds ({}) is out of range (30-600). Reverting to default {}.",
                 self.database.environmental.water_temp_seconds, defaults.water_temp_seconds);
             self.database.environmental.water_temp_seconds = defaults.water_temp_seconds;
         }
-        
-        if self.database.environmental.humidity_seconds < 30 || self.database.environmental.humidity_seconds > 600 {
-            warn!("Configuration warning: humidity_seconds ({}) is out of range (30-600). Reverting to default {}.", 
+
+        if self.database.environmental.humidity_seconds < 30
+            || self.database.environmental.humidity_seconds > 600
+        {
+            warn!("Configuration warning: humidity_seconds ({}) is out of range (30-600). Reverting to default {}.",
                 self.database.environmental.humidity_seconds, defaults.humidity_seconds);
             self.database.environmental.humidity_seconds = defaults.humidity_seconds;
         }
     }
-    
+
+    /// Apply environment variable overrides after JSON loading.
+    /// Supports: DATABASE_URL, PORT, AUTH_PASSWORD, GOOGLE_MAPS_KEY, SECURE_COOKIES, LOG_LEVEL
+    pub fn apply_env_overrides(&mut self) {
+        if let Ok(url) = std::env::var("DATABASE_URL") {
+            if let Some(conn) = Self::parse_database_url(&url) {
+                self.database.connection = conn;
+            } else {
+                warn!("DATABASE_URL is set but could not be parsed, ignoring");
+            }
+        }
+        if let Ok(port_str) = std::env::var("PORT") {
+            match port_str.parse::<u16>() {
+                Ok(port) => self.web.port = port,
+                Err(_) => warn!("PORT env var '{}' is not a valid u16, ignoring", port_str),
+            }
+        }
+        if let Ok(password) = std::env::var("AUTH_PASSWORD") {
+            self.web.auth_password = if password.is_empty() { None } else { Some(password) };
+        }
+        if let Ok(key) = std::env::var("GOOGLE_MAPS_KEY") {
+            self.web.google_maps_api_key = if key.is_empty() { None } else { Some(key) };
+        }
+        if let Ok(val) = std::env::var("SECURE_COOKIES") {
+            self.web.secure_cookies = matches!(val.to_lowercase().as_str(), "true" | "1" | "yes");
+        }
+        if let Ok(level) = std::env::var("LOG_LEVEL") {
+            if !level.is_empty() {
+                self.logging.level = level;
+            }
+        }
+    }
+
+    /// Parse a mysql://user:pass@host:port/dbname URL into a DatabaseConnectionConfig.
+    fn parse_database_url(url: &str) -> Option<DatabaseConnectionConfig> {
+        let url = url.strip_prefix("mysql://")?;
+        let (userinfo, hostinfo) = url.split_once('@')?;
+        let (username, password) = userinfo.split_once(':')?;
+        let (hostport, database_name) = hostinfo.split_once('/')?;
+        let (host, port_str) = hostport.split_once(':')?;
+        let port = port_str.parse::<u16>().ok()?;
+        Some(DatabaseConnectionConfig {
+            host: host.to_string(),
+            port,
+            username: username.to_string(),
+            password: password.to_string(),
+            database_name: database_name.to_string(),
+            pool_min: DatabaseConnectionConfig::default_pool_min(),
+            pool_max: DatabaseConnectionConfig::default_pool_max(),
+        })
+    }
+
     /// Create default configuration
     #[allow(dead_code)]
-    pub fn default() -> Self {
+    pub fn new_default_instance() -> Self {
         Config {
-            can_interface: "vcan0".to_string(),
+            can: CanConfig { interface: "vcan0".to_string(), enabled: true, source_filter: SourceFilterConfig::default() },
             time: TimeConfig::default(),
             database: DatabaseConfig {
                 connection: DatabaseConnectionConfig::default(),
                 vessel_status: VesselStatusConfig::default(),
                 environmental: EnvironmentalConfig::default(),
             },
-            source_filter: SourceFilterConfig::default(),
             logging: LogConfig::default(),
             web: WebConfig::default(),
             udp: UdpConfig::default(),
             signalk: SignalKConfig::default(),
+            sync: SyncConfig::default(),
         }
     }
 }
@@ -551,7 +699,7 @@ impl VesselStatusConfig {
     pub fn interval_moored(&self) -> Duration {
         Duration::from_secs(self.interval_moored_seconds)
     }
-    
+
     pub fn interval_underway(&self) -> Duration {
         Duration::from_secs(self.interval_underway_seconds)
     }
@@ -561,27 +709,27 @@ impl EnvironmentalConfig {
     pub fn wind_speed_interval(&self) -> Duration {
         Duration::from_secs(self.wind_speed_seconds)
     }
-    
+
     pub fn wind_direction_interval(&self) -> Duration {
         Duration::from_secs(self.wind_direction_seconds)
     }
-    
+
     pub fn roll_interval(&self) -> Duration {
         Duration::from_secs(self.roll_seconds)
     }
-    
+
     pub fn pressure_interval(&self) -> Duration {
         Duration::from_secs(self.pressure_seconds)
     }
-    
+
     pub fn cabin_temp_interval(&self) -> Duration {
         Duration::from_secs(self.cabin_temp_seconds)
     }
-    
+
     pub fn water_temp_interval(&self) -> Duration {
         Duration::from_secs(self.water_temp_seconds)
     }
-    
+
     pub fn humidity_interval(&self) -> Duration {
         Duration::from_secs(self.humidity_seconds)
     }
@@ -673,8 +821,8 @@ mod tests {
 
     #[test]
     fn test_config_default() {
-        let config = Config::default();
-        assert_eq!(config.can_interface, "vcan0");
+        let config = Config::new_default_instance();
+        assert_eq!(config.can.interface, "vcan0");
         assert_eq!(config.time.skew_threshold_ms, 500);
         assert_eq!(config.database.connection.host, "localhost");
         assert_eq!(config.database.vessel_status.interval_moored_seconds, 1800);
@@ -695,16 +843,16 @@ mod tests {
         let mut filter = SourceFilterConfig::default();
         filter.pgn_source_map.insert(129025, 22);
         filter.pgn_source_map.insert(127488, 5);
-        
+
         // PGN 129025 should only accept source 22
         assert!(filter.should_accept(129025, 22));
         assert!(!filter.should_accept(129025, 10));
         assert!(!filter.should_accept(129025, 5));
-        
+
         // PGN 127488 should only accept source 5
         assert!(filter.should_accept(127488, 5));
         assert!(!filter.should_accept(127488, 22));
-        
+
         // PGN 130312 has no filter, should accept all sources
         assert!(filter.should_accept(130312, 10));
         assert!(filter.should_accept(130312, 22));
@@ -715,11 +863,11 @@ mod tests {
         let mut filter = SourceFilterConfig::default();
         filter.pgn_source_map.insert(129025, 22);
         filter.pgn_source_map.insert(127488, 5);
-        
+
         let json = serde_json::to_string(&filter).unwrap();
         assert!(json.contains("129025"));
         assert!(json.contains("127488"));
-        
+
         let deserialized: SourceFilterConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.pgn_source_map.get(&129025), Some(&22));
         assert_eq!(deserialized.pgn_source_map.get(&127488), Some(&5));
@@ -727,7 +875,7 @@ mod tests {
 
     #[test]
     fn test_config_serialization() {
-        let config = Config::default();
+        let config = Config::new_default_instance();
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("vcan0"));
         assert!(json.contains("localhost"));
@@ -736,7 +884,7 @@ mod tests {
     #[test]
     fn test_config_deserialization() {
         let json = r#"{
-            "can_interface": "can0",
+            "can": {"interface": "can0", "enabled": true},
             "time": {
                 "skew_threshold_ms": 1000
             },
@@ -763,9 +911,9 @@ mod tests {
                 }
             }
         }"#;
-        
+
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.can_interface, "can0");
+        assert_eq!(config.can.interface, "can0");
         assert_eq!(config.time.skew_threshold_ms, 1000);
         assert_eq!(config.database.connection.host, "myhost");
         assert_eq!(config.database.vessel_status.interval_moored_seconds, 600);
@@ -787,12 +935,12 @@ mod tests {
             file_prefix: "router".to_string(),
             level: "debug".to_string(),
         };
-        
+
         let json = serde_json::to_string(&log_config).unwrap();
         assert!(json.contains("/var/log/nmea"));
         assert!(json.contains("router"));
         assert!(json.contains("debug"));
-        
+
         let deserialized: LogConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.directory, "/var/log/nmea");
         assert_eq!(deserialized.file_prefix, "router");
@@ -802,7 +950,7 @@ mod tests {
     #[test]
     fn test_validation_empty_can_interface() {
         let json = r#"{
-            "can_interface": "",
+            "can": {"interface": "", "enabled": true},
             "time": {"skew_threshold_ms": 500},
             "database": {
                 "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
@@ -810,18 +958,21 @@ mod tests {
                 "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
             }
         }"#;
-        
+
         let mut config: Config = serde_json::from_str(json).unwrap();
         let result = config.validate_and_fix();
-        
+
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("CAN interface cannot be empty"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("CAN interface cannot be empty"));
     }
 
     #[test]
     fn test_validation_invalid_can_interface() {
         let json = r#"{
-            "can_interface": "can@#$%",
+            "can": {"interface": "can@#$%", "enabled": true},
             "time": {"skew_threshold_ms": 500},
             "database": {
                 "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
@@ -829,18 +980,21 @@ mod tests {
                 "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
             }
         }"#;
-        
+
         let mut config: Config = serde_json::from_str(json).unwrap();
         let result = config.validate_and_fix();
-        
+
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid CAN interface name"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid CAN interface name"));
     }
 
     #[test]
     fn test_validation_skew_threshold_too_low() {
         let json = r#"{
-            "can_interface": "vcan0",
+            "can": {"interface": "vcan0", "enabled": true},
             "time": {"skew_threshold_ms": 50},
             "database": {
                 "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
@@ -848,10 +1002,10 @@ mod tests {
                 "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
             }
         }"#;
-        
+
         let mut config: Config = serde_json::from_str(json).unwrap();
         config.validate_and_fix().unwrap();
-        
+
         // Should be reverted to default
         assert_eq!(config.time.skew_threshold_ms, 500);
     }
@@ -859,7 +1013,7 @@ mod tests {
     #[test]
     fn test_validation_environmental_period_out_of_range() {
         let json = r#"{
-            "can_interface": "vcan0",
+            "can": {"interface": "vcan0", "enabled": true},
             "time": {"skew_threshold_ms": 500},
             "database": {
                 "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
@@ -867,10 +1021,10 @@ mod tests {
                 "environmental": {"wind_speed_seconds": 10, "wind_direction_seconds": 700, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
             }
         }"#;
-        
+
         let mut config: Config = serde_json::from_str(json).unwrap();
         config.validate_and_fix().unwrap();
-        
+
         // wind_speed_seconds too low (10 < 30), should be reverted to default
         assert_eq!(config.database.environmental.wind_speed_seconds, 30);
         // wind_direction_seconds too high (700 > 600), should be reverted to default
@@ -880,38 +1034,35 @@ mod tests {
     #[test]
     fn test_validation_pgn_out_of_range() {
         let json = r#"{
-            "can_interface": "vcan0",
-            "time": {"skew_threshold_ms": 500},
-            "source_filter": {
+            "can": {"interface": "vcan0", "enabled": true, "source_filter": {
                 "pgn_source_map": {
                     "129025": 22,
                     "30000": 10,
                     "250000": 5
                 }
-            },
+            }},
+            "time": {"skew_threshold_ms": 500},
             "database": {
                 "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
                 "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
                 "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
             }
         }"#;
-        
+
         let mut config: Config = serde_json::from_str(json).unwrap();
         config.validate_and_fix().unwrap();
-        
+
         // Valid PGN should remain
-        assert_eq!(config.source_filter.pgn_source_map.get(&129025), Some(&22));
+        assert_eq!(config.can.source_filter.pgn_source_map.get(&129025), Some(&22));
         // Invalid PGNs should be removed
-        assert_eq!(config.source_filter.pgn_source_map.get(&30000), None);
-        assert_eq!(config.source_filter.pgn_source_map.get(&250000), None);
+        assert_eq!(config.can.source_filter.pgn_source_map.get(&30000), None);
+        assert_eq!(config.can.source_filter.pgn_source_map.get(&250000), None);
     }
 
     #[test]
     fn test_validation_source_out_of_range() {
         let json = r#"{
-            "can_interface": "vcan0",
-            "time": {"skew_threshold_ms": 500},
-            "source_filter": {
+            "can": {"interface": "vcan0", "enabled": true, "source_filter": {
                 "pgn_source_map": {
                     "129025": 22,
                     "129026": 0,
@@ -920,87 +1071,88 @@ mod tests {
                     "129029": 252,
                     "129030": 253
                 }
-            },
+            }},
+            "time": {"skew_threshold_ms": 500},
             "database": {
                 "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
                 "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
                 "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
             }
         }"#;
-        
+
         let mut config: Config = serde_json::from_str(json).unwrap();
         config.validate_and_fix().unwrap();
-        
+
         // Valid sources should remain (0, 22, 255 are valid)
-        assert_eq!(config.source_filter.pgn_source_map.get(&129025), Some(&22));
-        assert_eq!(config.source_filter.pgn_source_map.get(&129026), Some(&0));
-        assert_eq!(config.source_filter.pgn_source_map.get(&129027), Some(&255));
+        assert_eq!(config.can.source_filter.pgn_source_map.get(&129025), Some(&22));
+        assert_eq!(config.can.source_filter.pgn_source_map.get(&129026), Some(&0));
+        assert_eq!(config.can.source_filter.pgn_source_map.get(&129027), Some(&255));
         // Invalid sources (251-253 are reserved) should be removed
-        assert_eq!(config.source_filter.pgn_source_map.get(&129028), None);
-        assert_eq!(config.source_filter.pgn_source_map.get(&129029), None);
-        assert_eq!(config.source_filter.pgn_source_map.get(&129030), None);
+        assert_eq!(config.can.source_filter.pgn_source_map.get(&129028), None);
+        assert_eq!(config.can.source_filter.pgn_source_map.get(&129029), None);
+        assert_eq!(config.can.source_filter.pgn_source_map.get(&129030), None);
     }
 
     #[test]
     fn test_set_system_time_safe_deserialization_bool() {
         // Test normal boolean values
-        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": true}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let json = r#"{"can": {"interface": "vcan0", "enabled": true}, "time": {"skew_threshold_ms": 500, "set_system_time": true}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.time.set_system_time, true);
+        assert!(config.time.set_system_time);
 
-        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": false}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let json = r#"{"can": {"interface": "vcan0", "enabled": true}, "time": {"skew_threshold_ms": 500, "set_system_time": false}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.time.set_system_time, false);
+        assert!(!config.time.set_system_time);
     }
 
     #[test]
     fn test_set_system_time_safe_deserialization_string() {
         // Test string values
-        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": "true"}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let json = r#"{"can": {"interface": "vcan0", "enabled": true}, "time": {"skew_threshold_ms": 500, "set_system_time": "true"}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.time.set_system_time, true);
+        assert!(config.time.set_system_time);
 
-        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": "yes"}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let json = r#"{"can": {"interface": "vcan0", "enabled": true}, "time": {"skew_threshold_ms": 500, "set_system_time": "yes"}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.time.set_system_time, true);
+        assert!(config.time.set_system_time);
 
-        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": "no"}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let json = r#"{"can": {"interface": "vcan0", "enabled": true}, "time": {"skew_threshold_ms": 500, "set_system_time": "no"}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.time.set_system_time, false);
+        assert!(!config.time.set_system_time);
     }
 
     #[test]
     fn test_set_system_time_safe_deserialization_number() {
         // Test number values
-        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": 1}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let json = r#"{"can": {"interface": "vcan0", "enabled": true}, "time": {"skew_threshold_ms": 500, "set_system_time": 1}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.time.set_system_time, true);
+        assert!(config.time.set_system_time);
 
-        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": 0}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let json = r#"{"can": {"interface": "vcan0", "enabled": true}, "time": {"skew_threshold_ms": 500, "set_system_time": 0}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.time.set_system_time, false);
+        assert!(!config.time.set_system_time);
     }
 
     #[test]
     fn test_set_system_time_safe_deserialization_malformed() {
         // Test malformed values - should default to false
-        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500, "set_system_time": "invalid"}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let json = r#"{"can": {"interface": "vcan0", "enabled": true}, "time": {"skew_threshold_ms": 500, "set_system_time": "invalid"}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.time.set_system_time, false);
+        assert!(!config.time.set_system_time);
     }
 
     #[test]
     fn test_set_system_time_safe_deserialization_missing() {
         // Test missing value - should default to false
-        let json = r#"{"can_interface": "vcan0", "time": {"skew_threshold_ms": 500}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
+        let json = r#"{"can": {"interface": "vcan0", "enabled": true}, "time": {"skew_threshold_ms": 500}, "database": {"connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}, "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30}, "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}}"#;
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.time.set_system_time, false);
+        assert!(!config.time.set_system_time);
     }
 
     #[test]
     fn test_web_config_default() {
         let config = WebConfig::default();
-        assert_eq!(config.enabled, true);
+        assert!(config.enabled);
         assert_eq!(config.port, 8080);
     }
 
@@ -1015,7 +1167,7 @@ mod tests {
             secure_cookies: false,
             read_only: false,
         };
-        assert_eq!(config.enabled, false);
+        assert!(!config.enabled);
         assert_eq!(config.port, 9000);
         assert_eq!(config.google_maps_api_key, Some("test_key".to_string()));
     }
@@ -1034,9 +1186,9 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("3000"));
         assert!(json.contains("true"));
-        
+
         let deserialized: WebConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.enabled, true);
+        assert!(deserialized.enabled);
         assert_eq!(deserialized.port, 3000);
         assert_eq!(deserialized.google_maps_api_key, None);
     }
@@ -1046,14 +1198,14 @@ mod tests {
         // Test with missing fields - should use defaults
         let json = r#"{}"#;
         let config: WebConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.enabled, true);
+        assert!(config.enabled);
         assert_eq!(config.port, 8080);
     }
 
     #[test]
     fn test_web_config_in_full_config() {
         let json = r#"{
-            "can_interface": "vcan0",
+            "can": {"interface": "vcan0", "enabled": true},
             "time": {"skew_threshold_ms": 500},
             "web": {
                 "enabled": false,
@@ -1065,9 +1217,9 @@ mod tests {
                 "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
             }
         }"#;
-        
+
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.web.enabled, false);
+        assert!(!config.web.enabled);
         assert_eq!(config.web.port, 3000);
     }
 
@@ -1075,7 +1227,7 @@ mod tests {
     fn test_web_config_missing_in_full_config() {
         // Test with missing web config - should use defaults
         let json = r#"{
-            "can_interface": "vcan0",
+            "can": {"interface": "vcan0", "enabled": true},
             "time": {"skew_threshold_ms": 500},
             "database": {
                 "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
@@ -1083,16 +1235,16 @@ mod tests {
                 "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
             }
         }"#;
-        
+
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.web.enabled, true);
+        assert!(config.web.enabled);
         assert_eq!(config.web.port, 8080);
     }
 
     #[test]
     fn test_udp_config_default() {
         let config = UdpConfig::default();
-        assert_eq!(config.enabled, false);
+        assert!(!config.enabled);
         assert_eq!(config.address, "192.168.1.255:10110");
     }
 
@@ -1103,7 +1255,7 @@ mod tests {
             address: "224.0.0.1:5555".to_string(),
             bind_address: "0.0.0.0:0".to_string(),
         };
-        assert_eq!(config.enabled, true);
+        assert!(config.enabled);
         assert_eq!(config.address, "224.0.0.1:5555");
     }
 
@@ -1119,7 +1271,7 @@ mod tests {
         assert!(json.contains("true"));
 
         let deserialized: UdpConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.enabled, true);
+        assert!(deserialized.enabled);
         assert_eq!(deserialized.address, "192.168.100.255:12345");
     }
 
@@ -1128,7 +1280,7 @@ mod tests {
         // Test with missing fields - should use defaults
         let json = r#"{}"#;
         let config: UdpConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.enabled, false);
+        assert!(!config.enabled);
         assert_eq!(config.address, "192.168.1.255:10110");
     }
 
@@ -1155,7 +1307,7 @@ mod tests {
     #[test]
     fn test_udp_config_in_full_config() {
         let json = r#"{
-            "can_interface": "vcan0",
+            "can": {"interface": "vcan0", "enabled": true},
             "time": {"skew_threshold_ms": 500},
             "udp": {
                 "enabled": true,
@@ -1167,9 +1319,9 @@ mod tests {
                 "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
             }
         }"#;
-        
+
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.udp.enabled, true);
+        assert!(config.udp.enabled);
         assert_eq!(config.udp.address, "224.0.0.1:5555");
     }
 
@@ -1177,7 +1329,7 @@ mod tests {
     fn test_udp_config_missing_in_full_config() {
         // Test with missing UDP config - should use defaults
         let json = r#"{
-            "can_interface": "vcan0",
+            "can": {"interface": "vcan0", "enabled": true},
             "time": {"skew_threshold_ms": 500},
             "database": {
                 "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
@@ -1185,16 +1337,16 @@ mod tests {
                 "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
             }
         }"#;
-        
+
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.udp.enabled, false);
+        assert!(!config.udp.enabled);
         assert_eq!(config.udp.address, "192.168.1.255:10110");
     }
 
     #[test]
     fn test_full_config_with_web_and_udp() {
         let json = r#"{
-            "can_interface": "can0",
+            "can": {"interface": "can0", "enabled": true},
             "time": {"skew_threshold_ms": 1000, "set_system_time": false},
             "web": {
                 "enabled": true,
@@ -1215,24 +1367,140 @@ mod tests {
                 "environmental": {"wind_speed_seconds": 45, "wind_direction_seconds": 45, "roll_seconds": 45, "pressure_seconds": 150, "cabin_temp_seconds": 350, "water_temp_seconds": 350, "humidity_seconds": 350}
             }
         }"#;
-        
+
         let config: Config = serde_json::from_str(json).unwrap();
-        
+
         // Web config
-        assert_eq!(config.web.enabled, true);
+        assert!(config.web.enabled);
         assert_eq!(config.web.port, 8888);
-        
+
         // UDP config
-        assert_eq!(config.udp.enabled, true);
+        assert!(config.udp.enabled);
         assert_eq!(config.udp.address, "192.168.1.100:9999");
-        
+
         // Logging config
         assert_eq!(config.logging.directory, "/var/log/nmea");
         assert_eq!(config.logging.file_prefix, "router");
         assert_eq!(config.logging.level, "debug");
-        
+
         // Other configs
-        assert_eq!(config.can_interface, "can0");
+        assert_eq!(config.can.interface, "can0");
         assert_eq!(config.time.skew_threshold_ms, 1000);
+    }
+
+    #[test]
+    fn test_parse_database_url_valid() {
+        let conn = Config::parse_database_url("mysql://user:pass@myhost:3307/mydb").unwrap();
+        assert_eq!(conn.username, "user");
+        assert_eq!(conn.password, "pass");
+        assert_eq!(conn.host, "myhost");
+        assert_eq!(conn.port, 3307);
+        assert_eq!(conn.database_name, "mydb");
+    }
+
+    #[test]
+    fn test_parse_database_url_invalid() {
+        assert!(Config::parse_database_url("not-a-url").is_none());
+        assert!(Config::parse_database_url("mysql://nocolon@host:3306/db").is_none());
+    }
+
+    #[test]
+    fn test_can_config_default() {
+        let can = CanConfig::default();
+        assert!(can.enabled);
+        assert_eq!(can.interface, "can0");
+    }
+
+    #[test]
+    fn test_can_disabled_skips_interface_validation() {
+        let json = r#"{
+            "can": {"interface": "", "enabled": false},
+            "time": {"skew_threshold_ms": 500},
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        assert!(config.validate_and_fix().is_ok(), "disabled CAN with empty interface should be valid");
+    }
+
+    #[test]
+    fn test_sync_config_defaults() {
+        let config = SyncConfig::default();
+        assert!(!config.enabled);
+        assert!(config.target_url.is_empty());
+        assert!(config.api_key.is_none());
+        assert_eq!(config.timeout_secs, 120);
+        assert!(!config.accept_invalid_certs);
+    }
+
+    #[test]
+    fn test_sync_config_deserialize_full() {
+        let json = r#"{
+            "enabled": true,
+            "target_url": "https://trips.example.com",
+            "api_key": "my-secret-key",
+            "timeout_secs": 60,
+            "accept_invalid_certs": true
+        }"#;
+        let config: SyncConfig = serde_json::from_str(json).unwrap();
+        assert!(config.enabled);
+        assert_eq!(config.target_url, "https://trips.example.com");
+        assert_eq!(config.api_key.as_deref(), Some("my-secret-key"));
+        assert_eq!(config.timeout_secs, 60);
+        assert!(config.accept_invalid_certs);
+    }
+
+    #[test]
+    fn test_sync_config_deserialize_missing_fields_use_defaults() {
+        let json = r#"{}"#;
+        let config: SyncConfig = serde_json::from_str(json).unwrap();
+        assert!(!config.enabled);
+        assert!(config.target_url.is_empty());
+        assert!(config.api_key.is_none());
+        assert_eq!(config.timeout_secs, 120);
+    }
+
+    #[test]
+    fn test_sync_config_missing_from_full_config_uses_defaults() {
+        // sync section absent → defaults applied
+        let json = r#"{
+            "can": {"interface": "vcan0", "enabled": false},
+            "time": {"skew_threshold_ms": 500},
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(!config.sync.enabled);
+        assert!(config.sync.api_key.is_none());
+    }
+
+    #[test]
+    fn test_sync_config_in_full_config() {
+        let json = r#"{
+            "can": {"interface": "vcan0", "enabled": false},
+            "time": {"skew_threshold_ms": 500},
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            },
+            "sync": {
+                "enabled": true,
+                "target_url": "https://trips.example.com",
+                "api_key": "secret",
+                "timeout_secs": 90
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(config.sync.enabled);
+        assert_eq!(config.sync.target_url, "https://trips.example.com");
+        assert_eq!(config.sync.api_key.as_deref(), Some("secret"));
+        assert_eq!(config.sync.timeout_secs, 90);
     }
 }

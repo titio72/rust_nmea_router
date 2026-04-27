@@ -7,39 +7,8 @@
     <link rel="icon" type="image/png" href="/images/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
     <script src="/js/shared-theme.js"></script>
-    <!-- Load Chart.js and date-fns in parallel, then the adapter -->
-    <script>
-        function loadChartJS() {
-            // Try local copies first, fall back to CDN if unavailable
-            fetch('/libs/chart.min.js')
-                .then(r => {
-                    const local = r.ok;
-                    return Promise.all([
-                        loadScript(local ? '/libs/chart.min.js' : 'https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js'),
-                        loadScript(local ? '/libs/date-fns.min.js' : 'https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js')
-                    ]).then(() => loadScript(local
-                        ? '/libs/chartjs-adapter-date-fns.bundle.min.js'
-                        : 'https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js'));
-                })
-                .catch(() => {
-                    console.warn('Chart.js or date-fns adapter unavailable - charts will not display');
-                    window.Chart = null;
-                });
-        }
-        
-        function loadScript(src) {
-            return new Promise((resolve, reject) => {
-                const script = document.createElement('script');
-                script.src = src;
-                script.async = true;
-                script.onload = resolve;
-                script.onerror = reject;
-                document.head.appendChild(script);
-            });
-        }
-        
-        loadChartJS();
-    </script>
+    <script src="/libs/chart.min.js"></script>
+    <script src="/libs/chartjs-adapter-date-fns.bundle.min.js"></script>
     <!-- Google Maps API will be loaded dynamically -->
     <style>
         #tripDetails {
@@ -249,7 +218,7 @@
                                 <button class="app-btn" onclick="nextLeg()" title="Next">&gt;&gt;</button>
                             </div>
                         </div>
-                    </div>                
+                    </div>
                     <div class="card-stats">
                         <div class="card-stat" id="startDateStat">
                             <div class="card-stat-label">Start Date</div>
@@ -365,7 +334,7 @@
                 }
 
                 const result = await response.json();
-                
+
                 if (result.status !== 'ok' || !result.data) {
                     console.warn('Google Maps API key not configured');
                     showMapFallback('Google Maps not configured');
@@ -422,11 +391,11 @@
             if (mapElement) {
                 mapElement.innerHTML = `
                     <div style="
-                        display: flex; 
+                        display: flex;
                         flex-direction: column;
-                        justify-content: center; 
-                        align-items: center; 
-                        height: 100%; 
+                        justify-content: center;
+                        align-items: center;
+                        height: 100%;
                         color: var(--text-secondary);
                         text-align: center;
                         gap: 10px;
@@ -439,19 +408,11 @@
             }
         }
 
-        // Register Service Worker after page load to avoid competing for bandwidth
-        window.addEventListener('load', () => {
-            if ('serviceWorker' in navigator) {
-                navigator.serviceWorker.register('/js/sw.js').catch(err => {
-                    console.log('Service Worker registration failed (non-critical):', err);
-                });
-            }
-        });
 
         // Theme management - override toggleTheme to reload charts when theme changes
         function toggleTheme() {
             baseToggleTheme();
-            
+
             // Recreate all charts with new theme
             if (currentTrip && selectedLeg !== undefined) {
                 loadTripDetails(tripId, selectedLeg).catch(error => {
@@ -498,8 +459,8 @@
             addChart(legChartsContainer, 'rollAngleChart');
             addChart(legChartsContainer, 'heelDistributionChart');
             addChart(legChartsContainer, 'speedDistributionChart');
-            addChart(legChartsContainer, 'windStatisticsChart'); 
-        }   
+            addChart(legChartsContainer, 'windStatisticsChart');
+        }
 
         function initializeChartsTrip(isVisible) {
             chartsContainer = document.getElementById('chartsContainerTrip');
@@ -602,7 +563,7 @@
         const tripId = urlParams.get('id');
         const urlLegParam = urlParams.get('leg');
         const requestedLeg = urlLegParam !== null ? parseInt(urlLegParam, 10) : null;
-        
+
         // Global variables to store trip data and legs
         let currentTrip = null;
         let currentLegs = [];
@@ -715,7 +676,7 @@
             } else {
                 window.currentLegIndex = 0;
             }
-            
+
             const description = currentTrip.description || 'Trip ' + currentTrip.id;
             document.getElementById('tripDescriptionLabel').textContent = description;
 
@@ -741,7 +702,7 @@
         function updateLegDisplay() {
             const leg = window.legNavigation[window.currentLegIndex];
             const displayEl = document.getElementById('legDisplay');
-            
+
             if (leg === null) {
                 displayEl.textContent = 'Trip (' + currentLegs.length + ' legs)';
                 selectLeg(null);
@@ -754,7 +715,7 @@
 
         async function selectLeg(legNumber) {
             selectedLeg = legNumber;
-            
+
             if (legNumber === null) {
                 await loadTripDetails(tripId, null);
             } else {
@@ -771,7 +732,7 @@
                 let tripData;
                 let startTime, endTime;
                 let isFullTrip = selectedLeg === null;
-                
+
                 if (isFullTrip) {
                     // Entire trip
                     tripData = {
@@ -800,7 +761,7 @@
 
                 // Use fullTrackData directly (no fetch needed)
                 let trackData = fullTrackData;
-                
+
                 // Filter track data to the selected leg if needed
                 if (!isFullTrip) {
                     const legStartMs = new Date(startTime).getTime();
@@ -956,7 +917,7 @@
                 renderAnalyticsCards(analyticsData);
             } catch (error) {
                 console.error('Failed to fetch analytics data:', error);
-            }            
+            }
         }
 
         async function renderTripCharts(trip, trackData, startTime, endTime, isFullTrip) {
@@ -1139,7 +1100,7 @@
             // Find all points between startPoint and endPoint timestamps
             const startTime = new Date(startPoint.timestamp).getTime();
             const endTime = new Date(endPoint.timestamp).getTime();
-            
+
             const segmentPoints = currentTrackData.filter(point => {
                 const pointTime = new Date(point.timestamp).getTime();
                 return pointTime >= startTime && pointTime <= endTime;
@@ -2183,11 +2144,144 @@
             }
         }
 
+        function drawCanvasTrack(trackData, isFullTrip) {
+            const container = document.getElementById('map');
+            if (!container) return;
+
+            const validPoints = trackData.filter(p =>
+                p.latitude != null && p.longitude != null
+            );
+            if (validPoints.length === 0) {
+                showMapFallback('No GPS track data available for this trip');
+                return;
+            }
+
+            const isDark = document.body.classList.contains('dark-theme');
+
+            const canvas = document.createElement('canvas');
+            canvas.style.width = '100%';
+            canvas.style.height = '100%';
+            canvas.style.display = 'block';
+            container.innerHTML = '';
+            container.appendChild(canvas);
+
+            const W = container.clientWidth  || 600;
+            const H = container.clientHeight || 400;
+            canvas.width  = W;
+            canvas.height = H;
+            const ctx = canvas.getContext('2d');
+
+            ctx.fillStyle = isDark ? '#1a1a2e' : '#d0e8f5';
+            ctx.fillRect(0, 0, W, H);
+
+            const PAD = 24;
+            let minLat = Infinity, maxLat = -Infinity;
+            let minLng = Infinity, maxLng = -Infinity;
+            validPoints.forEach(p => {
+                minLat = Math.min(minLat, p.latitude);
+                maxLat = Math.max(maxLat, p.latitude);
+                minLng = Math.min(minLng, p.longitude);
+                maxLng = Math.max(maxLng, p.longitude);
+            });
+
+            const latSpan = maxLat - minLat || 0.01;
+            const lngSpan = maxLng - minLng || 0.01;
+
+            // Preserve aspect ratio using the cosine correction for longitude
+            const midLat   = (minLat + maxLat) / 2;
+            const cosLat   = Math.cos(midLat * Math.PI / 180);
+            const drawW    = W - PAD * 2;
+            const drawH    = H - PAD * 2;
+            const scaleX   = drawW / lngSpan;
+            const scaleY   = drawH / latSpan;
+            const scale    = Math.min(scaleX, scaleY * cosLat);
+
+            const toX = lng => PAD + (lng - minLng) * scale + (drawW - lngSpan * scale) / 2;
+            const toY = lat => H - PAD - (lat - minLat) * (scale / cosLat) - (drawH - latSpan * (scale / cosLat)) / 2;
+
+            // Track segments coloured by speed/engine (same logic as createColoredTrack)
+            ctx.lineWidth = 2.5;
+            ctx.lineJoin  = 'round';
+            for (let i = 1; i < validPoints.length; i++) {
+                const p  = validPoints[i];
+                const p0 = validPoints[i - 1];
+                let color;
+                if (p.engine_on === 1) {
+                    color = '#888888';
+                } else if (p.engine_on === 2) {
+                    color = '#FFD700';
+                } else {
+                    color = getSpeedColor(p.avg_speed_kn || p0.avg_speed_kn || 0);
+                }
+                ctx.strokeStyle = color;
+                ctx.beginPath();
+                ctx.moveTo(toX(p0.longitude), toY(p0.latitude));
+                ctx.lineTo(toX(p.longitude),  toY(p.latitude));
+                ctx.stroke();
+            }
+
+            // Hourly time labels (single-leg view only)
+            if (!isFullTrip && validPoints[0].timestamp) {
+                const firstMs  = new Date(validPoints[0].timestamp).getTime();
+                const lastMs   = new Date(validPoints[validPoints.length - 1].timestamp).getTime();
+                const firstHour = Math.ceil(firstMs / 3600000) * 3600000;
+                ctx.font      = 'bold 10px Arial,sans-serif';
+                ctx.textAlign = 'center';
+                for (let h = firstHour; h < lastMs; h += 3600000) {
+                    let closest = null, bestDelta = Infinity;
+                    for (const p of validPoints) {
+                        const d = Math.abs(new Date(p.timestamp).getTime() - h);
+                        if (d < bestDelta) { bestDelta = d; closest = p; }
+                    }
+                    if (!closest) continue;
+                    const label = new Date(h).toISOString().slice(11, 16);
+                    const x = toX(closest.longitude);
+                    const y = toY(closest.latitude);
+                    ctx.fillStyle = isDark ? 'rgba(0,0,0,0.65)' : 'rgba(255,255,255,0.85)';
+                    ctx.fillRect(x - 16, y - 14, 32, 13);
+                    ctx.fillStyle = isDark ? '#ddd' : '#222';
+                    ctx.fillText(label, x, y - 3);
+                }
+            }
+
+            // Start marker (green) and end marker (red)
+            const first = validPoints[0];
+            const last  = validPoints[validPoints.length - 1];
+            [[first, '#22cc44'], [last, '#ee3333']].forEach(([p, color]) => {
+                const x = toX(p.longitude), y = toY(p.latitude);
+                ctx.beginPath();
+                ctx.arc(x, y, 6, 0, Math.PI * 2);
+                ctx.fillStyle = color;
+                ctx.fill();
+                ctx.strokeStyle = isDark ? '#fff' : '#000';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+            });
+
+            // Legend
+            const legendY = H - 8;
+            ctx.font      = '10px Arial,sans-serif';
+            ctx.textAlign = 'left';
+            const items = [
+                { color: getSpeedColor(2),  label: '< 2 kn' },
+                { color: getSpeedColor(5),  label: '5 kn'   },
+                { color: getSpeedColor(10), label: '10 kn'  },
+                { color: '#888888',         label: 'Motor'  },
+            ];
+            let lx = PAD;
+            items.forEach(({ color, label }) => {
+                ctx.fillStyle = color;
+                ctx.fillRect(lx, legendY - 8, 18, 8);
+                ctx.fillStyle = isDark ? '#ccc' : '#333';
+                ctx.fillText(label, lx + 21, legendY);
+                lx += 70;
+            });
+        }
+
         function initializeMap(trackData, isFullTrip) {
             // Check if Google Maps API is available
             if (!googleMapsLoaded || !window.google?.maps) {
-                console.warn('Google Maps not available, showing fallback');
-                showMapFallback('Google Maps unavailable - map data shown in charts below');
+                drawCanvasTrack(trackData, isFullTrip);
                 return;
             }
 

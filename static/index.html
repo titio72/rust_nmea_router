@@ -498,7 +498,7 @@
 
     <!-- Trips Section -->
     <div id="tripsSection" class="level-1-container">
-        <div class="trip-header"><h2 id="tripsTitle">Trips</h2><button class="app-btn" onclick="triggerImportDialog()" title="Import trip" data-ro-hidden="true"><app-icon name="upload"></app-icon></button></div>
+        <div class="trip-header"><h2 id="tripsTitle">Trips</h2><div style="display:flex;gap:4px;"><button id="syncBtn" class="app-btn" onclick="triggerSync()" title="Sync to trips viewer" data-ro-hidden="true"><app-icon name="sync"></app-icon></button><button class="app-btn" onclick="triggerImportDialog()" title="Import trip" data-ro-hidden="true"><app-icon name="upload"></app-icon></button></div></div>
         <div id="content">
             <div class="loading">Loading trips...</div>
         </div>
@@ -1026,13 +1026,6 @@
             loadHeatmap();
         }
 
-        // Register Service Worker for offline support and graceful degradation
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/js/sw.js').catch((err) => {
-                // Service Worker registration failed (non-critical)
-                console.log('Some assets could not be cached:', err);
-            });
-        }
 
         // Load trips first so trip dots are available when heatmap renders
         loadTrips().then(() => loadHeatmap());
@@ -1322,6 +1315,28 @@
                 closeEditModal();
             }
         });
+
+        async function triggerSync() {
+            const btn = document.getElementById('syncBtn');
+            const icon = btn.querySelector('app-icon');
+            btn.disabled = true;
+            icon.setAttribute('name', 'warn');
+            try {
+                const response = await fetch('/api/sync/push', { method: 'POST' });
+                const result = await response.json();
+                if (result.status === 'ok') {
+                    const d = result.data;
+                    alert(`Sync complete.\nUploaded: ${d.upserted_count} trip(s)\nDeleted on remote: ${d.deleted_count} trip(s)`);
+                } else {
+                    alert('Sync failed: ' + (result.message || 'unknown error'));
+                }
+            } catch (err) {
+                alert('Sync error: ' + err.message);
+            } finally {
+                icon.setAttribute('name', 'sync');
+                btn.disabled = false;
+            }
+        }
 
         async function exportTrip(event, tripId) {
             event.stopPropagation();
