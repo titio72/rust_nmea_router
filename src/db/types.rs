@@ -141,6 +141,10 @@ pub struct TripLeg {
     pub motoring_time_ms: u64,
     pub sailing_time_formatted: String,
     pub motoring_time_formatted: String,
+    pub start_lat: Option<f64>,
+    pub start_lon: Option<f64>,
+    pub end_lat: Option<f64>,
+    pub end_lon: Option<f64>,
 }
 
 #[derive(Debug, serde::Serialize)]

@@ -874,7 +874,8 @@ impl VesselDatabase {
         })
     }
 
-    /// Fetch trip legs data - divides trip into legs between mooring periods
+    /// Fetch trip legs data - divides trip into legs between mooring periods.
+    /// Results are cached in trip_legs_cache for closed trips (end_timestamp > 24h ago).
     pub fn fetch_trip_legs(
         &self,
         trip_id: u32,
@@ -884,10 +885,261 @@ impl VesselDatabase {
             .get_conn()
             .map_err(|e| format!("Database connection error: {}", e))?;
 
+        let is_closed = self.trip_is_closed(&mut conn, trip_id)?;
+
+        if is_closed {
+            if let Some(cached) = self.get_cached_trip_legs(&mut conn, trip_id)? {
+                return Ok(cached);
+            }
+        }
+
+        let legs_data = self.compute_trip_legs(&mut conn, trip_id)?;
+
+        if is_closed {
+            if let Err(e) = self.save_trip_legs_to_cache(&mut conn, trip_id, &legs_data.legs) {
+                warn!("Failed to write trip_legs_cache for trip {}: {}", trip_id, e);
+            }
+        }
+
+        Ok(legs_data)
+    }
+
+    fn trip_is_closed(
+        &self,
+        conn: &mut mysql::PooledConn,
+        trip_id: u32,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let count: u32 = conn
+            .exec_first(
+                "SELECT COUNT(*) FROM trips WHERE id = :trip_id AND end_timestamp < DATE_SUB(NOW(), INTERVAL 24 HOUR)",
+                mysql::params! { "trip_id" => trip_id },
+            )
+            .map_err(|e| format!("trip_is_closed query error: {}", e))?
+            .unwrap_or(0);
+        Ok(count > 0)
+    }
+
+    fn get_cached_trip_legs(
+        &self,
+        conn: &mut mysql::PooledConn,
+        trip_id: u32,
+    ) -> Result<Option<TripLegsData>, Box<dyn std::error::Error>> {
+        conn.query_drop(
+            r"CREATE TABLE IF NOT EXISTS trip_legs_cache (
+                trip_id              INT UNSIGNED    NOT NULL,
+                leg_number           INT UNSIGNED    NOT NULL,
+                start_timestamp      VARCHAR(30)     NOT NULL,
+                end_timestamp        VARCHAR(30)     NOT NULL,
+                total_distance_nm    DOUBLE          NOT NULL DEFAULT 0,
+                sailing_distance_nm  DOUBLE          NOT NULL DEFAULT 0,
+                motoring_distance_nm DOUBLE          NOT NULL DEFAULT 0,
+                sailing_time_ms      BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                motoring_time_ms     BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                start_lat            DOUBLE          NULL,
+                start_lon            DOUBLE          NULL,
+                end_lat              DOUBLE          NULL,
+                end_lon              DOUBLE          NULL,
+                PRIMARY KEY (trip_id, leg_number)
+              ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        )
+        .map_err(|e| format!("Failed to ensure trip_legs_cache table: {}", e))?;
+        // Best-effort migration for tables created before coordinate columns were added.
+        // Silently ignored on read-only DB users (trips_viewer) — the SELECT below will
+        // fail with a clear "unknown column" error if the columns are genuinely missing.
+        for sql in &[
+            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS start_lat DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS start_lon DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS end_lat DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS end_lon DOUBLE NULL",
+        ] {
+            let _ = conn.query_drop(sql);
+        }
+
+        let rows: Vec<mysql::Row> = conn
+            .exec(
+                r"SELECT leg_number, start_timestamp, end_timestamp,
+                         total_distance_nm, sailing_distance_nm, motoring_distance_nm,
+                         sailing_time_ms, motoring_time_ms,
+                         start_lat, start_lon, end_lat, end_lon
+                  FROM trip_legs_cache
+                  WHERE trip_id = :trip_id
+                  ORDER BY leg_number",
+                mysql::params! { "trip_id" => trip_id },
+            )
+            .map_err(|e| format!("Failed to read trip_legs_cache: {}", e))?;
+
+        if rows.is_empty() {
+            return Ok(None);
+        }
+
+        let legs = rows
+            .iter()
+            .map(|row| {
+                let sailing_time_ms: u64 =
+                    get_or_log(row, "sailing_time_ms", 0u64, "get_cached_trip_legs");
+                let motoring_time_ms: u64 =
+                    get_or_log(row, "motoring_time_ms", 0u64, "get_cached_trip_legs");
+                TripLeg {
+                    leg_number: get_or_log(row, "leg_number", 0u32, "get_cached_trip_legs"),
+                    start_timestamp: get_or_log(
+                        row,
+                        "start_timestamp",
+                        String::new(),
+                        "get_cached_trip_legs",
+                    ),
+                    end_timestamp: get_or_log(
+                        row,
+                        "end_timestamp",
+                        String::new(),
+                        "get_cached_trip_legs",
+                    ),
+                    total_distance_nm: get_or_log(
+                        row,
+                        "total_distance_nm",
+                        0.0f64,
+                        "get_cached_trip_legs",
+                    ),
+                    sailing_distance_nm: get_or_log(
+                        row,
+                        "sailing_distance_nm",
+                        0.0f64,
+                        "get_cached_trip_legs",
+                    ),
+                    motoring_distance_nm: get_or_log(
+                        row,
+                        "motoring_distance_nm",
+                        0.0f64,
+                        "get_cached_trip_legs",
+                    ),
+                    sailing_time_ms,
+                    motoring_time_ms,
+                    sailing_time_formatted: format_duration_ms(sailing_time_ms),
+                    motoring_time_formatted: format_duration_ms(motoring_time_ms),
+                    start_lat: row.get_opt("start_lat").and_then(|v| v.ok()),
+                    start_lon: row.get_opt("start_lon").and_then(|v| v.ok()),
+                    end_lat: row.get_opt("end_lat").and_then(|v| v.ok()),
+                    end_lon: row.get_opt("end_lon").and_then(|v| v.ok()),
+                }
+            })
+            .collect();
+
+        Ok(Some(TripLegsData { legs }))
+    }
+
+    fn save_trip_legs_to_cache(
+        &self,
+        conn: &mut mysql::PooledConn,
+        trip_id: u32,
+        legs: &[TripLeg],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if legs.is_empty() {
+            return Ok(());
+        }
+        conn.exec_batch(
+            r"INSERT IGNORE INTO trip_legs_cache
+                (trip_id, leg_number, start_timestamp, end_timestamp,
+                 total_distance_nm, sailing_distance_nm, motoring_distance_nm,
+                 sailing_time_ms, motoring_time_ms,
+                 start_lat, start_lon, end_lat, end_lon)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            legs.iter().map(|leg| -> Vec<mysql::Value> {
+                vec![
+                    trip_id.into(),
+                    leg.leg_number.into(),
+                    leg.start_timestamp.as_str().into(),
+                    leg.end_timestamp.as_str().into(),
+                    leg.total_distance_nm.into(),
+                    leg.sailing_distance_nm.into(),
+                    leg.motoring_distance_nm.into(),
+                    leg.sailing_time_ms.into(),
+                    leg.motoring_time_ms.into(),
+                    leg.start_lat.into(),
+                    leg.start_lon.into(),
+                    leg.end_lat.into(),
+                    leg.end_lon.into(),
+                ]
+            }),
+        )
+        .map_err(|e| format!("Failed to write trip_legs_cache: {}", e))?;
+        Ok(())
+    }
+
+    pub fn invalidate_trip_legs_cache(
+        &self,
+        trip_id: u32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut conn = self.pool.get_conn().map_err(|e| {
+            format!(
+                "Database connection error (invalidate_trip_legs_cache): {}",
+                e
+            )
+        })?;
+        conn.query_drop(
+            r"CREATE TABLE IF NOT EXISTS trip_legs_cache (
+                trip_id              INT UNSIGNED    NOT NULL,
+                leg_number           INT UNSIGNED    NOT NULL,
+                start_timestamp      VARCHAR(30)     NOT NULL,
+                end_timestamp        VARCHAR(30)     NOT NULL,
+                total_distance_nm    DOUBLE          NOT NULL DEFAULT 0,
+                sailing_distance_nm  DOUBLE          NOT NULL DEFAULT 0,
+                motoring_distance_nm DOUBLE          NOT NULL DEFAULT 0,
+                sailing_time_ms      BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                motoring_time_ms     BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                start_lat            DOUBLE          NULL,
+                start_lon            DOUBLE          NULL,
+                end_lat              DOUBLE          NULL,
+                end_lon              DOUBLE          NULL,
+                PRIMARY KEY (trip_id, leg_number)
+              ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        )
+        .map_err(|e| format!("Failed to ensure trip_legs_cache table: {}", e))?;
+        conn.exec_drop(
+            "DELETE FROM trip_legs_cache WHERE trip_id = :trip_id",
+            mysql::params! { "trip_id" => trip_id },
+        )
+        .map_err(|e| format!("Failed to invalidate trip_legs_cache: {}", e))?;
+        Ok(())
+    }
+
+    /// Populate trip_legs_cache for all closed trips that have no cached legs yet.
+    /// Returns the number of trips whose legs were computed and stored.
+    pub fn backfill_trip_legs_cache(&self) -> Result<usize, Box<dyn std::error::Error>> {
+        let mut conn = self
+            .pool
+            .get_conn()
+            .map_err(|e| format!("Database connection error (backfill_trip_legs_cache): {}", e))?;
+
+        let trip_ids: Vec<u32> = conn
+            .query(
+                r"SELECT t.id FROM trips t
+                  WHERE t.end_timestamp < DATE_SUB(NOW(), INTERVAL 24 HOUR)
+                    AND NOT EXISTS (
+                      SELECT 1 FROM trip_legs_cache c WHERE c.trip_id = t.id
+                    )
+                  ORDER BY t.id",
+            )
+            .map_err(|e| format!("Failed to query uncached trips: {}", e))?;
+
+        let count = trip_ids.len();
+        for trip_id in trip_ids {
+            if let Err(e) = self.fetch_trip_legs(trip_id) {
+                warn!("backfill_trip_legs_cache: failed for trip {}: {}", trip_id, e);
+            }
+        }
+        Ok(count)
+    }
+
+    fn compute_trip_legs(
+        &self,
+        conn: &mut mysql::PooledConn,
+        trip_id: u32,
+    ) -> Result<TripLegsData, Box<dyn std::error::Error>> {
         let results: Vec<mysql::Row> = conn
             .exec(
                 r"SELECT
                 DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as timestamp,
+                latitude,
+                longitude,
                 is_moored,
                 engine_on,
                 total_distance_nm,
@@ -910,9 +1162,21 @@ impl VesselDatabase {
         let mut leg_sailing_time = 0_u64;
         let mut leg_motoring_time = 0_u64;
         let mut leg_number = 0;
+        let mut leg_start_lat: Option<f64> = None;
+        let mut leg_start_lon: Option<f64> = None;
+        let mut last_lat: Option<f64> = None;
+        let mut last_lon: Option<f64> = None;
 
         for row in &results {
             let timestamp: String = get_or_log(row, "timestamp", String::new(), "fetch_trip_legs");
+            let lat: Option<f64> = row.get_opt("latitude").and_then(|v| v.ok());
+            let lon: Option<f64> = row.get_opt("longitude").and_then(|v| v.ok());
+            if lat.is_some() {
+                last_lat = lat;
+            }
+            if lon.is_some() {
+                last_lon = lon;
+            }
             let is_moored: bool = get_or_log(row, "is_moored", false, "fetch_trip_legs");
             let engine_on_u8: u8 = get_or_log(row, "engine_on", 2u8, "fetch_trip_legs"); // 0=off, 1=on, 2=unknown
             let engine_on = engine_on_u8 == 1; // Only treat 1 (On) as true
@@ -935,6 +1199,10 @@ impl VesselDatabase {
                         motoring_time_ms: leg_motoring_time,
                         sailing_time_formatted: format_duration_ms(leg_sailing_time),
                         motoring_time_formatted: format_duration_ms(leg_motoring_time),
+                        start_lat: leg_start_lat,
+                        start_lon: leg_start_lon,
+                        end_lat: last_lat,
+                        end_lon: last_lon,
                     });
                 }
 
@@ -945,12 +1213,16 @@ impl VesselDatabase {
                 leg_motoring_distance = 0.0;
                 leg_sailing_time = 0;
                 leg_motoring_time = 0;
+                leg_start_lat = None;
+                leg_start_lon = None;
             } else {
                 // Not moored - either starting or continuing a leg
                 if !in_leg {
                     // Start a new leg
                     in_leg = true;
                     leg_start_timestamp = timestamp.clone();
+                    leg_start_lat = last_lat;
+                    leg_start_lon = last_lon;
                 }
 
                 // Accumulate distance and time for this interval
@@ -985,6 +1257,10 @@ impl VesselDatabase {
                 motoring_time_ms: leg_motoring_time,
                 sailing_time_formatted: format_duration_ms(leg_sailing_time),
                 motoring_time_formatted: format_duration_ms(leg_motoring_time),
+                start_lat: leg_start_lat,
+                start_lon: leg_start_lon,
+                end_lat: last_lat,
+                end_lon: last_lon,
             });
         }
 

@@ -114,6 +114,34 @@ COMMENT='Per-day heatmap distance cache; recomputed only for missing past days a
 -- For existing databases, run:
 -- CREATE TABLE IF NOT EXISTS heatmap_cache (date DATE NOT NULL, distance_nm DOUBLE NOT NULL DEFAULT 0, PRIMARY KEY (date)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Pre-computed leg breakdown per trip. Invalidated on trip mutation (trim/delete) and repopulated
+-- on the next fetch. Only closed trips (end_timestamp > 24h ago) are cached.
+-- sailing_time_formatted/motoring_time_formatted are NOT stored; derived at read time.
+CREATE TABLE IF NOT EXISTS trip_legs_cache (
+    trip_id              INT UNSIGNED    NOT NULL COMMENT 'Trip this leg belongs to (mirrors trips.id, no FK)',
+    leg_number           INT UNSIGNED    NOT NULL COMMENT 'Leg sequence within the trip, starting at 1',
+    start_timestamp      VARCHAR(30)     NOT NULL COMMENT 'Leg start time as ISO-8601 string',
+    end_timestamp        VARCHAR(30)     NOT NULL COMMENT 'Leg end time as ISO-8601 string',
+    total_distance_nm    DOUBLE          NOT NULL DEFAULT 0,
+    sailing_distance_nm  DOUBLE          NOT NULL DEFAULT 0,
+    motoring_distance_nm DOUBLE          NOT NULL DEFAULT 0,
+    sailing_time_ms      BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    motoring_time_ms     BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    start_lat            DOUBLE          NULL COMMENT 'Latitude at leg start in decimal degrees',
+    start_lon            DOUBLE          NULL COMMENT 'Longitude at leg start in decimal degrees',
+    end_lat              DOUBLE          NULL COMMENT 'Latitude at leg end in decimal degrees',
+    end_lon              DOUBLE          NULL COMMENT 'Longitude at leg end in decimal degrees',
+    PRIMARY KEY (trip_id, leg_number)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='Cached trip leg analysis; invalidated on trim/delete, recomputed on next fetch';
+
+-- For existing databases, run:
+-- CREATE TABLE IF NOT EXISTS trip_legs_cache (trip_id INT UNSIGNED NOT NULL, leg_number INT UNSIGNED NOT NULL, start_timestamp VARCHAR(30) NOT NULL, end_timestamp VARCHAR(30) NOT NULL, total_distance_nm DOUBLE NOT NULL DEFAULT 0, sailing_distance_nm DOUBLE NOT NULL DEFAULT 0, motoring_distance_nm DOUBLE NOT NULL DEFAULT 0, sailing_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0, motoring_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0, PRIMARY KEY (trip_id, leg_number)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS start_lat DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS start_lon DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS end_lat DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS end_lon DOUBLE NULL;
+
 -- ============================================================================
 -- EXAMPLE QUERIES
 -- ============================================================================

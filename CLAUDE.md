@@ -5,6 +5,8 @@ A marine vessel data collection and monitoring system. Reads NMEA2000 (CAN bus) 
 For full architecture, specs, and business rules see [AGENTS.md](AGENTS.md).
 For trip data analysis, modification protocols, and entity relationships see [DB_ANALYST.md](DB_ANALYST.md).
 
+**Before any task involving the database, trips, vessel status, queries, or schema changes: read DB_ANALYST.md in full before proceeding.**
+
 ---
 
 ## Build & Run

@@ -9,6 +9,7 @@ use std::error::Error;
 use crate::db::types::VesselDatabase;
 use mysql::params;
 use mysql::prelude::Queryable;
+use tracing::warn;
 
 impl VesselDatabase {
     pub fn update_trip_description(
@@ -91,6 +92,10 @@ impl VesselDatabase {
 
         tx.commit()?;
 
+        if let Err(e) = self.invalidate_trip_legs_cache(trip_id) {
+            warn!("Failed to invalidate trip_legs_cache after delete_trip({}): {}", trip_id, e);
+        }
+
         Ok(())
     }
 
@@ -133,6 +138,10 @@ impl VesselDatabase {
         ).map_err(|e| format!("Failed to update trip: {}", e))?;
 
         tx.commit()?;
+
+        if let Err(e) = self.invalidate_trip_legs_cache(trip_id) {
+            warn!("Failed to invalidate trip_legs_cache after trim_trip({}): {}", trip_id, e);
+        }
 
         Ok(())
     }

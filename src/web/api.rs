@@ -524,6 +524,26 @@ pub async fn trim_trip(
     }
 }
 
+pub async fn invalidate_trip_legs(
+    State(state): State<AppState>,
+    Query(params): Query<TripIdQuery>,
+) -> Result<Json<ApiResponse<()>>, StatusCode> {
+    match state.db().invalidate_trip_legs_cache(params.id) {
+        Ok(()) => {
+            info!(trip_id = params.id, "Trip legs cache invalidated");
+            Ok(Json(ApiResponse::ok(())))
+        }
+        Err(e) => {
+            error!(error = %e, trip_id = params.id, "Failed to invalidate trip legs cache");
+            {
+                let bt = Backtrace::force_capture();
+                error!(?bt, "Backtrace for error");
+                Ok(Json(ApiResponse::error(e.to_string())))
+            }
+        }
+    }
+}
+
 pub async fn export_trip(
     State(state): State<AppState>,
     Query(params): Query<ExportTripQuery>,
@@ -1385,6 +1405,7 @@ pub fn create_api_router(state: AppState) -> Router {
             .route("/trip_description", post(update_trip_description))
             .route("/delete_trip", delete(delete_trip))
             .route("/trim_trip", post(trim_trip))
+            .route("/invalidate_trip_legs", post(invalidate_trip_legs))
             .route("/export_trip", get(export_trip))
             .route(
                 "/import_trip",

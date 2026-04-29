@@ -57,6 +57,21 @@ to vessel_status and environmental_data manually.
 - Delete affected rows; the app recomputes on next request:
   DELETE FROM heatmap_cache WHERE date BETWEEN DATE('<new_start>') AND DATE('<new_end>');
 
+### trip_legs_cache
+- Pre-computed leg breakdown per trip; PK is `(trip_id, leg_number)`
+- `trip_id` mirrors `trips.id` — no FK constraint
+- `leg_number` — 1-based sequence within the trip
+- `start_timestamp` / `end_timestamp` — ISO-8601 strings (VARCHAR(30)), **not** DATETIME
+- `total_distance_nm` / `sailing_distance_nm` / `motoring_distance_nm` — nautical miles (DOUBLE)
+- `sailing_time_ms` / `motoring_time_ms` — milliseconds (BIGINT UNSIGNED)
+- `start_lat` / `start_lon` / `end_lat` / `end_lon` — decimal degrees (DOUBLE, nullable)
+- `sailing_time_formatted` / `motoring_time_formatted` are **not stored** — derive at read time
+- Only **closed trips** (`end_timestamp > 24h ago`) are cached; open trips are always computed live
+- Legs shorter than **0.5 nm** are excluded from the cache
+- **Auto-invalidated** by `delete_trip` and `trim_trip` — no manual step needed for those operations
+- For any other direct edit to `vessel_status` within a trip's window, manually invalidate:
+  DELETE FROM trip_legs_cache WHERE trip_id = <id>;
+
 ### system_status
 - Key-value store for app runtime flags (tracking_enabled, metrics_enabled)
 - Do not modify during normal data analysis
@@ -130,6 +145,9 @@ WHERE id = <id>;
 -- 10. Invalidate heatmap_cache
 DELETE FROM heatmap_cache
   WHERE date BETWEEN DATE('<new_start>') AND DATE('<new_end>');
+
+-- 11. Invalidate trip_legs_cache (auto-done by trim_trip; required if editing SQL directly)
+DELETE FROM trip_legs_cache WHERE trip_id = <id>;
 ```
 
 ---
@@ -149,11 +167,12 @@ UPDATE trips SET uuid = UUID() WHERE uuid IS NULL;
 ### Delete a Trip
 
 ```sql
--- All three in a transaction
+-- All in a transaction
 START TRANSACTION;
-DELETE FROM vessel_status    WHERE timestamp BETWEEN '<start>' AND '<end>';
+DELETE FROM vessel_status      WHERE timestamp BETWEEN '<start>' AND '<end>';
 DELETE FROM environmental_data WHERE timestamp BETWEEN '<start>' AND '<end>';
-DELETE FROM heatmap_cache    WHERE date BETWEEN DATE('<start>') AND DATE('<end>');
+DELETE FROM heatmap_cache      WHERE date BETWEEN DATE('<start>') AND DATE('<end>');
+DELETE FROM trip_legs_cache    WHERE trip_id = <id>;
 DELETE FROM trips WHERE id = <id>;
 COMMIT;
 ```
@@ -193,6 +212,39 @@ DELETE FROM vessel_status WHERE id IN (<ids>);
 DELETE FROM environmental_data WHERE metric_id IN (5, 6)
   AND timestamp IN (SELECT timestamp FROM vessel_status WHERE id IN (<ids>));
 ```
+
+---
+
+## MCP Tools
+
+The `nmea_router` MCP server (`target/debug/mcp_server`, or `target/release/mcp_server` in production) exposes the following typed tools. Prefer these over raw SQL for all structured reads and every write operation.
+
+**Use MCP tools when:**
+- Executing any write (trim, delete, update description) — they run the full atomic cascade including cache invalidation
+- Fetching trips, legs, track, or metrics — caching is transparent
+- Any operation that maps to an existing `VesselDatabase` method
+
+**Use the `mariadb` raw SQL server when:**
+- Exploring schema structure or column names
+- Ad-hoc aggregations not covered by a tool
+- Anomaly analysis across raw `vessel_status` or `environmental_data` rows
+- Verifying data after a write
+
+| Tool | Description |
+|---|---|
+| `list_trips` | All trips, optional `year` / `last_months` filter |
+| `get_trip` | Single trip by numeric `id` |
+| `get_trip_by_uuid` | Single trip by `uuid` string |
+| `get_trip_legs` | Legs for a trip (cached for closed trips, 0.5 nm minimum leg size) |
+| `get_track` | Track points by `trip_id` or `start`/`end`; `max_points` downsamples |
+| `get_metrics` | Environmental time-series: `wind_speed`, `wind_dir`, `roll`, `pressure`, `cabin_temp`, `water_temp`, `humidity` |
+| `get_speed_distribution` | Speed histogram split by sailing vs motoring |
+| `get_wind_statistics` | Wind rose data (72 × 5° buckets) |
+| `get_monthly_statistics` | Monthly sailing/motoring distance; optional `year` filter |
+| `trim_trip` | Remove moored padding, recalculate aggregates, invalidate caches (atomic) |
+| `delete_trip` | Delete trip + all vessel_status + environmental_data + caches (atomic) |
+| `update_trip_description` | Change the free-text trip name |
+| `invalidate_trip_legs` | Force-invalidate legs cache for a trip |
 
 ---
 

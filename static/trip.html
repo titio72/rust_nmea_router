@@ -216,6 +216,7 @@
                                 <button class="app-btn" onclick="previousLeg()" title="Previous">&lt;&lt;</button>
                                 <div id="legDisplay" class="legDisplay"></div>
                                 <button class="app-btn" onclick="nextLeg()" title="Next">&gt;&gt;</button>
+                                <button class="app-btn" data-ro-hidden onclick="recalculateLegs(event)" title="Recalculate Legs">&#x21BA;</button>
                             </div>
                         </div>
                     </div>
@@ -658,6 +659,27 @@
             } catch (error) {
                 //document.getElementById('tripDetails').innerHTML =
                 //    '<div class="error">Failed to load trip: ' + error.message + '</div>';
+            }
+        }
+
+        async function recalculateLegs(event) {
+            const btn = event.currentTarget;
+            btn.disabled = true;
+            const original = btn.textContent;
+            btn.textContent = 'Recalculating…';
+            try {
+                const resp = await fetch('/api/invalidate_trip_legs?id=' + tripId, {
+                    method: 'POST', credentials: 'same-origin'
+                });
+                const result = await resp.json();
+                if (result.status !== 'ok') throw new Error(result.error || 'Failed');
+                currentLegs = [];
+                await loadTripAndLegs(tripId);
+            } catch (err) {
+                alert('Failed to recalculate legs: ' + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = original;
             }
         }
 
