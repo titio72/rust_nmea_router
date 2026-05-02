@@ -145,6 +145,68 @@ impl VesselDatabase {
 
         Ok(())
     }
+
+    /// Upsert a manual nav window override for a leg.
+    /// `auto_nav_start` / `auto_nav_end` preserve the algorithm's current detection for calibration.
+    /// Pass `None` for both `nav_start` and `nav_end` to clear a previous override.
+    pub fn set_nav_override(
+        &self,
+        trip_id: u32,
+        leg_number: u32,
+        nav_start: Option<&str>,
+        nav_end: Option<&str>,
+        auto_nav_start: Option<&str>,
+        auto_nav_end: Option<&str>,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut conn = self
+            .pool
+            .get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+
+        conn.query_drop(
+            r"CREATE TABLE IF NOT EXISTS trip_legs_nav_overrides (
+                trip_id        INT UNSIGNED NOT NULL,
+                leg_number     INT UNSIGNED NOT NULL,
+                nav_start      VARCHAR(30)  NULL,
+                nav_end        VARCHAR(30)  NULL,
+                auto_nav_start VARCHAR(30)  NULL,
+                auto_nav_end   VARCHAR(30)  NULL,
+                corrected_at   DATETIME(3)  NOT NULL,
+                PRIMARY KEY (trip_id, leg_number)
+              ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        )
+        .map_err(|e| format!("Failed to ensure trip_legs_nav_overrides table: {}", e))?;
+
+        conn.exec_drop(
+            r"INSERT INTO trip_legs_nav_overrides
+                (trip_id, leg_number, nav_start, nav_end, auto_nav_start, auto_nav_end, corrected_at)
+              VALUES (:trip_id, :leg_number, :nav_start, :nav_end, :auto_nav_start, :auto_nav_end, NOW(3))
+              ON DUPLICATE KEY UPDATE
+                nav_start = VALUES(nav_start),
+                nav_end = VALUES(nav_end),
+                auto_nav_start = VALUES(auto_nav_start),
+                auto_nav_end = VALUES(auto_nav_end),
+                corrected_at = NOW(3)",
+            params! {
+                "trip_id" => trip_id,
+                "leg_number" => leg_number,
+                "nav_start" => nav_start,
+                "nav_end" => nav_end,
+                "auto_nav_start" => auto_nav_start,
+                "auto_nav_end" => auto_nav_end,
+            },
+        )
+        .map_err(|e| format!("Failed to upsert nav override: {}", e))?;
+
+        if let Err(e) = self.invalidate_trip_legs_cache(trip_id) {
+            warn!(
+                "Failed to invalidate trip_legs_cache after set_nav_override({}, {}): {}",
+                trip_id, leg_number, e
+            );
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

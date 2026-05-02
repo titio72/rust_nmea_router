@@ -65,12 +65,25 @@ to vessel_status and environmental_data manually.
 - `total_distance_nm` / `sailing_distance_nm` / `motoring_distance_nm` — nautical miles (DOUBLE)
 - `sailing_time_ms` / `motoring_time_ms` — milliseconds (BIGINT UNSIGNED)
 - `start_lat` / `start_lon` / `end_lat` / `end_lon` — decimal degrees (DOUBLE, nullable)
+- `nav_start_timestamp` / `nav_end_timestamp` — ISO-8601 strings (VARCHAR(30), nullable); define the pure-navigation window trimmed of marina exit/entry phases
+- `nav_distance_nm` — nautical miles within the nav window (DOUBLE, 0 when no window detected)
+- `nav_time_ms` — milliseconds within the nav window (BIGINT UNSIGNED)
+- `nav_detection_method` — how the window was detected: `"engine_transition"` (engine off/on transitions), `"speed_fallback"` (first/last point ≥ 4 kn), `"user_override"`, or NULL (no window found)
 - `sailing_time_formatted` / `motoring_time_formatted` are **not stored** — derive at read time
 - Only **closed trips** (`end_timestamp > 24h ago`) are cached; open trips are always computed live
 - Legs shorter than **0.5 nm** are excluded from the cache
 - **Auto-invalidated** by `delete_trip` and `trim_trip` — no manual step needed for those operations
 - For any other direct edit to `vessel_status` within a trip's window, manually invalidate:
   DELETE FROM trip_legs_cache WHERE trip_id = <id>;
+
+### trip_legs_nav_overrides
+- User corrections for the nav window; PK is `(trip_id, leg_number)`
+- `nav_start` / `nav_end` — user-provided nav window timestamps (ISO-8601 VARCHAR(30), nullable)
+- `auto_nav_start` / `auto_nav_end` — the algorithm's original detection at time of override (preserved for calibration analysis)
+- `corrected_at` — DATETIME(3) UTC timestamp of the correction
+- Overrides are applied **on top of** the computed/cached leg data at read time
+- Overrides survive cache invalidation (separate table, not touched by `delete_trip` / `trim_trip`)
+- To clear an override: DELETE FROM trip_legs_nav_overrides WHERE trip_id = <id> AND leg_number = <n>;
 
 ### system_status
 - Key-value store for app runtime flags (tracking_enabled, metrics_enabled)

@@ -6,6 +6,7 @@ use axum::{
     routing::delete,
     routing::get,
     routing::post,
+    routing::put,
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -21,8 +22,8 @@ use tracing::{error, info, warn, Span};
 
 use crate::config::Config;
 use crate::db::{
-    HeatmapData, MultiMetricData, SpeedDistributionData, TrackAnalytics, TrackPoint, TripLegsData,
-    TripSummary, VesselDatabase, WebMetricData, WindStatisticsData,
+    HeatmapData, MultiMetricData, NavAnalysisRow, SpeedDistributionData, TrackAnalytics,
+    TrackPoint, TripLegsData, TripSummary, VesselDatabase, WebMetricData, WindStatisticsData,
 };
 use crate::db::operations::sync::{SyncManifestPayload, SyncManifestResult, SyncResult};
 use crate::web::auth::JwtSecret;
@@ -77,6 +78,23 @@ impl<T> ApiResponse<T> {
 #[derive(Debug, Deserialize)]
 pub struct TripIdQuery {
     pub id: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TripLegQuery {
+    pub trip_id: u32,
+    pub leg_number: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetNavWindowBody {
+    pub nav_start: Option<String>,
+    pub nav_end: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NavAnalysisQuery {
+    pub trip_id: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1375,6 +1393,52 @@ pub async fn post_sync_trip(
     }
 }
 
+pub async fn set_nav_window(
+    State(state): State<AppState>,
+    Query(params): Query<TripLegQuery>,
+    Json(body): Json<SetNavWindowBody>,
+) -> Result<Json<ApiResponse<()>>, StatusCode> {
+    let current_legs = state.db().fetch_trip_legs(params.trip_id);
+    let (auto_start, auto_end) = match current_legs {
+        Ok(data) => {
+            let leg = data.legs.iter().find(|l| l.leg_number == params.leg_number);
+            (
+                leg.and_then(|l| l.nav_start_timestamp.clone()),
+                leg.and_then(|l| l.nav_end_timestamp.clone()),
+            )
+        }
+        Err(_) => (None, None),
+    };
+
+    match state.db().set_nav_override(
+        params.trip_id,
+        params.leg_number,
+        body.nav_start.as_deref(),
+        body.nav_end.as_deref(),
+        auto_start.as_deref(),
+        auto_end.as_deref(),
+    ) {
+        Ok(()) => Ok(Json(ApiResponse::ok(()))),
+        Err(e) => {
+            error!(error = %e, trip_id = params.trip_id, leg = params.leg_number, "Failed to set nav window override");
+            Ok(Json(ApiResponse::error(e.to_string())))
+        }
+    }
+}
+
+pub async fn get_nav_analysis(
+    State(state): State<AppState>,
+    Query(params): Query<NavAnalysisQuery>,
+) -> Result<Json<ApiResponse<Vec<NavAnalysisRow>>>, StatusCode> {
+    match state.db().fetch_nav_analysis(params.trip_id) {
+        Ok(rows) => Ok(Json(ApiResponse::ok(rows))),
+        Err(e) => {
+            error!(error = %e, "Failed to fetch nav analysis");
+            Ok(Json(ApiResponse::error(e.to_string())))
+        }
+    }
+}
+
 pub fn create_api_router(state: AppState) -> Router {
     let read_only = state.config.web.read_only;
 
@@ -1391,6 +1455,7 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/track_analytics", get(get_track_analytics))
         .route("/monthly_statistics", get(get_monthly_statistics))
         .route("/heatmap", get(get_heatmap))
+        .route("/nav_analysis", get(get_nav_analysis))
         .route("/config/google_maps_key", get(get_google_maps_key))
         .route("/config/read_only", get(get_read_only))
         .route("/sync/status", get(get_sync_status))
@@ -1406,6 +1471,7 @@ pub fn create_api_router(state: AppState) -> Router {
             .route("/delete_trip", delete(delete_trip))
             .route("/trim_trip", post(trim_trip))
             .route("/invalidate_trip_legs", post(invalidate_trip_legs))
+            .route("/nav_window", put(set_nav_window))
             .route("/export_trip", get(export_trip))
             .route(
                 "/import_trip",

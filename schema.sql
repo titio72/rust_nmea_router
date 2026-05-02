@@ -131,6 +131,11 @@ CREATE TABLE IF NOT EXISTS trip_legs_cache (
     start_lon            DOUBLE          NULL COMMENT 'Longitude at leg start in decimal degrees',
     end_lat              DOUBLE          NULL COMMENT 'Latitude at leg end in decimal degrees',
     end_lon              DOUBLE          NULL COMMENT 'Longitude at leg end in decimal degrees',
+    nav_start_timestamp  VARCHAR(30)     NULL COMMENT 'Start of pure navigation window (engine off or speed >= 4 kn)',
+    nav_end_timestamp    VARCHAR(30)     NULL COMMENT 'End of pure navigation window',
+    nav_distance_nm      DOUBLE          NOT NULL DEFAULT 0 COMMENT 'Distance within the nav window',
+    nav_time_ms          BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Duration of the nav window in ms',
+    nav_detection_method VARCHAR(20)     NULL COMMENT 'engine_transition | speed_fallback',
     PRIMARY KEY (trip_id, leg_number)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Cached trip leg analysis; invalidated on trim/delete, recomputed on next fetch';
@@ -141,6 +146,23 @@ COMMENT='Cached trip leg analysis; invalidated on trim/delete, recomputed on nex
 -- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS start_lon DOUBLE NULL;
 -- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS end_lat DOUBLE NULL;
 -- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS end_lon DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_start_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_end_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_distance_nm DOUBLE NOT NULL DEFAULT 0;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_detection_method VARCHAR(20) NULL;
+
+CREATE TABLE IF NOT EXISTS trip_legs_nav_overrides (
+    trip_id          INT UNSIGNED NOT NULL COMMENT 'Trip ID (mirrors trips.id, no FK)',
+    leg_number       INT UNSIGNED NOT NULL COMMENT 'Leg number within the trip',
+    nav_start        VARCHAR(30)  NULL     COMMENT 'User-corrected nav start (ISO-8601)',
+    nav_end          VARCHAR(30)  NULL     COMMENT 'User-corrected nav end (ISO-8601)',
+    auto_nav_start   VARCHAR(30)  NULL     COMMENT 'Algorithm-detected nav start at time of override',
+    auto_nav_end     VARCHAR(30)  NULL     COMMENT 'Algorithm-detected nav end at time of override',
+    corrected_at     DATETIME(3)  NOT NULL COMMENT 'UTC timestamp of when the override was set',
+    PRIMARY KEY (trip_id, leg_number)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='User corrections for nav windows; auto_nav_* preserved for calibration analysis';
 
 -- ============================================================================
 -- EXAMPLE QUERIES

@@ -1,7 +1,8 @@
 use crate::db::types::{
     format_duration_ms, FastestSegment, HeatmapData, HeatmapDay, MonthlyStatistic,
-    MonthlyStatistics, MultiMetricData, SpeedDistributionData, TrackAnalytics, TrackPoint, TripLeg,
-    TripLegsData, TripSummary, VesselDatabase, WebMetricData, WindStatisticsData,
+    MonthlyStatistics, MultiMetricData, NavAnalysisRow, SpeedDistributionData, TrackAnalytics,
+    TrackPoint, TripLeg, TripLegsData, TripSummary, VesselDatabase, WebMetricData,
+    WindStatisticsData,
 };
 use crate::utilities::haversine_distance_nm;
 use chrono::{DateTime, NaiveDate, Utc};
@@ -33,6 +34,134 @@ where
             default
         }
     }
+}
+
+const NAV_SPEED_THRESHOLD_KN: f64 = 4.0;
+
+/// Parse two ISO-8601 timestamps and return the millisecond difference (b - a).
+/// Returns 0 if either is None or unparseable.
+fn parse_trim_ms(a: &Option<String>, b: &Option<String>) -> u64 {
+    let (Some(a_str), Some(b_str)) = (a.as_ref(), b.as_ref()) else {
+        return 0;
+    };
+    let Ok(ta) = chrono::DateTime::parse_from_rfc3339(a_str) else {
+        return 0;
+    };
+    let Ok(tb) = chrono::DateTime::parse_from_rfc3339(b_str) else {
+        return 0;
+    };
+    let diff = (tb - ta).num_milliseconds();
+    if diff > 0 { diff as u64 } else { 0 }
+}
+
+struct LegRecord {
+    timestamp: String,
+    speed_kn: f64,
+    distance_nm: f64,
+    time_ms: u64,
+    engine_on: bool,
+    lat: Option<f64>,
+    lon: Option<f64>,
+}
+
+/// Returns (index, detection_method): first engine-off or first speed-above-threshold record.
+fn find_nav_start_idx(records: &[LegRecord]) -> (Option<usize>, &'static str) {
+    if records.first().map(|r| r.engine_on).unwrap_or(false) {
+        let idx = records.iter().position(|r| !r.engine_on);
+        (idx, "engine_transition")
+    } else {
+        let idx = records.iter().position(|r| r.speed_kn >= NAV_SPEED_THRESHOLD_KN);
+        (idx, "speed_fallback")
+    }
+}
+
+/// Returns (index, detection_method): last engine-off before final engine-on, or last speed-above-threshold.
+fn find_nav_end_idx(records: &[LegRecord]) -> (Option<usize>, &'static str) {
+    if records.last().map(|r| r.engine_on).unwrap_or(false) {
+        let idx = records.iter().rposition(|r| !r.engine_on);
+        (idx, "engine_transition")
+    } else {
+        let idx = records.iter().rposition(|r| r.speed_kn >= NAV_SPEED_THRESHOLD_KN);
+        (idx, "speed_fallback")
+    }
+}
+
+fn finalize_leg(
+    records: &[LegRecord],
+    leg_number: u32,
+    start_lat: Option<f64>,
+    start_lon: Option<f64>,
+) -> Option<TripLeg> {
+    let total_distance: f64 = records.iter().map(|r| r.distance_nm).sum();
+    if total_distance < 0.5 {
+        return None;
+    }
+
+    let mut sailing_distance = 0.0_f64;
+    let mut motoring_distance = 0.0_f64;
+    let mut sailing_time = 0_u64;
+    let mut motoring_time = 0_u64;
+    for r in records {
+        if r.engine_on {
+            motoring_distance += r.distance_nm;
+            motoring_time += r.time_ms;
+        } else {
+            sailing_distance += r.distance_nm;
+            sailing_time += r.time_ms;
+        }
+    }
+
+    let (nav_start_idx, start_method) = find_nav_start_idx(records);
+    let (nav_end_idx, end_method) = find_nav_end_idx(records);
+
+    let (nav_start_timestamp, nav_end_timestamp, nav_distance_nm, nav_time_ms, nav_detection_method) =
+        match (nav_start_idx, nav_end_idx) {
+            (Some(si), Some(ei)) if si <= ei => {
+                let nav_dist = records[si..=ei].iter().map(|r| r.distance_nm).sum();
+                let nav_time = records[si..=ei].iter().map(|r| r.time_ms).sum();
+                let method = if start_method == "engine_transition" && end_method == "engine_transition" {
+                    "engine_transition"
+                } else {
+                    "speed_fallback"
+                };
+                (
+                    Some(records[si].timestamp.clone()),
+                    Some(records[ei].timestamp.clone()),
+                    nav_dist,
+                    nav_time,
+                    Some(method.to_string()),
+                )
+            }
+            _ => (None, None, 0.0, 0, None),
+        };
+
+    let end_lat = records.iter().rev().find_map(|r| r.lat);
+    let end_lon = records.iter().rev().find_map(|r| r.lon);
+
+    let start_timestamp = records.first().map(|r| r.timestamp.clone()).unwrap_or_default();
+    let end_timestamp = records.last().map(|r| r.timestamp.clone()).unwrap_or_default();
+
+    Some(TripLeg {
+        leg_number,
+        start_timestamp,
+        end_timestamp,
+        total_distance_nm: total_distance,
+        sailing_distance_nm: sailing_distance,
+        motoring_distance_nm: motoring_distance,
+        sailing_time_ms: sailing_time,
+        motoring_time_ms: motoring_time,
+        sailing_time_formatted: format_duration_ms(sailing_time),
+        motoring_time_formatted: format_duration_ms(motoring_time),
+        start_lat,
+        start_lon,
+        end_lat,
+        end_lon,
+        nav_start_timestamp,
+        nav_end_timestamp,
+        nav_distance_nm,
+        nav_time_ms,
+        nav_detection_method,
+    })
 }
 
 impl VesselDatabase {
@@ -876,6 +1005,7 @@ impl VesselDatabase {
 
     /// Fetch trip legs data - divides trip into legs between mooring periods.
     /// Results are cached in trip_legs_cache for closed trips (end_timestamp > 24h ago).
+    /// User nav window overrides from trip_legs_nav_overrides are applied after computation.
     pub fn fetch_trip_legs(
         &self,
         trip_id: u32,
@@ -888,12 +1018,13 @@ impl VesselDatabase {
         let is_closed = self.trip_is_closed(&mut conn, trip_id)?;
 
         if is_closed {
-            if let Some(cached) = self.get_cached_trip_legs(&mut conn, trip_id)? {
+            if let Some(mut cached) = self.get_cached_trip_legs(&mut conn, trip_id)? {
+                self.apply_nav_overrides(&mut conn, trip_id, &mut cached.legs)?;
                 return Ok(cached);
             }
         }
 
-        let legs_data = self.compute_trip_legs(&mut conn, trip_id)?;
+        let mut legs_data = self.compute_trip_legs(&mut conn, trip_id)?;
 
         if is_closed {
             if let Err(e) = self.save_trip_legs_to_cache(&mut conn, trip_id, &legs_data.legs) {
@@ -901,7 +1032,54 @@ impl VesselDatabase {
             }
         }
 
+        self.apply_nav_overrides(&mut conn, trip_id, &mut legs_data.legs)?;
         Ok(legs_data)
+    }
+
+    fn apply_nav_overrides(
+        &self,
+        conn: &mut mysql::PooledConn,
+        trip_id: u32,
+        legs: &mut Vec<TripLeg>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        conn.query_drop(
+            r"CREATE TABLE IF NOT EXISTS trip_legs_nav_overrides (
+                trip_id        INT UNSIGNED NOT NULL,
+                leg_number     INT UNSIGNED NOT NULL,
+                nav_start      VARCHAR(30)  NULL,
+                nav_end        VARCHAR(30)  NULL,
+                auto_nav_start VARCHAR(30)  NULL,
+                auto_nav_end   VARCHAR(30)  NULL,
+                corrected_at   DATETIME(3)  NOT NULL,
+                PRIMARY KEY (trip_id, leg_number)
+              ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        )
+        .map_err(|e| format!("Failed to ensure trip_legs_nav_overrides table: {}", e))?;
+
+        let rows: Vec<mysql::Row> = conn
+            .exec(
+                "SELECT leg_number, nav_start, nav_end FROM trip_legs_nav_overrides WHERE trip_id = :trip_id",
+                mysql::params! { "trip_id" => trip_id },
+            )
+            .map_err(|e| format!("Failed to read nav overrides: {}", e))?;
+
+        for row in &rows {
+            let leg_num: u32 = get_or_log(row, "leg_number", 0u32, "apply_nav_overrides");
+            let nav_start: Option<String> = row
+                .get_opt("nav_start")
+                .and_then(|v: Result<Option<String>, _>| v.ok())
+                .flatten();
+            let nav_end: Option<String> = row
+                .get_opt("nav_end")
+                .and_then(|v: Result<Option<String>, _>| v.ok())
+                .flatten();
+            if let Some(leg) = legs.iter_mut().find(|l| l.leg_number == leg_num) {
+                leg.nav_start_timestamp = nav_start;
+                leg.nav_end_timestamp = nav_end;
+                leg.nav_detection_method = Some("user_override".to_string());
+            }
+        }
+        Ok(())
     }
 
     fn trip_is_closed(
@@ -939,18 +1117,27 @@ impl VesselDatabase {
                 start_lon            DOUBLE          NULL,
                 end_lat              DOUBLE          NULL,
                 end_lon              DOUBLE          NULL,
+                nav_start_timestamp  VARCHAR(30)     NULL,
+                nav_end_timestamp    VARCHAR(30)     NULL,
+                nav_distance_nm      DOUBLE          NOT NULL DEFAULT 0,
+                nav_time_ms          BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                nav_detection_method VARCHAR(20)     NULL,
                 PRIMARY KEY (trip_id, leg_number)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         )
         .map_err(|e| format!("Failed to ensure trip_legs_cache table: {}", e))?;
-        // Best-effort migration for tables created before coordinate columns were added.
-        // Silently ignored on read-only DB users (trips_viewer) — the SELECT below will
-        // fail with a clear "unknown column" error if the columns are genuinely missing.
+        // Best-effort migrations for columns added in later versions.
+        // Silently ignored on read-only DB users (trips_viewer).
         for sql in &[
             "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS start_lat DOUBLE NULL",
             "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS start_lon DOUBLE NULL",
             "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS end_lat DOUBLE NULL",
             "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS end_lon DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_start_timestamp VARCHAR(30) NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_end_timestamp VARCHAR(30) NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_distance_nm DOUBLE NOT NULL DEFAULT 0",
+            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0",
+            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_detection_method VARCHAR(20) NULL",
         ] {
             let _ = conn.query_drop(sql);
         }
@@ -960,7 +1147,9 @@ impl VesselDatabase {
                 r"SELECT leg_number, start_timestamp, end_timestamp,
                          total_distance_nm, sailing_distance_nm, motoring_distance_nm,
                          sailing_time_ms, motoring_time_ms,
-                         start_lat, start_lon, end_lat, end_lon
+                         start_lat, start_lon, end_lat, end_lon,
+                         nav_start_timestamp, nav_end_timestamp,
+                         nav_distance_nm, nav_time_ms, nav_detection_method
                   FROM trip_legs_cache
                   WHERE trip_id = :trip_id
                   ORDER BY leg_number",
@@ -1019,6 +1208,25 @@ impl VesselDatabase {
                     start_lon: row.get_opt("start_lon").and_then(|v| v.ok()),
                     end_lat: row.get_opt("end_lat").and_then(|v| v.ok()),
                     end_lon: row.get_opt("end_lon").and_then(|v| v.ok()),
+                    nav_start_timestamp: row
+                        .get_opt("nav_start_timestamp")
+                        .and_then(|v: Result<Option<String>, _>| v.ok())
+                        .flatten(),
+                    nav_end_timestamp: row
+                        .get_opt("nav_end_timestamp")
+                        .and_then(|v: Result<Option<String>, _>| v.ok())
+                        .flatten(),
+                    nav_distance_nm: get_or_log(
+                        row,
+                        "nav_distance_nm",
+                        0.0f64,
+                        "get_cached_trip_legs",
+                    ),
+                    nav_time_ms: get_or_log(row, "nav_time_ms", 0u64, "get_cached_trip_legs"),
+                    nav_detection_method: row
+                        .get_opt("nav_detection_method")
+                        .and_then(|v: Result<Option<String>, _>| v.ok())
+                        .flatten(),
                 }
             })
             .collect();
@@ -1040,8 +1248,10 @@ impl VesselDatabase {
                 (trip_id, leg_number, start_timestamp, end_timestamp,
                  total_distance_nm, sailing_distance_nm, motoring_distance_nm,
                  sailing_time_ms, motoring_time_ms,
-                 start_lat, start_lon, end_lat, end_lon)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 start_lat, start_lon, end_lat, end_lon,
+                 nav_start_timestamp, nav_end_timestamp,
+                 nav_distance_nm, nav_time_ms, nav_detection_method)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             legs.iter().map(|leg| -> Vec<mysql::Value> {
                 vec![
                     trip_id.into(),
@@ -1057,6 +1267,11 @@ impl VesselDatabase {
                     leg.start_lon.into(),
                     leg.end_lat.into(),
                     leg.end_lon.into(),
+                    leg.nav_start_timestamp.as_deref().into(),
+                    leg.nav_end_timestamp.as_deref().into(),
+                    leg.nav_distance_nm.into(),
+                    leg.nav_time_ms.into(),
+                    leg.nav_detection_method.as_deref().into(),
                 ]
             }),
         )
@@ -1129,6 +1344,114 @@ impl VesselDatabase {
         Ok(count)
     }
 
+    /// Return nav window analysis rows for one trip or all closed trips.
+    /// Used for backtesting: shows auto-detected windows, trimmed durations, and override status.
+    pub fn fetch_nav_analysis(
+        &self,
+        trip_id: Option<u32>,
+    ) -> Result<Vec<NavAnalysisRow>, Box<dyn std::error::Error>> {
+        let mut conn = self
+            .pool
+            .get_conn()
+            .map_err(|e| format!("Database connection error: {}", e))?;
+
+        // Ensure overrides table exists (best-effort).
+        let _ = conn.query_drop(
+            r"CREATE TABLE IF NOT EXISTS trip_legs_nav_overrides (
+                trip_id        INT UNSIGNED NOT NULL,
+                leg_number     INT UNSIGNED NOT NULL,
+                nav_start      VARCHAR(30)  NULL,
+                nav_end        VARCHAR(30)  NULL,
+                auto_nav_start VARCHAR(30)  NULL,
+                auto_nav_end   VARCHAR(30)  NULL,
+                corrected_at   DATETIME(3)  NOT NULL,
+                PRIMARY KEY (trip_id, leg_number)
+              ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        );
+
+        let rows: Vec<mysql::Row> = if let Some(id) = trip_id {
+            conn.exec(
+                r"SELECT
+                    c.trip_id,
+                    c.leg_number,
+                    c.start_timestamp   AS leg_start,
+                    c.end_timestamp     AS leg_end,
+                    COALESCE(c.sailing_time_ms, 0) + COALESCE(c.motoring_time_ms, 0) AS leg_duration_ms,
+                    c.nav_start_timestamp,
+                    c.nav_end_timestamp,
+                    c.nav_detection_method,
+                    IF(o.trip_id IS NOT NULL, 1, 0) AS has_override
+                  FROM trip_legs_cache c
+                  LEFT JOIN trip_legs_nav_overrides o
+                    ON o.trip_id = c.trip_id AND o.leg_number = c.leg_number
+                  WHERE c.trip_id = :trip_id
+                  ORDER BY c.trip_id, c.leg_number",
+                mysql::params! { "trip_id" => id },
+            )
+            .map_err(|e| format!("nav_analysis query error: {}", e))?
+        } else {
+            conn.query(
+                r"SELECT
+                    c.trip_id,
+                    c.leg_number,
+                    c.start_timestamp   AS leg_start,
+                    c.end_timestamp     AS leg_end,
+                    COALESCE(c.sailing_time_ms, 0) + COALESCE(c.motoring_time_ms, 0) AS leg_duration_ms,
+                    c.nav_start_timestamp,
+                    c.nav_end_timestamp,
+                    c.nav_detection_method,
+                    IF(o.trip_id IS NOT NULL, 1, 0) AS has_override
+                  FROM trip_legs_cache c
+                  LEFT JOIN trip_legs_nav_overrides o
+                    ON o.trip_id = c.trip_id AND o.leg_number = c.leg_number
+                  ORDER BY c.trip_id, c.leg_number",
+            )
+            .map_err(|e| format!("nav_analysis query error: {}", e))?
+        };
+
+        let result = rows
+            .iter()
+            .map(|row| {
+                let leg_start: String =
+                    get_or_log(row, "leg_start", String::new(), "fetch_nav_analysis");
+                let leg_end: String =
+                    get_or_log(row, "leg_end", String::new(), "fetch_nav_analysis");
+                let leg_duration_ms: u64 =
+                    get_or_log(row, "leg_duration_ms", 0u64, "fetch_nav_analysis");
+                let nav_start: Option<String> = row
+                    .get_opt("nav_start_timestamp")
+                    .and_then(|v: Result<Option<String>, _>| v.ok())
+                    .flatten();
+                let nav_end: Option<String> = row
+                    .get_opt("nav_end_timestamp")
+                    .and_then(|v: Result<Option<String>, _>| v.ok())
+                    .flatten();
+
+                let trimmed_start_ms = parse_trim_ms(&Some(leg_start.clone()), &nav_start);
+                let trimmed_end_ms = parse_trim_ms(&nav_end, &Some(leg_end.clone()));
+
+                NavAnalysisRow {
+                    trip_id: get_or_log(row, "trip_id", 0u32, "fetch_nav_analysis"),
+                    leg_number: get_or_log(row, "leg_number", 0u32, "fetch_nav_analysis"),
+                    leg_start,
+                    leg_end,
+                    leg_duration_ms,
+                    nav_start,
+                    nav_end,
+                    nav_detection_method: row
+                        .get_opt("nav_detection_method")
+                        .and_then(|v: Result<Option<String>, _>| v.ok())
+                        .flatten(),
+                    trimmed_start_ms,
+                    trimmed_end_ms,
+                    has_override: get_or_log(row, "has_override", 0u8, "fetch_nav_analysis") != 0,
+                }
+            })
+            .collect();
+
+        Ok(result)
+    }
+
     fn compute_trip_legs(
         &self,
         conn: &mut mysql::PooledConn,
@@ -1143,7 +1466,8 @@ impl VesselDatabase {
                 is_moored,
                 engine_on,
                 total_distance_nm,
-                total_time_ms
+                total_time_ms,
+                average_speed_kn
              FROM vessel_status
              WHERE timestamp BETWEEN
                  (SELECT start_timestamp FROM trips WHERE id = :trip_id)
@@ -1154,18 +1478,13 @@ impl VesselDatabase {
             .map_err(|e| format!("Database query error: {}", e))?;
 
         let mut legs = Vec::new();
+        let mut leg_number = 0_u32;
+        let mut current_leg: Vec<LegRecord> = Vec::new();
         let mut in_leg = false;
-        let mut leg_start_timestamp = String::new();
-        let mut leg_total_distance = 0.0;
-        let mut leg_sailing_distance = 0.0;
-        let mut leg_motoring_distance = 0.0;
-        let mut leg_sailing_time = 0_u64;
-        let mut leg_motoring_time = 0_u64;
-        let mut leg_number = 0;
-        let mut leg_start_lat: Option<f64> = None;
-        let mut leg_start_lon: Option<f64> = None;
         let mut last_lat: Option<f64> = None;
         let mut last_lon: Option<f64> = None;
+        let mut leg_start_lat: Option<f64> = None;
+        let mut leg_start_lon: Option<f64> = None;
 
         for row in &results {
             let timestamp: String = get_or_log(row, "timestamp", String::new(), "fetch_trip_legs");
@@ -1178,90 +1497,57 @@ impl VesselDatabase {
                 last_lon = lon;
             }
             let is_moored: bool = get_or_log(row, "is_moored", false, "fetch_trip_legs");
-            let engine_on_u8: u8 = get_or_log(row, "engine_on", 2u8, "fetch_trip_legs"); // 0=off, 1=on, 2=unknown
-            let engine_on = engine_on_u8 == 1; // Only treat 1 (On) as true
+            let engine_on_u8: u8 = get_or_log(row, "engine_on", 2u8, "fetch_trip_legs");
+            let engine_on = engine_on_u8 == 1;
             let interval_distance: f64 =
                 get_or_log(row, "total_distance_nm", 0.0, "fetch_trip_legs");
             let interval_time: u64 = get_or_log(row, "total_time_ms", 0u64, "fetch_trip_legs");
+            let speed_kn: f64 = row
+                .get_opt::<f64, _>("average_speed_kn")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
 
             if is_moored {
-                // End current leg if we have one
-                if in_leg && leg_total_distance >= 0.5 {
+                if in_leg {
                     leg_number += 1;
-                    legs.push(TripLeg {
+                    if let Some(leg) = finalize_leg(
+                        &current_leg,
                         leg_number,
-                        start_timestamp: leg_start_timestamp.clone(),
-                        end_timestamp: timestamp.clone(),
-                        total_distance_nm: leg_total_distance,
-                        sailing_distance_nm: leg_sailing_distance,
-                        motoring_distance_nm: leg_motoring_distance,
-                        sailing_time_ms: leg_sailing_time,
-                        motoring_time_ms: leg_motoring_time,
-                        sailing_time_formatted: format_duration_ms(leg_sailing_time),
-                        motoring_time_formatted: format_duration_ms(leg_motoring_time),
-                        start_lat: leg_start_lat,
-                        start_lon: leg_start_lon,
-                        end_lat: last_lat,
-                        end_lon: last_lon,
-                    });
+                        leg_start_lat,
+                        leg_start_lon,
+                    ) {
+                        legs.push(leg);
+                    } else {
+                        leg_number -= 1;
+                    }
+                    current_leg.clear();
+                    in_leg = false;
+                    leg_start_lat = None;
+                    leg_start_lon = None;
                 }
-
-                // Reset for next leg
-                in_leg = false;
-                leg_total_distance = 0.0;
-                leg_sailing_distance = 0.0;
-                leg_motoring_distance = 0.0;
-                leg_sailing_time = 0;
-                leg_motoring_time = 0;
-                leg_start_lat = None;
-                leg_start_lon = None;
             } else {
-                // Not moored - either starting or continuing a leg
                 if !in_leg {
-                    // Start a new leg
                     in_leg = true;
-                    leg_start_timestamp = timestamp.clone();
                     leg_start_lat = last_lat;
                     leg_start_lon = last_lon;
                 }
-
-                // Accumulate distance and time for this interval
-                leg_total_distance += interval_distance;
-
-                if engine_on {
-                    leg_motoring_distance += interval_distance;
-                    leg_motoring_time += interval_time;
-                } else {
-                    leg_sailing_distance += interval_distance;
-                    leg_sailing_time += interval_time;
-                }
+                current_leg.push(LegRecord {
+                    timestamp,
+                    speed_kn,
+                    distance_nm: interval_distance,
+                    time_ms: interval_time,
+                    engine_on,
+                    lat: last_lat,
+                    lon: last_lon,
+                });
             }
         }
 
-        // Handle last leg if trip ended while underway
-        if in_leg && leg_total_distance >= 0.5 {
+        if in_leg && !current_leg.is_empty() {
             leg_number += 1;
-            let last_timestamp = match results.last() {
-                Some(r) => get_or_log(r, "timestamp", String::new(), "fetch_trip_legs"),
-                None => String::new(),
-            };
-
-            legs.push(TripLeg {
-                leg_number,
-                start_timestamp: leg_start_timestamp,
-                end_timestamp: last_timestamp,
-                total_distance_nm: leg_total_distance,
-                sailing_distance_nm: leg_sailing_distance,
-                motoring_distance_nm: leg_motoring_distance,
-                sailing_time_ms: leg_sailing_time,
-                motoring_time_ms: leg_motoring_time,
-                sailing_time_formatted: format_duration_ms(leg_sailing_time),
-                motoring_time_formatted: format_duration_ms(leg_motoring_time),
-                start_lat: leg_start_lat,
-                start_lon: leg_start_lon,
-                end_lat: last_lat,
-                end_lon: last_lon,
-            });
+            if let Some(leg) = finalize_leg(&current_leg, leg_number, leg_start_lat, leg_start_lon) {
+                legs.push(leg);
+            }
         }
 
         Ok(TripLegsData { legs })

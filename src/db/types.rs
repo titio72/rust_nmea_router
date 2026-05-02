@@ -145,11 +145,36 @@ pub struct TripLeg {
     pub start_lon: Option<f64>,
     pub end_lat: Option<f64>,
     pub end_lon: Option<f64>,
+    /// Timestamp when pure navigation begins (first engine-off, or first point ≥ 4 kn)
+    pub nav_start_timestamp: Option<String>,
+    /// Timestamp when pure navigation ends (last engine-off before final engine-on, or last point ≥ 4 kn)
+    pub nav_end_timestamp: Option<String>,
+    pub nav_distance_nm: f64,
+    pub nav_time_ms: u64,
+    /// How the nav window was detected: "engine_transition", "speed_fallback", or null
+    pub nav_detection_method: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
 pub struct TripLegsData {
     pub legs: Vec<TripLeg>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct NavAnalysisRow {
+    pub trip_id: u32,
+    pub leg_number: u32,
+    pub leg_start: String,
+    pub leg_end: String,
+    pub leg_duration_ms: u64,
+    pub nav_start: Option<String>,
+    pub nav_end: Option<String>,
+    pub nav_detection_method: Option<String>,
+    /// Milliseconds between leg_start and nav_start (marina exit duration)
+    pub trimmed_start_ms: u64,
+    /// Milliseconds between nav_end and leg_end (marina entry duration)
+    pub trimmed_end_ms: u64,
+    pub has_override: bool,
 }
 
 #[derive(Debug, serde::Serialize)]

@@ -296,6 +296,14 @@
                             <div class="legendColorGradient">●</div>
                             <span>Sailing (Engine Off)</span>
                         </div>
+                        <div class="legendItem" id="navStartLegendItem" style="display:none;">
+                            <div class="legendColor" style="background-color: #0099FF; border-radius: 50%;"></div>
+                            <span>Navigation Start</span>
+                        </div>
+                        <div class="legendItem" id="navEndLegendItem" style="display:none;">
+                            <div class="legendColor" style="background-color: #FF6600; border-radius: 50%;"></div>
+                            <span>Navigation End</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -574,6 +582,8 @@
         let currentAnalyticsData = null; // Global reference to analytics data
         let currentTrackData = null; // Global reference to track data for segment markers
         let currentIsFullTrip = false;
+        let currentNavStartTs = null; // Nav window start for the currently displayed leg
+        let currentNavEndTs = null;   // Nav window end for the currently displayed leg
         let fullTrackData = null; // Global reference to full trip track data (loaded once)
         let segmentMarkers = []; // Array to store segment start/end markers
         let headingScaleNormalized = false; // Toggle for heading chart scale (0-360 vs -180 to 180)
@@ -602,7 +612,7 @@
                 const [tripResponse, legsResponse, trackResponse] = await Promise.all([
                     fetch('/api/trip?id=' + tripId),
                     legsPromise,
-                    fetch('/api/track?trip_id=' + tripId + '&max_points=60', { priority: 'high' })
+                    fetch('/api/track?trip_id=' + tripId + '&max_points=600', { priority: 'high' })
                 ]);
 
                 if (!tripResponse.ok) {
@@ -654,7 +664,7 @@
                 // If Maps finished loading after initializeMap() already ran (and showed
                 // the fallback), render the map now with the track data we already have.
                 if (mapsLoaded && !currentMap && currentTrackData) {
-                    initializeMap(currentTrackData, currentIsFullTrip);
+                    initializeMap(currentTrackData, currentIsFullTrip, currentNavStartTs, currentNavEndTs);
                 }
             } catch (error) {
                 //document.getElementById('tripDetails').innerHTML =
@@ -775,7 +785,9 @@
                         motoring_distance_nm: selectedLeg.motoring_distance_nm,
                         sailing_time_ms: selectedLeg.sailing_time_ms,
                         motoring_time_ms: selectedLeg.motoring_time_ms,
-                        total_time_ms: selectedLeg.sailing_time_ms + selectedLeg.motoring_time_ms
+                        total_time_ms: selectedLeg.sailing_time_ms + selectedLeg.motoring_time_ms,
+                        nav_start_timestamp: selectedLeg.nav_start_timestamp || null,
+                        nav_end_timestamp: selectedLeg.nav_end_timestamp || null
                     };
                     startTime = selectedLeg.start_timestamp;
                     endTime = selectedLeg.end_timestamp;
@@ -861,12 +873,14 @@
             voyageBarEl.setAttribute('motoring-distance', motoringDistance.toFixed(1));
             voyageBarEl.setAttribute('total-distance', totalDistance.toFixed(1));
 
-            // Initialize the map
-            initializeMap(trackData, isFullTrip);
-
-            // Save track data globally for segment marker handling
+            // Save state globally (used by late-loading Google Maps recovery and segment markers)
             currentTrackData = trackData;
             currentIsFullTrip = isFullTrip;
+            currentNavStartTs = isFullTrip ? null : (trip.nav_start_timestamp || null);
+            currentNavEndTs   = isFullTrip ? null : (trip.nav_end_timestamp   || null);
+
+            // Initialize the map
+            initializeMap(trackData, isFullTrip, currentNavStartTs, currentNavEndTs);
         }
 
         async function renderLegCharts(trackData, startTime, endTime) {
@@ -2300,7 +2314,13 @@
             });
         }
 
-        function initializeMap(trackData, isFullTrip) {
+        function initializeMap(trackData, isFullTrip, navStartTs, navEndTs) {
+            // Reset nav legend items — they are re-shown by addNavWindowMarkers if applicable
+            const navStartEl = document.getElementById('navStartLegendItem');
+            const navEndEl   = document.getElementById('navEndLegendItem');
+            if (navStartEl) navStartEl.style.display = 'none';
+            if (navEndEl)   navEndEl.style.display   = 'none';
+
             // Check if Google Maps API is available
             if (!googleMapsLoaded || !window.google?.maps) {
                 drawCanvasTrack(trackData, isFullTrip);
@@ -2426,6 +2446,84 @@
                 endMarker.addListener('click', () => {
                     endInfoWindow.open(map, endMarker);
                 });
+            }
+
+            // Add nav window markers when viewing a single leg
+            if (!isFullTrip && (navStartTs || navEndTs)) {
+                addNavWindowMarkers(map, validTrackPoints, navStartTs, navEndTs);
+            }
+        }
+
+        function addNavWindowMarkers(map, trackPoints, navStartTs, navEndTs) {
+            function findClosestPoint(ts) {
+                const targetMs = new Date(ts).getTime();
+                let best = null, bestDiff = Infinity;
+                for (const pt of trackPoints) {
+                    const diff = Math.abs(new Date(pt.timestamp).getTime() - targetMs);
+                    if (diff < bestDiff) { bestDiff = diff; best = pt; }
+                }
+                return best;
+            }
+
+            const navStartIcon = {
+                path: google.maps.SymbolPath.CIRCLE,
+                fillColor: '#0099FF',
+                fillOpacity: 1,
+                strokeColor: '#FFFFFF',
+                strokeWeight: 2,
+                scale: 8
+            };
+            const navEndIcon = {
+                path: google.maps.SymbolPath.CIRCLE,
+                fillColor: '#FF6600',
+                fillOpacity: 1,
+                strokeColor: '#FFFFFF',
+                strokeWeight: 2,
+                scale: 8
+            };
+
+            if (navStartTs) {
+                const pt = findClosestPoint(navStartTs);
+                if (pt) {
+                    const marker = new google.maps.Marker({
+                        position: { lat: pt.latitude, lng: pt.longitude },
+                        map: map,
+                        title: 'Navigation Start',
+                        icon: navStartIcon,
+                        zIndex: 900
+                    });
+                    const iw = new google.maps.InfoWindow({
+                        content: '<div style="font-family: Arial, sans-serif;">' +
+                            '<strong>Navigation Start</strong><br>' +
+                            formatTime(navStartTs) +
+                            '</div>'
+                    });
+                    marker.addListener('click', () => iw.open(map, marker));
+                    const el = document.getElementById('navStartLegendItem');
+                    if (el) el.style.display = '';
+                }
+            }
+
+            if (navEndTs) {
+                const pt = findClosestPoint(navEndTs);
+                if (pt) {
+                    const marker = new google.maps.Marker({
+                        position: { lat: pt.latitude, lng: pt.longitude },
+                        map: map,
+                        title: 'Navigation End',
+                        icon: navEndIcon,
+                        zIndex: 900
+                    });
+                    const iw = new google.maps.InfoWindow({
+                        content: '<div style="font-family: Arial, sans-serif;">' +
+                            '<strong>Navigation End</strong><br>' +
+                            formatTime(navEndTs) +
+                            '</div>'
+                    });
+                    marker.addListener('click', () => iw.open(map, marker));
+                    const el = document.getElementById('navEndLegendItem');
+                    if (el) el.style.display = '';
+                }
             }
         }
 

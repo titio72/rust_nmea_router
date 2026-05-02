@@ -73,6 +73,22 @@ struct UpdateDescriptionParams {
     description: String,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct SetNavWindowParams {
+    trip_id: u32,
+    leg_number: u32,
+    #[schemars(description = "ISO-8601 UTC datetime for nav start; null to clear override")]
+    nav_start: Option<String>,
+    #[schemars(description = "ISO-8601 UTC datetime for nav end; null to clear override")]
+    nav_end: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct NavAnalysisParams {
+    #[schemars(description = "Filter to a specific trip ID; omit to analyze all cached trips")]
+    trip_id: Option<u32>,
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn parse_dt(s: &str) -> Result<DateTime<Utc>, Box<dyn std::error::Error>> {
@@ -342,6 +358,61 @@ impl NmeaRouterMcp {
         .map_err(db_err)?
         .map_err(db_err)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
+    }
+
+    #[tool(description = "Override the automatically detected navigation window for a specific leg. The algorithm's original detection is preserved for calibration. Pass null for both nav_start and nav_end to clear a previous override.")]
+    async fn set_nav_window(
+        &self,
+        Parameters(SetNavWindowParams {
+            trip_id,
+            leg_number,
+            nav_start,
+            nav_end,
+        }): Parameters<SetNavWindowParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let db = self.db.clone();
+        let current = tokio::task::spawn_blocking(move || {
+            db.fetch_trip_legs(trip_id).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(db_err)?
+        .map_err(db_err)?;
+
+        let leg = current.legs.iter().find(|l| l.leg_number == leg_number);
+        let auto_start = leg.and_then(|l| l.nav_start_timestamp.clone());
+        let auto_end = leg.and_then(|l| l.nav_end_timestamp.clone());
+
+        let db2 = self.db.clone();
+        tokio::task::spawn_blocking(move || {
+            db2.set_nav_override(
+                trip_id,
+                leg_number,
+                nav_start.as_deref(),
+                nav_end.as_deref(),
+                auto_start.as_deref(),
+                auto_end.as_deref(),
+            )
+            .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(db_err)?
+        .map_err(db_err)?;
+        Ok(CallToolResult::success(vec![Content::text("ok")]))
+    }
+
+    #[tool(description = "Analyze nav window detection quality across cached trip legs. Returns per-leg windows, trimmed marina durations, and detection method. Omit trip_id to analyze all cached trips.")]
+    async fn get_nav_analysis(
+        &self,
+        Parameters(NavAnalysisParams { trip_id }): Parameters<NavAnalysisParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let db = self.db.clone();
+        let data = tokio::task::spawn_blocking(move || {
+            db.fetch_nav_analysis(trip_id).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(db_err)?
+        .map_err(db_err)?;
+        to_json(data)
     }
 }
 
