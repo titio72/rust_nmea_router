@@ -80,15 +80,12 @@ const PUBLIC_PATHS: &[&str] = &[
     "/api/sync/trip",
 ];
 
-
 const PUBLIC_EXTENSIONS: &[&str] = &[
-    ".js", ".css", ".png", ".svg", ".ico",
-    ".jpg", ".jpeg", ".woff", ".woff2", ".ttf",
+    ".js", ".css", ".png", ".svg", ".ico", ".jpg", ".jpeg", ".woff", ".woff2", ".ttf",
 ];
 
 fn is_public_path(path: &str) -> bool {
-    PUBLIC_PATHS.contains(&path)
-        || PUBLIC_EXTENSIONS.iter().any(|ext| path.ends_with(ext))
+    PUBLIC_PATHS.contains(&path) || PUBLIC_EXTENSIONS.iter().any(|ext| path.ends_with(ext))
 }
 
 pub async fn auth_middleware(
@@ -96,6 +93,10 @@ pub async fn auth_middleware(
     request: Request,
     next: Next,
 ) -> Response {
+    if state.config.web.auth_password.as_deref().unwrap_or("").is_empty() {
+        return next.run(request).await;
+    }
+
     let path = request.uri().path().to_string();
 
     if is_public_path(&path) {
@@ -146,7 +147,7 @@ pub async fn login_handler(
     Json(body): Json<LoginRequest>,
 ) -> Response {
     let expected = state.config.web.auth_password.as_deref().unwrap_or("");
-    if expected.is_empty() || body.password != expected {
+    if !expected.is_empty() && body.password != expected {
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"status": "error", "error": "Invalid password"})),
