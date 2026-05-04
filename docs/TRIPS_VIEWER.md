@@ -110,14 +110,14 @@ Response:
 Run from the repository root:
 
 ```bash
-sudo ./deploy/install_trips_viewer.sh
+sudo ./deploy_trips_viewer/install_trips_viewer.sh
 ```
 
 This will:
 - Build the `nmea_router` binary with `cargo build --release`
 - Copy it to `/usr/local/bin/trips_viewer`
 - Copy `static/` to `/opt/trips_viewer/static/`
-- Create `/etc/trips_viewer/config.json` from `deploy/config.template.json` (only on first install)
+- Create `/etc/trips_viewer/config.json` from `deploy_trips_viewer/config.template.json` (only on first install)
 - Install the systemd unit `/etc/systemd/system/trips_viewer.service`
 - Install and enable the nginx reverse proxy config
 
@@ -164,7 +164,7 @@ sudo journalctl -u trips_viewer.service -f   # stream logs
 
 ### 4. TLS certificate
 
-The nginx config in `deploy/nginx.conf` uses a self-signed certificate placeholder.
+The nginx config in `deploy_trips_viewer/nginx.conf` uses a self-signed certificate placeholder.
 For a real domain, replace it with Let's Encrypt:
 
 ```bash
@@ -237,7 +237,7 @@ Monitor the build log in the Railway dashboard. The healthcheck hits `/api/trips
 
 ### 5. Access the app
 
-Railway provides a generated domain like `https://your-project.up.railway.app`.  
+Railway provides a generated domain like `https://your-project.up.railway.app`.
 You can also add a custom domain in **Settings → Domains**.
 
 ---
@@ -263,9 +263,9 @@ There is no environment variable override for `sync.api_key` — set it directly
 
 | File | Purpose |
 |------|---------|
-| `deploy/config.template.json` | Config template for local install (`can.enabled: false`) |
-| `deploy/install_trips_viewer.sh` | Local install script (build + systemd + nginx) |
-| `deploy/trips_viewer.service` | systemd unit template |
-| `deploy/nginx.conf` | nginx reverse proxy config |
+| `deploy_trips_viewer/config.template.json` | Config template for local install (`can.enabled: false`) |
+| `deploy_trips_viewer/install_trips_viewer.sh` | Local install script (build + systemd + nginx) |
+| `deploy_trips_viewer/trips_viewer.service` | systemd unit template |
+| `deploy_trips_viewer/nginx.conf` | nginx reverse proxy config |
 | `Dockerfile` | Multi-stage Docker build for Railway |
 | `railway.toml` | Railway build/deploy settings |

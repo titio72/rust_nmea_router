@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Install trips viewer as a systemd service with nginx reverse proxy.
-# Run from the repository root: sudo ./deploy/install_trips_viewer.sh
+# Run from the repository root: sudo ./deploy_trips_viewer/install_trips_viewer.sh
 
 if [ "$EUID" -ne 0 ]; then
     echo "Error: run as root (sudo $0)"
@@ -44,7 +44,7 @@ chown -R "$DEPLOY_USER:$DEPLOY_USER" "$INSTALL_DIR/static"
 # Config
 if [ ! -f "$CONFIG_DIR/config.json" ]; then
     echo "==> Installing default config (edit before starting service)..."
-    cp "$REPO_DIR/deploy/config.template.json" "$CONFIG_DIR/config.json"
+    cp "$REPO_DIR/deploy_trips_viewer/config.template.json" "$CONFIG_DIR/config.json"
     sed -i "s|/var/log/trips_viewer|$LOG_DIR|g" "$CONFIG_DIR/config.json"
     chmod 644 "$CONFIG_DIR/config.json"
 else
@@ -53,13 +53,13 @@ fi
 
 # Systemd service
 echo "==> Installing systemd service..."
-sed "s/__USER__/$DEPLOY_USER/g" "$REPO_DIR/deploy/trips_viewer.service" > "$SERVICE_FILE"
+sed "s/__USER__/$DEPLOY_USER/g" "$REPO_DIR/deploy_trips_viewer/trips_viewer.service" > "$SERVICE_FILE"
 systemctl daemon-reload
 
 # Nginx
 if command -v nginx &>/dev/null; then
     echo "==> Installing nginx config..."
-    cp "$REPO_DIR/deploy/nginx.conf" "$NGINX_AVAIL"
+    cp "$REPO_DIR/deploy_trips_viewer/nginx.conf" "$NGINX_AVAIL"
     if [ ! -L "$NGINX_ENABLED" ]; then
         ln -s "$NGINX_AVAIL" "$NGINX_ENABLED"
     fi

@@ -48,7 +48,7 @@ struct CliArgs {
     config_path: Option<String>,
 }
 
-fn parse_args() -> Result<CliArgs, String> {
+fn parse_args() -> Result<CliArgs, error::AppError> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     let mut log_dir: Option<PathBuf> = None;
@@ -63,19 +63,19 @@ fn parse_args() -> Result<CliArgs, String> {
             "--logs" => {
                 i += 1;
                 log_dir = Some(PathBuf::from(
-                    args.get(i).ok_or("--logs requires a value")?,
+                    args.get(i).ok_or(error::AppError::Configuration("--logs requires a value".to_string()))?,
                 ));
             }
             "--from" => {
                 i += 1;
                 from_date = Some(parse_date(
-                    args.get(i).ok_or("--from requires a value")?,
+                    args.get(i).ok_or(error::AppError::Configuration("--from requires a value".to_string()))?,
                     false)?);
             }
             "--to" => {
                 i += 1;
                 to_date = Some(parse_date(
-                    args.get(i).ok_or("--to requires a value")?,
+                    args.get(i).ok_or(error::AppError::Configuration("--to requires a value".to_string()))?,
                     true)?);
             }
             "--dry-run" => {
@@ -84,20 +84,20 @@ fn parse_args() -> Result<CliArgs, String> {
             "--config" => {
                 i += 1;
                 config_path = Some(
-                    args.get(i).ok_or("--config requires a value")?.clone(),
+                    args.get(i).ok_or(error::AppError::Configuration("--config requires a value".to_string()))?.clone(),
                 );
             }
             other => {
-                return Err(format!("Unknown argument: {}", other));
+                return Err(error::AppError::Configuration(format!("Unknown argument: {}", other)));
             }
         }
         i += 1;
     }
 
     Ok(CliArgs {
-        log_dir: log_dir.ok_or("--logs is required")?,
-        from: from_date.ok_or("--from is required")?,
-        to: to_date.ok_or("--to is required")?,
+        log_dir: log_dir.ok_or(error::AppError::Configuration("--logs is required".to_string()))?,
+        from: from_date.ok_or(error::AppError::Configuration("--from is required".to_string()))?,
+        to: to_date.ok_or(error::AppError::Configuration("--to is required".to_string()))?,
         dry_run,
         config_path,
     })
@@ -105,14 +105,14 @@ fn parse_args() -> Result<CliArgs, String> {
 
 /// Parse a YYYY-MM-DD date string into a `SystemTime`.
 /// `end_of_day` → 23:59:59.999 UTC; otherwise 00:00:00 UTC.
-fn parse_date(s: &str, end_of_day: bool) -> Result<SystemTime, String> {
+fn parse_date(s: &str, end_of_day: bool) -> Result<SystemTime, error::AppError> {
     let parts: Vec<&str> = s.split('-').collect();
     if parts.len() != 3 {
-        return Err(format!("Invalid date '{}'. Expected YYYY-MM-DD", s));
+        return Err(error::AppError::Configuration(format!("Invalid date '{}'. Expected YYYY-MM-DD", s)));
     }
-    let year: i32 = parts[0].parse().map_err(|_| format!("Invalid year in '{}'", s))?;
-    let month: u32 = parts[1].parse().map_err(|_| format!("Invalid month in '{}'", s))?;
-    let day: u32 = parts[2].parse().map_err(|_| format!("Invalid day in '{}'", s))?;
+    let year: i32 = parts[0].parse().map_err(|_| error::AppError::Configuration(format!("Invalid year in '{}'", s)))?;
+    let month: u32 = parts[1].parse().map_err(|_| error::AppError::Configuration(format!("Invalid month in '{}'", s)))?;
+    let day: u32 = parts[2].parse().map_err(|_| error::AppError::Configuration(format!("Invalid day in '{}'", s)))?;
 
     let (h, min, sec, nano) = if end_of_day {
         (23, 59, 59, 999_000_000u32)
@@ -123,7 +123,7 @@ fn parse_date(s: &str, end_of_day: bool) -> Result<SystemTime, String> {
     let dt = Utc
         .with_ymd_and_hms(year, month, day, h, min, sec)
         .single()
-        .ok_or_else(|| format!("Invalid date '{}'", s))?;
+        .ok_or_else(|| error::AppError::Configuration(format!("Invalid date '{}'", s)))?;
 
     let dt_with_ns = dt
         .with_nanosecond(nano)

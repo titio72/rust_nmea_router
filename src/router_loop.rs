@@ -5,7 +5,7 @@
 // tests can call it directly with synthetic N2kFrame values, bypassing the CAN socket.
 
 use std::{
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
 use tracing::{info, warn};
@@ -19,6 +19,7 @@ use crate::db::{HealthCheckManager, VesselDatabase, is_connection_error};
 use crate::environmental_monitor::EnvironmentalMonitor;
 use crate::environmental_status_handler::EnvironmentalStatusHandler;
 use crate::frame_filter::{should_process_frame_by_id, should_process_n2k_message};
+use crate::ais_target_cache::AisTargetCache;
 use crate::signalk_broadcaster::SignalKBroadcaster;
 use crate::time_monitor::TimeSyncStatus;
 use crate::udp_broadcaster::UdpBroadcaster;
@@ -88,6 +89,7 @@ pub struct RouterLoop {
     // Broadcasters
     udp_broadcaster: UdpBroadcaster,
     signalk_broadcaster: SignalKBroadcaster,
+    ais_target_cache: Arc<Mutex<AisTargetCache>>,
     // Database
     vessel_db: Arc<RwLock<VesselDatabase>>,
     // Metrics & health
@@ -109,6 +111,7 @@ impl RouterLoop {
         environmental_status_handler: EnvironmentalStatusHandler,
         udp_broadcaster: UdpBroadcaster,
         signalk_broadcaster: SignalKBroadcaster,
+        ais_target_cache: Arc<Mutex<AisTargetCache>>,
         vessel_db: Arc<RwLock<VesselDatabase>>,
         metrics: AppMetrics,
         metrics_logger: MetricsLogger,
@@ -125,6 +128,7 @@ impl RouterLoop {
             environmental_status_handler,
             udp_broadcaster,
             signalk_broadcaster,
+            ais_target_cache,
             vessel_db,
             metrics,
             metrics_logger,
@@ -209,7 +213,11 @@ impl RouterLoop {
     /// `Instant::now()` inside business logic.
     pub(crate) fn process_n2k_message(&mut self, frame: &N2kFrame, now: Instant) {
         self.time_monitor.handle_message(frame, now);
-        
+
+        if let Ok(mut cache) = self.ais_target_cache.lock() {
+            cache.handle_message(frame, now);
+        }
+
         if self.is_udp_broadcast_enabled() {
             self.udp_broadcaster.handle_message(frame, now);
         }

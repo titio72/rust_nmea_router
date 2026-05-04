@@ -4,9 +4,8 @@
 // Testing: Database tests require serial execution (--test-threads=1) due to shared test DB.
 // See: AGENTS.md for database patterns, transaction examples, and type conversions.
 //
-use std::error::Error;
-
 use crate::db::types::VesselDatabase;
+use crate::error::AppError;
 use mysql::params;
 use mysql::prelude::Queryable;
 use tracing::warn;
@@ -16,7 +15,7 @@ impl VesselDatabase {
         &self,
         trip_id: i64,
         new_description: &str,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), AppError> {
         let mut conn = self.pool.get_conn()?;
         let query = "UPDATE trips SET description = :description WHERE id = :id";
         conn.exec_drop(
@@ -31,11 +30,8 @@ impl VesselDatabase {
 
     /// Delete a trip and all associated data
     /// This will delete environmental data, vessel status data, and finally the trip record
-    pub fn delete_trip(&self, trip_id: u32) -> Result<(), Box<dyn Error>> {
-        let mut conn = self
-            .pool
-            .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+    pub fn delete_trip(&self, trip_id: u32) -> Result<(), AppError> {
+        let mut conn = self.pool.get_conn()?;
 
         let mut tx = conn.start_transaction(mysql::TxOpts::default())?;
 
@@ -45,19 +41,19 @@ impl VesselDatabase {
             params! {
                 "trip_id" => trip_id,
             },
-        ).map_err(|e| format!("Database query error: {}", e))?;
+        )?;
 
         if trip_row.is_none() {
-            return Err("Trip not found".into());
+            return Err(AppError::Database("Trip not found".to_string()));
         }
 
         let mut trip_row = trip_row.unwrap();
         let start_timestamp: String = trip_row
             .take("start_timestamp")
-            .ok_or("Missing start_timestamp")?;
+            .ok_or(AppError::Database("Missing start_timestamp".to_string()))?;
         let end_timestamp: String = trip_row
             .take("end_timestamp")
-            .ok_or("Missing end_timestamp")?;
+            .ok_or(AppError::Database("Missing end_timestamp".to_string()))?;
 
         // Delete environmental data in the time range
         tx.exec_drop(
@@ -67,8 +63,7 @@ impl VesselDatabase {
                 "start" => &start_timestamp,
                 "end" => &end_timestamp,
             },
-        )
-        .map_err(|e| format!("Failed to delete environmental data: {}", e))?;
+        )?;
 
         // Delete vessel status data in the time range
         tx.exec_drop(
@@ -78,8 +73,7 @@ impl VesselDatabase {
                 "start" => &start_timestamp,
                 "end" => &end_timestamp,
             },
-        )
-        .map_err(|e| format!("Failed to delete vessel status data: {}", e))?;
+        )?;
 
         // Delete the trip record
         tx.exec_drop(
@@ -87,8 +81,7 @@ impl VesselDatabase {
             params! {
                 "trip_id" => trip_id,
             },
-        )
-        .map_err(|e| format!("Failed to delete trip: {}", e))?;
+        )?;
 
         tx.commit()?;
 
@@ -99,11 +92,8 @@ impl VesselDatabase {
         Ok(())
     }
 
-    pub fn trim_trip(&self, trip_id: u32) -> Result<(), Box<dyn Error>> {
-        let mut conn = self
-            .pool
-            .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+    pub fn trim_trip(&self, trip_id: u32) -> Result<(), AppError> {
+        let mut conn = self.pool.get_conn()?;
 
         let mut tx = conn.start_transaction(mysql::TxOpts::default())?;
 
@@ -111,31 +101,31 @@ impl VesselDatabase {
         tx.exec_drop(
             "SELECT @trip_start_ts := start_timestamp, @trip_end_ts := end_timestamp FROM trips WHERE id = :id",
             params! { "id" => trip_id },
-        ).map_err(|e| format!("Failed to fetch trip timestamps: {}", e))?;
+        )?;
 
         // Fetch min and max timestamps for non-moored records into session variables
         tx.exec_drop(
             "SELECT @min_ts := MIN(timestamp), @max_ts := MAX(timestamp) FROM vessel_status WHERE timestamp >= @trip_start_ts AND timestamp <= @trip_end_ts AND is_moored = 0",
             ()
-        ).map_err(|e| format!("Failed to fetch min/max timestamps: {}", e))?;
+        )?;
 
         // Delete vessel_status records outside the 1-hour buffer
         tx.exec_drop(
             "DELETE FROM vessel_status WHERE (timestamp >= @trip_start_ts AND timestamp < SUBTIME(@min_ts, '0 1:00:0.000')) OR (timestamp <= @trip_end_ts AND timestamp > ADDTIME(@max_ts, '0 1:00:0.000'))",
             ()
-        ).map_err(|e| format!("Failed to delete vessel_status: {}", e))?;
+        )?;
 
         // Delete environmental_data records outside the 1-hour buffer
         tx.exec_drop(
             "DELETE FROM environmental_data WHERE (timestamp >= @trip_start_ts AND timestamp < SUBTIME(@min_ts, '0 1:00:0.000')) OR (timestamp <= @trip_end_ts AND timestamp > ADDTIME(@max_ts, '0 1:00:0.000'))",
             ()
-        ).map_err(|e| format!("Failed to delete environmental_data: {}", e))?;
+        )?;
 
         // Update trip with new boundaries
         tx.exec_drop(
             "UPDATE trips SET start_timestamp = SUBTIME(@min_ts, '0 1:00:0.000'), end_timestamp = ADDTIME(@max_ts, '0 1:00:0.000') WHERE id = :id",
             params! { "id" => trip_id },
-        ).map_err(|e| format!("Failed to update trip: {}", e))?;
+        )?;
 
         tx.commit()?;
 
@@ -157,11 +147,8 @@ impl VesselDatabase {
         nav_end: Option<&str>,
         auto_nav_start: Option<&str>,
         auto_nav_end: Option<&str>,
-    ) -> Result<(), Box<dyn Error>> {
-        let mut conn = self
-            .pool
-            .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+    ) -> Result<(), AppError> {
+        let mut conn = self.pool.get_conn()?;
 
         conn.query_drop(
             r"CREATE TABLE IF NOT EXISTS trip_legs_nav_overrides (
@@ -174,8 +161,7 @@ impl VesselDatabase {
                 corrected_at   DATETIME(3)  NOT NULL,
                 PRIMARY KEY (trip_id, leg_number)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
-        )
-        .map_err(|e| format!("Failed to ensure trip_legs_nav_overrides table: {}", e))?;
+        )?;
 
         conn.exec_drop(
             r"INSERT INTO trip_legs_nav_overrides
@@ -195,8 +181,7 @@ impl VesselDatabase {
                 "auto_nav_start" => auto_nav_start,
                 "auto_nav_end" => auto_nav_end,
             },
-        )
-        .map_err(|e| format!("Failed to upsert nav override: {}", e))?;
+        )?;
 
         if let Err(e) = self.invalidate_trip_legs_cache(trip_id) {
             warn!(

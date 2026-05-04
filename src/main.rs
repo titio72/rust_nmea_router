@@ -8,6 +8,7 @@ use std::{
 };
 use tracing::{info, warn};
 
+mod ais_target_cache;
 mod app_metrics;
 mod config;
 mod db;
@@ -41,7 +42,7 @@ use nmea2k::{CanBus, N2kStreamReader};
 
 // ========== Logging Setup ==========
 
-fn init_logging(log_config: &config::LogConfig) -> Result<(), Box<dyn Error>> {
+fn init_logging(log_config: &config::LogConfig) -> Result<(), error::AppError> {
     use tracing_appender::rolling;
     use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -338,6 +339,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.signalk.vessel_uuid.clone(),
     );
 
+    let ais_cache = ais_target_cache::get_ais_target_cache();
+
     RouterLoop::new(
         socket,
         reader,
@@ -349,6 +352,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         environmental_status_handler,
         udp_broadcaster,
         signalk_broadcaster,
+        ais_cache,
         vessel_db,
         metrics,
         metrics_logger,

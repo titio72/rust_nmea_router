@@ -11,7 +11,6 @@
   "settings": {
     // Rust & Cargo
     "rust-analyzer.check.command": "clippy",
-    "rust-analyzer.checkOnSave.command": "clippy",
     "rust-analyzer.cargoRunner": "cargo",
     "rust-analyzer.lens.enable": true,
     "rust-analyzer.lens.references": true,
@@ -22,7 +21,7 @@
       "editor.formatOnSave": true,
       "editor.defaultFormatter": "rust-lang.rust-analyzer"
     },
-    
+
     // General Editor Settings
     "editor.formatOnSave": true,
     "editor.defaultFormatter": "rust-lang.rust-analyzer",
@@ -30,13 +29,13 @@
     "editor.wordWrap": "on",
     "files.trimTrailingWhitespace": true,
     "files.insertFinalNewline": true,
-    
+
     // Terminal
     "terminal.integrated.defaultProfile.linux": "bash",
     "terminal.integrated.env.linux": {
       "RUST_BACKTRACE": "1"
     },
-    
+
     // Tasks
     "tasks.version": "2.0.0"
   },

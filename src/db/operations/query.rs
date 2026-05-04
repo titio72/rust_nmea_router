@@ -8,7 +8,7 @@ use crate::utilities::haversine_distance_nm;
 use chrono::{DateTime, NaiveDate, Utc};
 use mysql::params;
 use mysql::prelude::Queryable;
-use std::error::Error;
+use crate::error::AppError;
 use tracing::warn;
 
 /// Get a value from a database row, logging a warning if the default is used.
@@ -168,11 +168,11 @@ impl VesselDatabase {
     pub fn fetch_trip(
         &self,
         trip_id: u32,
-    ) -> Result<Option<TripSummary>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<TripSummary>, AppError> {
         let mut conn = self
             .pool
             .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+?;
 
         let row: Option<mysql::Row> = conn
             .exec_first(
@@ -188,7 +188,7 @@ impl VesselDatabase {
                     "trip_id" => trip_id,
                 },
             )
-            .map_err(|e| format!("Database query error: {}", e))?;
+?;
 
         if let Some(row) = row {
             let trip = TripSummary {
@@ -229,7 +229,7 @@ impl VesselDatabase {
         &self,
         year: Option<i32>,
         last_months: Option<u32>,
-    ) -> Result<Vec<TripSummary>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<TripSummary>, AppError> {
         const SELECT_TRIPS: &str = "SELECT id,
                     description,
                     DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as start_ts,
@@ -247,7 +247,7 @@ impl VesselDatabase {
         let mut conn = self
             .pool
             .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+?;
 
         let results: Vec<mysql::Row> = if let Some(year) = year {
             conn.exec(
@@ -257,18 +257,18 @@ impl VesselDatabase {
                 ),
                 mysql::params! { "year" => year },
             )
-            .map_err(|e| format!("Database query error: {}", e))?
+?
         } else if let Some(months) = last_months {
             conn.exec(
                 format!("{} start_timestamp >= DATE_SUB(NOW(), INTERVAL :months MONTH) ORDER BY start_timestamp DESC", SELECT_TRIPS),
                 mysql::params! { "months" => months },
-            ).map_err(|e| format!("Database query error: {}", e))?
+            )?
         } else {
             conn.query(format!(
                 "{} 1=1 ORDER BY start_timestamp DESC",
                 SELECT_TRIPS
             ))
-            .map_err(|e| format!("Database query error: {}", e))?
+?
         };
 
         let trips = results
@@ -308,11 +308,11 @@ impl VesselDatabase {
     pub fn fetch_trip_by_uuid(
         &self,
         trip_uuid: &str,
-    ) -> Result<Option<TripSummary>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<TripSummary>, AppError> {
         let mut conn = self
             .pool
             .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+?;
 
         let row: Option<mysql::Row> = conn
             .exec_first(
@@ -328,7 +328,7 @@ impl VesselDatabase {
                     "uuid" => trip_uuid,
                 },
             )
-            .map_err(|e| format!("Database query error: {}", e))?;
+?;
 
         if let Some(row) = row {
             let trip = TripSummary {
@@ -373,11 +373,11 @@ impl VesselDatabase {
     /// Returns monthly sailed and motored nautical miles, including months with no activity
     pub fn fetch_monthly_statistics(
         &self,
-    ) -> Result<MonthlyStatistics, Box<dyn std::error::Error>> {
+    ) -> Result<MonthlyStatistics, AppError> {
         let mut conn = self
             .pool
             .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+?;
 
         // Get all trip data grouped by year and month
         let results: Vec<mysql::Row> = conn
@@ -391,7 +391,7 @@ impl VesselDatabase {
               GROUP BY YEAR(start_timestamp), MONTH(start_timestamp)
               ORDER BY year ASC, month ASC",
             )
-            .map_err(|e| format!("Database query error: {}", e))?;
+?;
 
         // Build a map of (year, month) -> (sailing_distance, motoring_distance)
         let mut month_data: std::collections::HashMap<(i32, u32), (f64, f64)> =
@@ -401,11 +401,11 @@ impl VesselDatabase {
             let year: i32 = row
                 .get_opt("year")
                 .and_then(|v| v.ok())
-                .ok_or("Missing year")?;
+                .ok_or(AppError::Database("Missing year".to_string()))?;
             let month: u32 = row
                 .get_opt::<u32, _>("month")
                 .and_then(|v| v.ok())
-                .ok_or("Missing month")?;
+                .ok_or(AppError::Database("Missing month".to_string()))?;
             let sailing_distance: f64 = row
                 .get_opt::<f64, _>("sailing_distance")
                 .and_then(|v| v.ok())
@@ -462,11 +462,11 @@ impl VesselDatabase {
         start: Option<DateTime<Utc>>,
         end: Option<DateTime<Utc>>,
         max_points: Option<usize>,
-    ) -> Result<Vec<TrackPoint>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<TrackPoint>, AppError> {
         let mut conn = self
             .pool
             .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+?;
 
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
             conn.exec(
@@ -482,7 +482,7 @@ impl VesselDatabase {
                  ORDER BY timestamp",
                 mysql::params! { "trip_id" => trip_id },
             )
-            .map_err(|e| format!("Database query error: {}", e))?
+?
         } else if let (Some(start), Some(end)) = (start, end) {
             conn.exec(
                 "SELECT DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
@@ -496,9 +496,11 @@ impl VesselDatabase {
                     "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
                 },
             )
-            .map_err(|e| format!("Database query error: {}", e))?
+?
         } else {
-            return Err("Either trip_id or both start and end timestamps are required".into());
+            return Err(AppError::Database(
+            "Either trip_id or both start and end timestamps are required".to_string(),
+        ));
         };
 
         // min_interval_ms derived from max_points interpreted as max samples per hour.
@@ -586,11 +588,11 @@ impl VesselDatabase {
         start: Option<DateTime<Utc>>,
         end: Option<DateTime<Utc>>,
         max_points: Option<usize>,
-    ) -> Result<Vec<WebMetricData>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<WebMetricData>, AppError> {
         let mut conn = self
             .pool
             .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+?;
 
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
             conn.exec(
@@ -602,7 +604,7 @@ impl VesselDatabase {
                    AND e.metric_id = :metric
                  ORDER BY e.timestamp",
                 mysql::params! { "trip_id" => trip_id, "metric" => metric },
-            ).map_err(|e| format!("Database query error: {}", e))?
+            )?
         } else if let (Some(start), Some(end)) = (start, end) {
             conn.exec(
                 "SELECT DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
@@ -616,9 +618,11 @@ impl VesselDatabase {
                     "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
                 },
             )
-            .map_err(|e| format!("Database query error: {}", e))?
+?
         } else {
-            return Err("Either trip_id or both start and end timestamps are required".into());
+            return Err(AppError::Database(
+            "Either trip_id or both start and end timestamps are required".to_string(),
+        ));
         };
 
         let metrics: Vec<WebMetricData> = results
@@ -690,9 +694,9 @@ impl VesselDatabase {
         start: Option<DateTime<Utc>>,
         end: Option<DateTime<Utc>>,
         max_points: Option<usize>,
-    ) -> Result<MultiMetricData, Box<dyn std::error::Error>> {
+    ) -> Result<MultiMetricData, AppError> {
         if metrics.is_empty() {
-            return Err("At least one metric_id is required".into());
+            return Err(AppError::Database("At least one metric_id is required".to_string()));
         }
 
         let in_clause = metrics
@@ -704,7 +708,7 @@ impl VesselDatabase {
         let mut conn = self
             .pool
             .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+?;
 
         // in_clause is built from &[u8] typed integers — safe to inline.
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
@@ -720,7 +724,7 @@ impl VesselDatabase {
                     in_clause = in_clause
                 ),
                 mysql::params! { "trip_id" => trip_id },
-            ).map_err(|e| format!("Database query error: {}", e))?
+            )?
         } else if let (Some(start), Some(end)) = (start, end) {
             conn.exec(
                 format!(
@@ -737,9 +741,11 @@ impl VesselDatabase {
                     "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
                 },
             )
-            .map_err(|e| format!("Database query error: {}", e))?
+?
         } else {
-            return Err("Either trip_id or both start and end timestamps are required".into());
+            return Err(AppError::Database(
+            "Either trip_id or both start and end timestamps are required".to_string(),
+        ));
         };
 
         // Partition rows into per-metric Vecs
@@ -830,7 +836,7 @@ impl VesselDatabase {
         trip_id: Option<u32>,
         start: Option<DateTime<Utc>>,
         end: Option<DateTime<Utc>>,
-    ) -> Result<SpeedDistributionData, Box<dyn std::error::Error>> {
+    ) -> Result<SpeedDistributionData, AppError> {
         // Create buckets for speeds from 0 to 10 knots in 0.5 knot increments
         let max_speed = 10.0_f64;
         let bucket_size = 0.5_f64;
@@ -850,7 +856,7 @@ impl VesselDatabase {
         let mut conn = self
             .pool
             .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+?;
 
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
             conn.exec(
@@ -866,7 +872,7 @@ impl VesselDatabase {
                  GROUP BY FLOOR(average_speed_kn / 0.5) * 0.5",
                 mysql::params! { "trip_id" => trip_id },
             )
-            .map_err(|e| format!("Database query error: {}", e))?
+?
         } else if let (Some(start), Some(end)) = (start, end) {
             conn.exec(
                 "SELECT FLOOR(average_speed_kn / 0.5) * 0.5 AS speed,
@@ -882,9 +888,11 @@ impl VesselDatabase {
                     "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
                 },
             )
-            .map_err(|e| format!("Database query error: {}", e))?
+?
         } else {
-            return Err("Either trip_id or both start and end timestamps are required".into());
+            return Err(AppError::Database(
+            "Either trip_id or both start and end timestamps are required".to_string(),
+        ));
         };
 
         for row in results {
@@ -919,7 +927,7 @@ impl VesselDatabase {
         trip_id: Option<u32>,
         start: Option<DateTime<Utc>>,
         end: Option<DateTime<Utc>>,
-    ) -> Result<WindStatisticsData, Box<dyn std::error::Error>> {
+    ) -> Result<WindStatisticsData, AppError> {
         // Create 72 buckets for wind directions (360 degrees / 5 degrees = 72 buckets)
         let bucket_size = 5.0;
         let num_buckets = 72usize;
@@ -937,7 +945,7 @@ impl VesselDatabase {
         let mut conn = self
             .pool
             .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+?;
 
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
             conn.exec(
@@ -954,7 +962,7 @@ impl VesselDatabase {
                  GROUP BY FLOOR(average_wind_angle_deg / 5.0) * 5.0",
                 mysql::params! { "trip_id" => trip_id },
             )
-            .map_err(|e| format!("Database query error: {}", e))?
+?
         } else if let (Some(start), Some(end)) = (start, end) {
             conn.exec(
                 "SELECT FLOOR(average_wind_angle_deg / 5.0) * 5.0 AS angle,
@@ -971,9 +979,11 @@ impl VesselDatabase {
                     "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
                 },
             )
-            .map_err(|e| format!("Database query error: {}", e))?
+?
         } else {
-            return Err("Either trip_id or both start and end timestamps are required".into());
+            return Err(AppError::Database(
+            "Either trip_id or both start and end timestamps are required".to_string(),
+        ));
         };
 
         for row in results {
@@ -1009,11 +1019,11 @@ impl VesselDatabase {
     pub fn fetch_trip_legs(
         &self,
         trip_id: u32,
-    ) -> Result<TripLegsData, Box<dyn std::error::Error>> {
+    ) -> Result<TripLegsData, AppError> {
         let mut conn = self
             .pool
             .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+?;
 
         let is_closed = self.trip_is_closed(&mut conn, trip_id)?;
 
@@ -1041,7 +1051,7 @@ impl VesselDatabase {
         conn: &mut mysql::PooledConn,
         trip_id: u32,
         legs: &mut Vec<TripLeg>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), AppError> {
         conn.query_drop(
             r"CREATE TABLE IF NOT EXISTS trip_legs_nav_overrides (
                 trip_id        INT UNSIGNED NOT NULL,
@@ -1054,14 +1064,14 @@ impl VesselDatabase {
                 PRIMARY KEY (trip_id, leg_number)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         )
-        .map_err(|e| format!("Failed to ensure trip_legs_nav_overrides table: {}", e))?;
+?;
 
         let rows: Vec<mysql::Row> = conn
             .exec(
                 "SELECT leg_number, nav_start, nav_end FROM trip_legs_nav_overrides WHERE trip_id = :trip_id",
                 mysql::params! { "trip_id" => trip_id },
             )
-            .map_err(|e| format!("Failed to read nav overrides: {}", e))?;
+?;
 
         for row in &rows {
             let leg_num: u32 = get_or_log(row, "leg_number", 0u32, "apply_nav_overrides");
@@ -1086,13 +1096,13 @@ impl VesselDatabase {
         &self,
         conn: &mut mysql::PooledConn,
         trip_id: u32,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
+    ) -> Result<bool, AppError> {
         let count: u32 = conn
             .exec_first(
                 "SELECT COUNT(*) FROM trips WHERE id = :trip_id AND end_timestamp < DATE_SUB(NOW(), INTERVAL 24 HOUR)",
                 mysql::params! { "trip_id" => trip_id },
             )
-            .map_err(|e| format!("trip_is_closed query error: {}", e))?
+?
             .unwrap_or(0);
         Ok(count > 0)
     }
@@ -1101,7 +1111,7 @@ impl VesselDatabase {
         &self,
         conn: &mut mysql::PooledConn,
         trip_id: u32,
-    ) -> Result<Option<TripLegsData>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<TripLegsData>, AppError> {
         conn.query_drop(
             r"CREATE TABLE IF NOT EXISTS trip_legs_cache (
                 trip_id              INT UNSIGNED    NOT NULL,
@@ -1125,7 +1135,7 @@ impl VesselDatabase {
                 PRIMARY KEY (trip_id, leg_number)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         )
-        .map_err(|e| format!("Failed to ensure trip_legs_cache table: {}", e))?;
+?;
         // Best-effort migrations for columns added in later versions.
         // Silently ignored on read-only DB users (trips_viewer).
         for sql in &[
@@ -1155,7 +1165,7 @@ impl VesselDatabase {
                   ORDER BY leg_number",
                 mysql::params! { "trip_id" => trip_id },
             )
-            .map_err(|e| format!("Failed to read trip_legs_cache: {}", e))?;
+?;
 
         if rows.is_empty() {
             return Ok(None);
@@ -1239,7 +1249,7 @@ impl VesselDatabase {
         conn: &mut mysql::PooledConn,
         trip_id: u32,
         legs: &[TripLeg],
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), AppError> {
         if legs.is_empty() {
             return Ok(());
         }
@@ -1275,20 +1285,15 @@ impl VesselDatabase {
                 ]
             }),
         )
-        .map_err(|e| format!("Failed to write trip_legs_cache: {}", e))?;
+?;
         Ok(())
     }
 
     pub fn invalidate_trip_legs_cache(
         &self,
         trip_id: u32,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut conn = self.pool.get_conn().map_err(|e| {
-            format!(
-                "Database connection error (invalidate_trip_legs_cache): {}",
-                e
-            )
-        })?;
+    ) -> Result<(), AppError> {
+        let mut conn = self.pool.get_conn()?;
         conn.query_drop(
             r"CREATE TABLE IF NOT EXISTS trip_legs_cache (
                 trip_id              INT UNSIGNED    NOT NULL,
@@ -1307,22 +1312,22 @@ impl VesselDatabase {
                 PRIMARY KEY (trip_id, leg_number)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         )
-        .map_err(|e| format!("Failed to ensure trip_legs_cache table: {}", e))?;
+?;
         conn.exec_drop(
             "DELETE FROM trip_legs_cache WHERE trip_id = :trip_id",
             mysql::params! { "trip_id" => trip_id },
         )
-        .map_err(|e| format!("Failed to invalidate trip_legs_cache: {}", e))?;
+?;
         Ok(())
     }
 
     /// Populate trip_legs_cache for all closed trips that have no cached legs yet.
     /// Returns the number of trips whose legs were computed and stored.
-    pub fn backfill_trip_legs_cache(&self) -> Result<usize, Box<dyn std::error::Error>> {
+    pub fn backfill_trip_legs_cache(&self) -> Result<usize, AppError> {
         let mut conn = self
             .pool
             .get_conn()
-            .map_err(|e| format!("Database connection error (backfill_trip_legs_cache): {}", e))?;
+?;
 
         let trip_ids: Vec<u32> = conn
             .query(
@@ -1333,7 +1338,7 @@ impl VesselDatabase {
                     )
                   ORDER BY t.id",
             )
-            .map_err(|e| format!("Failed to query uncached trips: {}", e))?;
+?;
 
         let count = trip_ids.len();
         for trip_id in trip_ids {
@@ -1349,11 +1354,11 @@ impl VesselDatabase {
     pub fn fetch_nav_analysis(
         &self,
         trip_id: Option<u32>,
-    ) -> Result<Vec<NavAnalysisRow>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<NavAnalysisRow>, AppError> {
         let mut conn = self
             .pool
             .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+?;
 
         // Ensure overrides table exists (best-effort).
         let _ = conn.query_drop(
@@ -1388,7 +1393,7 @@ impl VesselDatabase {
                   ORDER BY c.trip_id, c.leg_number",
                 mysql::params! { "trip_id" => id },
             )
-            .map_err(|e| format!("nav_analysis query error: {}", e))?
+?
         } else {
             conn.query(
                 r"SELECT
@@ -1406,7 +1411,7 @@ impl VesselDatabase {
                     ON o.trip_id = c.trip_id AND o.leg_number = c.leg_number
                   ORDER BY c.trip_id, c.leg_number",
             )
-            .map_err(|e| format!("nav_analysis query error: {}", e))?
+?
         };
 
         let result = rows
@@ -1456,7 +1461,7 @@ impl VesselDatabase {
         &self,
         conn: &mut mysql::PooledConn,
         trip_id: u32,
-    ) -> Result<TripLegsData, Box<dyn std::error::Error>> {
+    ) -> Result<TripLegsData, AppError> {
         let results: Vec<mysql::Row> = conn
             .exec(
                 r"SELECT
@@ -1475,7 +1480,7 @@ impl VesselDatabase {
              ORDER BY timestamp",
                 mysql::params! { "trip_id" => trip_id },
             )
-            .map_err(|e| format!("Database query error: {}", e))?;
+?;
 
         let mut legs = Vec::new();
         let mut leg_number = 0_u32;
@@ -1558,11 +1563,11 @@ impl VesselDatabase {
         &self,
         start: DateTime<Utc>,
         end: DateTime<Utc>,
-    ) -> Result<TrackAnalytics, Box<dyn std::error::Error>> {
+    ) -> Result<TrackAnalytics, AppError> {
         let mut conn = self
             .pool
             .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+?;
 
         let results: Vec<mysql::Row> = conn
             .exec(
@@ -1584,7 +1589,7 @@ impl VesselDatabase {
                     "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
                 },
             )
-            .map_err(|e| format!("Database query error: {}", e))?;
+?;
 
         if results.is_empty() {
             return Ok(TrackAnalytics {
@@ -1696,7 +1701,7 @@ impl VesselDatabase {
     pub fn fetch_heatmap(
         &self,
         end_date: NaiveDate,
-    ) -> Result<HeatmapData, Box<dyn std::error::Error>> {
+    ) -> Result<HeatmapData, AppError> {
         let end_dt = end_date;
         let start_dt = end_dt - chrono::Duration::days(365);
 
@@ -1712,7 +1717,7 @@ impl VesselDatabase {
         let mut conn = self
             .pool
             .get_conn()
-            .map_err(|e| format!("Database connection error: {}", e))?;
+?;
 
         // Ensure the cache table exists so existing deployments work without a manual migration
         conn.query_drop(
@@ -1721,7 +1726,7 @@ impl VesselDatabase {
                 distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Total sailing distance in nautical miles',
                 PRIMARY KEY (date)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
-        ).map_err(|e| format!("Failed to ensure heatmap_cache table: {}", e))?;
+        )?;
 
         // Step 1: Load already-cached days for [start_dt, cache_end]
         let cached_rows: Vec<mysql::Row> = conn
@@ -1733,7 +1738,7 @@ impl VesselDatabase {
                     "end" => cache_end.to_string(),
                 },
             )
-            .map_err(|e| format!("Database query error (heatmap cache read): {}", e))?;
+?;
 
         let mut day_distances: std::collections::HashMap<String, f64> =
             std::collections::HashMap::new();
@@ -1773,7 +1778,7 @@ impl VesselDatabase {
                         "cache_end" => cache_end.to_string(),
                     },
                 )
-                .map_err(|e| format!("Database query error (heatmap recompute): {}", e))?;
+?;
 
             let mut computed: std::collections::HashMap<String, f64> =
                 std::collections::HashMap::new();
@@ -1806,7 +1811,7 @@ impl VesselDatabase {
                     "INSERT IGNORE INTO heatmap_cache (date, distance_nm) VALUES (?, ?)",
                     rows.iter().map(|(date, dist)| (date.as_str(), *dist)),
                 )
-                .map_err(|e| format!("Failed to write heatmap cache: {}", e))?;
+?;
             }
         }
 
@@ -1820,7 +1825,7 @@ impl VesselDatabase {
                  WHERE DATE(timestamp) = :today AND is_moored = 0",
                     mysql::params! { "today" => &today_str },
                 )
-                .map_err(|e| format!("Database query error (heatmap today): {}", e))?;
+?;
             let dist: f64 = row
                 .and_then(|r| r.get_opt("total_distance").and_then(|v| v.ok()))
                 .unwrap_or(0.0);
@@ -1870,34 +1875,27 @@ impl VesselDatabase {
         &self,
         start_date: NaiveDate,
         end_date: NaiveDate,
-    ) -> Result<(), Box<dyn Error>> {
-        let mut conn = self.pool.get_conn().map_err(|e| {
-            format!(
-                "Database connection error (invalidate heatmap cache): {}",
-                e
-            )
-        })?;
+    ) -> Result<(), AppError> {
+        let mut conn = self.pool.get_conn()?;
         conn.query_drop(
             r"CREATE TABLE IF NOT EXISTS heatmap_cache (
                 date DATE NOT NULL,
                 distance_nm DOUBLE NOT NULL DEFAULT 0,
                 PRIMARY KEY (date)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
-        )
-        .map_err(|e| format!("Failed to ensure heatmap_cache table: {}", e))?;
+        )?;
         conn.exec_drop(
             "DELETE FROM heatmap_cache WHERE date BETWEEN :start AND :end",
             mysql::params! {
                 "start" => start_date.format("%Y-%m-%d").to_string(),
                 "end"   => end_date.format("%Y-%m-%d").to_string(),
             },
-        )
-        .map_err(|e| format!("Failed to invalidate heatmap cache: {}", e))?;
+        )?;
         Ok(())
     }
 
     /// Get system status (tracking and metrics enabled/disabled state)
-    pub fn get_system_status(&self, key: &str) -> Result<bool, Box<dyn Error>> {
+    pub fn get_system_status(&self, key: &str) -> Result<bool, AppError> {
         let cache = self
             .system_status_cache
             .lock()
@@ -1910,7 +1908,7 @@ impl VesselDatabase {
     }
 
     /// Set system status (tracking and metrics enabled/disabled state)
-    pub fn set_system_status(&self, key: &str, value: bool) -> Result<(), Box<dyn Error>> {
+    pub fn set_system_status(&self, key: &str, value: bool) -> Result<(), AppError> {
         let mut conn = self.pool.get_conn()?;
         let value_str = if value { "1" } else { "0" };
 
@@ -1934,7 +1932,7 @@ impl VesselDatabase {
     }
 
     /// Write an arbitrary string value to system_status without touching the bool cache.
-    pub fn set_system_status_string(&self, key: &str, value: &str) -> Result<(), Box<dyn Error>> {
+    pub fn set_system_status_string(&self, key: &str, value: &str) -> Result<(), AppError> {
         let mut conn = self.pool.get_conn()?;
         conn.exec_drop(
             "INSERT INTO system_status (status_key, status_value) VALUES (:key, :value) ON DUPLICATE KEY UPDATE status_value = :value",
@@ -1944,7 +1942,7 @@ impl VesselDatabase {
     }
 
     /// Read an arbitrary string value from system_status. Returns None if the key is absent.
-    pub fn get_system_status_string(&self, key: &str) -> Result<Option<String>, Box<dyn Error>> {
+    pub fn get_system_status_string(&self, key: &str) -> Result<Option<String>, AppError> {
         let mut conn = self.pool.get_conn()?;
         let row: Option<String> = conn.exec_first(
             "SELECT status_value FROM system_status WHERE status_key = :key",

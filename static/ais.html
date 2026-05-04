@@ -481,8 +481,37 @@
             });
         });
 
+        async function loadInitialTargets() {
+            try {
+                const resp = await fetch('/api/ais_targets');
+                const data = await resp.json();
+                if (data.status === 'ok' && data.data) {
+                    data.data.forEach(t => {
+                        if (targets.has(t.mmsi)) return;
+                        const target = new AisTarget(t.mmsi);
+                        target.updated = t.last_seen;
+                        if (t.name) target.name = t.name;
+                        if (t.callsign) target.callsign = t.callsign;
+                        if (t.ship_type !== null && t.ship_type !== undefined) target.type = t.ship_type;
+                        if (t.ais_class) target.aisClass = t.ais_class;
+                        if (t.latitude !== null && t.latitude !== undefined) target.latitude = t.latitude;
+                        if (t.longitude !== null && t.longitude !== undefined) target.longitude = t.longitude;
+                        if (t.sog !== null && t.sog !== undefined) target.sog = t.sog * 1.94384;
+                        if (t.cog !== null && t.cog !== undefined) target.cog = t.cog * 180 / Math.PI;
+                        if (t.heading !== null && t.heading !== undefined) target.heading = t.heading * 180 / Math.PI;
+                        if (t.nav_status) target.navStatus = t.nav_status;
+                        targets.set(t.mmsi, target);
+                    });
+                    renderTable();
+                }
+            } catch (e) {
+                console.error('Failed to load initial AIS targets:', e);
+            }
+        }
+
         // Initialize
         initializeTheme();
+        loadInitialTargets();
         connectWebSocket();
 
         // Cleanup on page unload

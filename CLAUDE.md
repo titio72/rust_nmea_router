@@ -9,6 +9,14 @@ For trip data analysis, modification protocols, and entity relationships see [DB
 
 ---
 
+## Directories
+
+```
+doc/    # All the documentation goes here. Only docs relevant to agents are in the root, like README.md, DB_ANALYST.md, and CLAUDE.md.
+```
+
+---
+
 ## Build & Run
 
 ```bash

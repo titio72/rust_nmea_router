@@ -440,7 +440,7 @@ impl Default for EnvironmentalConfig {
 impl Config {
     /// Load configuration from a JSON file
     /// In test mode, loads test_config.json instead of config.json if no path specified
-    fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+    fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, crate::error::AppError> {
         let contents = fs::read_to_string(path)?;
         let mut config: Config = serde_json::from_str(&contents)?;
         config.validate_and_fix()?;
@@ -456,8 +456,7 @@ impl Config {
         } else {
             "/etc/nmea_router/config.json".to_string()
         };
-        let mut config = Self::from_file(&resolved)
-            .map_err(|e| crate::error::AppError::Configuration(e.to_string()))?;
+        let mut config = Self::from_file(&resolved)?;
         config.apply_env_overrides();
         Ok(config)
     }
@@ -467,16 +466,17 @@ impl Config {
     #[cfg(test)]
     pub fn load_for_context(_config_path: Option<&str>) -> Result<Self, crate::error::AppError> {
         Self::from_file("test_config.json")
-            .map_err(|e| crate::error::AppError::Configuration(e.to_string()))
     }
 
     /// Validate configuration and fix invalid values by reverting to defaults
     /// Returns an error if CAN interface is invalid (unrecoverable)
-    fn validate_and_fix(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    fn validate_and_fix(&mut self) -> Result<(), crate::error::AppError> {
         // Validate CAN interface only when CAN is enabled
         if self.can.enabled {
             if self.can.interface.is_empty() {
-                return Err("Configuration error: CAN interface cannot be empty".into());
+                return Err(crate::error::AppError::Configuration(
+                    "CAN interface cannot be empty".to_string(),
+                ));
             }
             if !self
                 .can
@@ -484,7 +484,10 @@ impl Config {
                 .chars()
                 .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
             {
-                return Err(format!("Configuration error: Invalid CAN interface name '{}'. Must contain only alphanumeric characters, underscores, or hyphens.", self.can.interface).into());
+                return Err(crate::error::AppError::Configuration(format!(
+                    "Invalid CAN interface name '{}'. Must contain only alphanumeric characters, underscores, or hyphens.",
+                    self.can.interface
+                )));
             }
         }
 

@@ -15,11 +15,12 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
     sync::RwLock,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn, Span};
 
+use crate::ais_target_cache::{AisTargetData, get_ais_target_cache};
 use crate::config::Config;
 use crate::db::{
     HeatmapData, MultiMetricData, NavAnalysisRow, SpeedDistributionData, TrackAnalytics,
@@ -1439,6 +1440,21 @@ pub async fn get_nav_analysis(
     }
 }
 
+pub async fn get_ais_targets(
+    State(_state): State<AppState>,
+) -> Json<ApiResponse<Vec<AisTargetData>>> {
+    let cache = get_ais_target_cache();
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let result = match cache.lock() {
+        Ok(c) => Json(ApiResponse::ok(c.get_recent(now_ms))),
+        Err(_) => Json(ApiResponse::error("Cache unavailable".to_string())),
+    };
+    result
+}
+
 pub fn create_api_router(state: AppState) -> Router {
     let read_only = state.config.web.read_only;
 
@@ -1456,6 +1472,7 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/monthly_statistics", get(get_monthly_statistics))
         .route("/heatmap", get(get_heatmap))
         .route("/nav_analysis", get(get_nav_analysis))
+        .route("/ais_targets", get(get_ais_targets))
         .route("/config/google_maps_key", get(get_google_maps_key))
         .route("/config/read_only", get(get_read_only))
         .route("/sync/status", get(get_sync_status))
@@ -2430,6 +2447,104 @@ mod tests {
             json["error"].as_str().unwrap().contains("not found"),
             "Error message should indicate trip not found"
         );
+    }
+
+    // ---- AIS target cache endpoint tests ----
+    // These do not require a database — get_ais_targets reads only the in-memory cache.
+
+    #[tokio::test]
+    async fn test_get_ais_targets_empty_cache() {
+        let app = create_test_app();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ais_targets")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["status"], "ok");
+        assert!(json["data"].is_array());
+        assert!(json["error"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_get_ais_targets_returns_cached_entry() {
+        use crate::ais_target_cache::get_ais_target_cache;
+        use nmea2k::{MessageHandler, N2kFrame, Identifier, pgns::{N2kMessage, AisClassAStaticData}};
+        use socketcan::ExtendedId;
+
+        // Pre-populate the global cache with a recognisable entry
+        const TEST_MMSI: u32 = 999000001;
+        {
+            let cache = get_ais_target_cache();
+            let mut c = cache.lock().unwrap();
+            let frame = N2kFrame {
+                identifier: Identifier::from_can_id(ExtendedId::new(0).unwrap()),
+                message: N2kMessage::AisClassAStaticData(AisClassAStaticData {
+                    pgn: 129794,
+                    message_id: 5,
+                    repeat_indicator: 0,
+                    mmsi: TEST_MMSI,
+                    imo_number: 0,
+                    callsign: "TESTCS".to_string(),
+                    name: "TEST VESSEL".to_string(),
+                    type_of_ship: 70,
+                    length_raw: 0,
+                    beam_raw: 0,
+                    position_ref_starboard: 0,
+                    position_ref_bow: 0,
+                    eta_date: 0,
+                    eta_time: 0,
+                    draft_raw: 0,
+                    destination: String::new(),
+                    ais_version: 0,
+                    gnss_type: 0,
+                    dte: false,
+                    eta_date_time: None,
+                    class: "A".to_string(),
+                }),
+                is_fast_packet: false,
+                data: vec![],
+            };
+            c.handle_message(&frame, std::time::Instant::now());
+        }
+
+        let app = create_test_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ais_targets")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["status"], "ok");
+        let targets = json["data"].as_array().unwrap();
+
+        let entry = targets.iter().find(|t| t["mmsi"] == TEST_MMSI);
+        assert!(entry.is_some(), "TEST_MMSI {TEST_MMSI} should be in the response");
+        let entry = entry.unwrap();
+        assert_eq!(entry["name"], "TEST VESSEL");
+        assert_eq!(entry["callsign"], "TESTCS");
+        assert_eq!(entry["ship_type"], 70);
+        assert_eq!(entry["ais_class"], "A");
+        assert!(entry["last_seen"].is_number());
     }
 
     // ---- Seeded integration tests (require test_config.json + live test DB) ----

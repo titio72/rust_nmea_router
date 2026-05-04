@@ -1,5 +1,5 @@
 use crate::db::types::VesselDatabase;
-use std::error::Error;
+use crate::error::AppError;
 use mysql::params;
 use tracing::info;
 use mysql::prelude::Queryable;
@@ -100,7 +100,7 @@ struct ExportData {
 // Converts a mysql::Value::Date (returned for DATETIME(3) columns via prepared
 // statements) to an ISO-8601 UTC string without calling DATE_FORMAT in SQL.
 // Also handles Value::Bytes for the text-protocol fallback path.
-fn mysql_datetime_to_iso(val: &mysql::Value) -> Result<String, Box<dyn Error>> {
+fn mysql_datetime_to_iso(val: &mysql::Value) -> Result<String, AppError> {
     match val {
         mysql::Value::Date(year, month, day, hour, minute, second, micros) => {
             let millis = *micros / 1000;
@@ -114,13 +114,16 @@ fn mysql_datetime_to_iso(val: &mysql::Value) -> Result<String, Box<dyn Error>> {
             let s = std::str::from_utf8(b)?;
             Ok(s.replacen(' ', "T", 1) + "Z")
         }
-        other => Err(format!("Unexpected MySQL value type for timestamp: {:?}", other).into()),
+        other => Err(AppError::Database(format!(
+            "Unexpected MySQL value type for timestamp: {:?}",
+            other
+        ))),
     }
 }
 
 impl VesselDatabase {
     /// Serialize a trip and all its data to a compact JSON string (same format as export_trip).
-    pub fn export_trip_to_string(&self, trip_id: i64) -> Result<String, Box<dyn Error>> {
+    pub fn export_trip_to_string(&self, trip_id: i64) -> Result<String, AppError> {
         let mut conn = self.pool.get_conn()?;
 
         // Step 1: Fetch the trip record.
@@ -135,17 +138,17 @@ impl VesselDatabase {
             params! { "id" => trip_id },
         )?;
 
-        let trip_row = trip_row.ok_or("Trip not found")?;
+        let trip_row = trip_row.ok_or(AppError::Database("Trip not found".to_string()))?;
 
-        let trip_id_fetched: i64    = trip_row.get(0).ok_or("Missing id")?;
-        let start_ts: mysql::Value  = trip_row.get(1).ok_or("Missing start_timestamp")?;
-        let end_ts: mysql::Value    = trip_row.get(2).ok_or("Missing end_timestamp")?;
-        let description: String     = trip_row.get(3).ok_or("Missing description")?;
-        let total_distance_sailed:   f64 = trip_row.get(4).ok_or("Missing total_distance_sailed")?;
-        let total_distance_motoring: f64 = trip_row.get(5).ok_or("Missing total_distance_motoring")?;
-        let total_time_sailing:  u64 = trip_row.get(6).ok_or("Missing total_time_sailing")?;
-        let total_time_motoring: u64 = trip_row.get(7).ok_or("Missing total_time_motoring")?;
-        let total_time_moored:   u64 = trip_row.get(8).ok_or("Missing total_time_moored")?;
+        let trip_id_fetched: i64    = trip_row.get(0).ok_or(AppError::Database("Missing id".to_string()))?;
+        let start_ts: mysql::Value  = trip_row.get(1).ok_or(AppError::Database("Missing start_timestamp".to_string()))?;
+        let end_ts: mysql::Value    = trip_row.get(2).ok_or(AppError::Database("Missing end_timestamp".to_string()))?;
+        let description: String     = trip_row.get(3).ok_or(AppError::Database("Missing description".to_string()))?;
+        let total_distance_sailed:   f64 = trip_row.get(4).ok_or(AppError::Database("Missing total_distance_sailed".to_string()))?;
+        let total_distance_motoring: f64 = trip_row.get(5).ok_or(AppError::Database("Missing total_distance_motoring".to_string()))?;
+        let total_time_sailing:  u64 = trip_row.get(6).ok_or(AppError::Database("Missing total_time_sailing".to_string()))?;
+        let total_time_motoring: u64 = trip_row.get(7).ok_or(AppError::Database("Missing total_time_motoring".to_string()))?;
+        let total_time_moored:   u64 = trip_row.get(8).ok_or(AppError::Database("Missing total_time_moored".to_string()))?;
         let trip_uuid: Option<String> = trip_row.get(9).unwrap_or(None);
 
         let start_ts_str = mysql_datetime_to_iso(&start_ts)?;
@@ -165,7 +168,7 @@ impl VesselDatabase {
         let end_em   = end_ts.clone();
 
         let (vs_result, em_result) = std::thread::scope(|s| {
-            let vs = s.spawn(move || -> Result<Vec<mysql::Row>, Box<dyn std::error::Error + Send + Sync>> {
+            let vs = s.spawn(move || -> Result<Vec<mysql::Row>, AppError> {
                 let mut conn = pool_vs.get_conn()?;
                 Ok(conn.exec(
                     "SELECT timestamp, latitude, longitude, average_speed_kn, max_speed_kn,
@@ -179,7 +182,7 @@ impl VesselDatabase {
                 )?)
             });
 
-            let em = s.spawn(move || -> Result<Vec<mysql::Row>, Box<dyn std::error::Error + Send + Sync>> {
+            let em = s.spawn(move || -> Result<Vec<mysql::Row>, AppError> {
                 let mut conn = pool_em.get_conn()?;
                 Ok(conn.exec(
                     "SELECT timestamp, metric_id, value_avg, value_max, value_min, unit
@@ -194,26 +197,24 @@ impl VesselDatabase {
         });
 
         let vessel_rows = vs_result
-            .map_err(|_| -> Box<dyn Error> { "vessel_status query thread panicked".into() })?
-            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+            .map_err(|_| AppError::Database("vessel_status query thread panicked".to_string()))??;
         let env_rows = em_result
-            .map_err(|_| -> Box<dyn Error> { "environmental_data query thread panicked".into() })?
-            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+            .map_err(|_| AppError::Database("environmental_data query thread panicked".to_string()))??;
 
         // Step 4: Map raw rows into typed structs.
         // Struct serialization via serde avoids allocating a serde_json::Value
         // node for every field of every row.
         let mut vessel_statuses: Vec<ExportVesselStatus> = Vec::with_capacity(vessel_rows.len());
         for row in vessel_rows {
-            let ts_val: mysql::Value = row.get(0).ok_or("Missing timestamp in vessel_status")?;
+            let ts_val: mysql::Value = row.get(0).ok_or(AppError::Database("Missing timestamp in vessel_status".to_string()))?;
             vessel_statuses.push(ExportVesselStatus {
                 timestamp:              mysql_datetime_to_iso(&ts_val)?,
                 latitude:               row.get_opt(1).and_then(|v| v.ok()).flatten(),
                 longitude:              row.get_opt(2).and_then(|v| v.ok()).flatten(),
                 average_speed_kn:       row.get_opt(3).and_then(|v| v.ok()).flatten(),
                 max_speed_kn:           row.get_opt(4).and_then(|v| v.ok()).flatten(),
-                is_moored:              row.get(5).ok_or("Missing is_moored")?,
-                engine_on:              row.get(6).ok_or("Missing engine_on")?,
+                is_moored:              row.get(5).ok_or(AppError::Database("Missing is_moored".to_string()))?,
+                engine_on:              row.get(6).ok_or(AppError::Database("Missing engine_on".to_string()))?,
                 total_distance_nm:      row.get_opt(7).and_then(|v| v.ok()).flatten(),
                 total_time_ms:          row.get_opt(8).and_then(|v| v.ok()).flatten(),
                 average_wind_speed_kn:  row.get_opt(9).and_then(|v| v.ok()).flatten(),
@@ -225,10 +226,10 @@ impl VesselDatabase {
 
         let mut env_metrics: Vec<ExportEnvMetric> = Vec::with_capacity(env_rows.len());
         for row in env_rows {
-            let ts_val: mysql::Value = row.get(0).ok_or("Missing timestamp in environmental_data")?;
+            let ts_val: mysql::Value = row.get(0).ok_or(AppError::Database("Missing timestamp in environmental_data".to_string()))?;
             env_metrics.push(ExportEnvMetric {
                 timestamp: mysql_datetime_to_iso(&ts_val)?,
-                metric_id: row.get(1).ok_or("Missing metric_id")?,
+                metric_id: row.get(1).ok_or(AppError::Database("Missing metric_id".to_string()))?,
                 value_avg: row.get_opt(2).and_then(|v| v.ok()).flatten(),
                 value_max: row.get_opt(3).and_then(|v| v.ok()).flatten(),
                 value_min: row.get_opt(4).and_then(|v| v.ok()).flatten(),
@@ -260,7 +261,7 @@ impl VesselDatabase {
         Ok(serde_json::to_string(&export_data)?)
     }
 
-    pub fn export_trip<P: AsRef<std::path::Path>>(&self, trip_id: i64, output_path: P) -> Result<(), Box<dyn Error>> {
+    pub fn export_trip<P: AsRef<std::path::Path>>(&self, trip_id: i64, output_path: P) -> Result<(), AppError> {
         use std::fs::File;
         use std::io::BufWriter;
 
@@ -282,7 +283,7 @@ impl VesselDatabase {
         Ok(())
     }
 
-    pub fn import_trip(&self, json_data: &str) -> Result<i64, Box<dyn Error>> {
+    pub fn import_trip(&self, json_data: &str) -> Result<i64, AppError> {
         use serde_json::Value;
         
         let json: Value = serde_json::from_str(json_data)?;
@@ -292,27 +293,27 @@ impl VesselDatabase {
         let env_metrics = &json["em"];
         
         let description = trip["desc"].as_str()
-            .ok_or("Missing or invalid trip.desc")?;
+            .ok_or(AppError::Database("Missing or invalid trip.desc".to_string()))?;
         let start_ts_str = trip["start"].as_str()
-            .ok_or("Missing or invalid trip.start")?;
+            .ok_or(AppError::Database("Missing or invalid trip.start".to_string()))?;
         let end_ts_str = trip["end"].as_str()
-            .ok_or("Missing or invalid trip.end")?;
+            .ok_or(AppError::Database("Missing or invalid trip.end".to_string()))?;
         let total_distance_sailed = trip["dist_sail"].as_f64()
-            .ok_or("Missing or invalid trip.dist_sail")?;
+            .ok_or(AppError::Database("Missing or invalid trip.dist_sail".to_string()))?;
         let total_distance_motoring = trip["dist_motor"].as_f64()
-            .ok_or("Missing or invalid trip.dist_motor")?;
+            .ok_or(AppError::Database("Missing or invalid trip.dist_motor".to_string()))?;
         let total_time_sailing = trip["t_sail"].as_u64()
-            .ok_or("Missing or invalid trip.t_sail")?;
+            .ok_or(AppError::Database("Missing or invalid trip.t_sail".to_string()))?;
         let total_time_motoring = trip["t_motor"].as_u64()
-            .ok_or("Missing or invalid trip.t_motor")?;
+            .ok_or(AppError::Database("Missing or invalid trip.t_motor".to_string()))?;
         let total_time_moored = trip["t_moor"].as_u64()
-            .ok_or("Missing or invalid trip.t_moor")?;
+            .ok_or(AppError::Database("Missing or invalid trip.t_moor".to_string()))?;
         let import_uuid: Option<&str> = trip["uuid"].as_str();
         
         let mut conn = self.pool.get_conn()?;
         
         let new_trip_start = chrono::DateTime::parse_from_rfc3339(start_ts_str)
-            .map_err(|e| format!("Invalid start_timestamp format: {}", e))?;
+            .map_err(|e| AppError::Database(format!("Invalid start_timestamp format: {}", e)))?;
 
         if let Some(uuid) = import_uuid {
             // UUID present: if a trip with this UUID already exists, delete it first (replace semantics)
@@ -333,10 +334,10 @@ impl VesselDatabase {
                 },
             )?;
             if let Some((existing_id, existing_end_ts)) = overlapping_trip {
-                return Err(format!(
+                return Err(AppError::Database(format!(
                     "Trip overlaps with existing trip ID {}. Existing trip ends at {}, new trip starts at {}",
                     existing_id, existing_end_ts, start_ts_str
-                ).into());
+                )));
             }
         }
 
@@ -369,19 +370,19 @@ impl VesselDatabase {
             },
         )?;
         
-        let new_trip_id = tx.last_insert_id().ok_or("Failed to get inserted trip ID")? as i64;
+        let new_trip_id = tx.last_insert_id().ok_or(AppError::Database("Failed to get inserted trip ID".to_string()))? as i64;
         
         // Insert vessel statuses
         if let Some(statuses) = vessel_statuses.as_array() {
             for status in statuses {
                 let timestamp = status["ts"].as_str()
-                    .ok_or("Missing ts in vessel_status")?;
+                    .ok_or(AppError::Database("Missing ts in vessel_status".to_string()))?;
                 let latitude = status["lat"].as_f64();
                 let longitude = status["lon"].as_f64();
                 let avg_speed = status["sog"].as_f64();
                 let max_speed = status["sog_max"].as_f64();
                 let is_moored = status["moor"].as_bool()
-                    .ok_or("Missing moor in vessel_status")?;
+                    .ok_or(AppError::Database("Missing moor in vessel_status".to_string()))?;
                 let engine_on: u8 = match &status["eng"] {
                     v if v.is_boolean() => if v.as_bool().unwrap_or(false) { 1 } else { 0 },
                     v if v.is_u64() => v.as_u64().unwrap_or(2) as u8,
@@ -423,9 +424,9 @@ impl VesselDatabase {
         if let Some(metrics) = env_metrics.as_array() {
             for metric in metrics {
                 let timestamp = metric["ts"].as_str()
-                    .ok_or("Missing ts in environmental_data")?;
+                    .ok_or(AppError::Database("Missing ts in environmental_data".to_string()))?;
                 let metric_id = metric["mid"].as_u64()
-                    .ok_or("Missing mid in environmental_data")? as u8;
+                    .ok_or(AppError::Database("Missing mid in environmental_data".to_string()))? as u8;
                 let value_avg = metric["avg"].as_f64().map(|v| v as f32);
                 let value_max = metric["max"].as_f64().map(|v| v as f32);
                 let value_min = metric["min"].as_f64().map(|v| v as f32);
@@ -455,7 +456,7 @@ impl VesselDatabase {
         // fetch_heatmap() recomputes those days from the newly inserted vessel_status rows.
         let trip_start_date = new_trip_start.date_naive();
         let trip_end_date = chrono::DateTime::parse_from_rfc3339(end_ts_str)
-            .map_err(|e| format!("Invalid end_timestamp format: {}", e))?
+            .map_err(|e| AppError::Database(format!("Invalid end_timestamp format: {}", e)))?
             .date_naive();
         self.invalidate_heatmap_cache(trip_start_date, trip_end_date)?;
 

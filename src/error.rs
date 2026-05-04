@@ -33,3 +33,33 @@ impl AppError {
         }
     }
 }
+
+impl From<mysql::Error> for AppError {
+    fn from(e: mysql::Error) -> Self {
+        AppError::Database(e.to_string())
+    }
+}
+
+impl From<std::io::Error> for AppError {
+    fn from(e: std::io::Error) -> Self {
+        AppError::Io(e.to_string())
+    }
+}
+
+impl From<serde_json::Error> for AppError {
+    fn from(e: serde_json::Error) -> Self {
+        AppError::Io(e.to_string())
+    }
+}
+
+impl From<chrono::ParseError> for AppError {
+    fn from(e: chrono::ParseError) -> Self {
+        AppError::Database(e.to_string())
+    }
+}
+
+impl From<std::str::Utf8Error> for AppError {
+    fn from(e: std::str::Utf8Error) -> Self {
+        AppError::Database(e.to_string())
+    }
+}

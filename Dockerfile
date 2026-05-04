@@ -18,6 +18,6 @@ WORKDIR /opt/trips_viewer
 COPY --from=builder /app/target/release/nmea_router /usr/local/bin/nmea_router
 COPY static/ ./static/
 COPY pgns.json .
-COPY deploy/config.template.json /etc/nmea_router/config.json
+COPY deploy_trips_viewer/config.template.json /etc/nmea_router/config.json
 
 CMD ["nmea_router"]

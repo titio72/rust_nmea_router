@@ -10,7 +10,7 @@ use crate::utilities::{dirty_instant_to_systemtime, EngineStatus};
 use chrono::NaiveDateTime;
 use mysql::params;
 use mysql::prelude::Queryable;
-use std::error::Error;
+use crate::error::AppError;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// A detected gap between two consecutive vessel_status records.
@@ -30,7 +30,7 @@ pub struct Gap {
 
 // ---- Row parsing helpers --------------------------------------------------
 
-fn parse_systemtime(s: &str) -> Result<SystemTime, Box<dyn Error>> {
+fn parse_systemtime(s: &str) -> Result<SystemTime, AppError> {
     let clean = s.trim_end_matches('Z');
     // Accept both "YYYY-MM-DDTHH:MM:SS.fff" and "YYYY-MM-DD HH:MM:SS.fff"
     let dt = NaiveDateTime::parse_from_str(clean, "%Y-%m-%dT%H:%M:%S%.f")
@@ -39,10 +39,10 @@ fn parse_systemtime(s: &str) -> Result<SystemTime, Box<dyn Error>> {
     Ok(SystemTime::from(utc))
 }
 
-fn systemtime_to_instant(st: SystemTime) -> Result<std::time::Instant, Box<dyn std::error::Error>> {
+fn systemtime_to_instant(st: SystemTime) -> Result<std::time::Instant, AppError> {
     let elapsed = st
         .elapsed()
-        .map_err(|e| format!("Timestamp is in the future (clock skew?): {}", e))?;
+        .map_err(|e| AppError::Database(format!("Timestamp is in the future (clock skew?): {}", e)))?;
     Ok(std::time::Instant::now() - elapsed)
 }
 
@@ -65,7 +65,7 @@ impl VesselDatabase {
         from: SystemTime,
         to: SystemTime,
         threshold: Duration,
-    ) -> Result<Vec<Gap>, Box<dyn Error>> {
+    ) -> Result<Vec<Gap>, AppError> {
         let mut conn = self.pool.get_conn()?;
 
         let from_str = systemtime_to_mysql_str(from);
@@ -106,8 +106,8 @@ impl VesselDatabase {
         let mut prev: Option<PrevRow> = None;
 
         for row in rows {
-            let id: i64 = row.get("id").ok_or("missing id")?;
-            let ts_str: String = row.get("ts").ok_or("missing ts")?;
+            let id: i64 = row.get("id").ok_or(AppError::Database("missing id".to_string()))?;
+            let ts_str: String = row.get("ts").ok_or(AppError::Database("missing ts".to_string()))?;
             let ts = parse_systemtime(&ts_str)?;
             let lat: Option<f64> = row.get("latitude");
             let lon: Option<f64> = row.get("longitude");
@@ -181,7 +181,7 @@ impl VesselDatabase {
     }
 
     /// Delete a single vessel_status record by id.
-    pub fn delete_vessel_status_by_id(&self, id: i64) -> Result<(), Box<dyn Error>> {
+    pub fn delete_vessel_status_by_id(&self, id: i64) -> Result<(), AppError> {
         let mut conn = self.pool.get_conn()?;
         conn.exec_drop(
             "DELETE FROM vessel_status WHERE id = :id",
@@ -194,7 +194,7 @@ impl VesselDatabase {
     pub fn insert_synthetic_vessel_status(
         &self,
         op: &VesselStatusOperation,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), AppError> {
         let mut conn = self.pool.get_conn()?;
 
         let timestamp =
@@ -234,7 +234,7 @@ impl VesselDatabase {
         &self,
         gap_start: SystemTime,
         gap_end: SystemTime,
-    ) -> Result<Option<Trip>, Box<dyn Error>> {
+    ) -> Result<Option<Trip>, AppError> {
         let mut conn = self.pool.get_conn()?;
 
         let start_str = systemtime_to_mysql_str(gap_start);
@@ -254,25 +254,25 @@ impl VesselDatabase {
         )?;
 
         if let Some(mut row) = row {
-            let id: i64 = row.take("id").ok_or("missing id")?;
-            let description: String = row.take("description").ok_or("missing description")?;
-            let start_ts: String = row.take("start_ts").ok_or("missing start_ts")?;
-            let end_ts: String = row.take("end_ts").ok_or("missing end_ts")?;
+            let id: i64 = row.take("id").ok_or(AppError::Database("missing id".to_string()))?;
+            let description: String = row.take("description").ok_or(AppError::Database("missing description".to_string()))?;
+            let start_ts: String = row.take("start_ts").ok_or(AppError::Database("missing start_ts".to_string()))?;
+            let end_ts: String = row.take("end_ts").ok_or(AppError::Database("missing end_ts".to_string()))?;
             let total_distance_sailed: f64 = row
                 .take("total_distance_sailed")
-                .ok_or("missing total_distance_sailed")?;
+                .ok_or(AppError::Database("missing total_distance_sailed".to_string()))?;
             let total_distance_motoring: f64 = row
                 .take("total_distance_motoring")
-                .ok_or("missing total_distance_motoring")?;
+                .ok_or(AppError::Database("missing total_distance_motoring".to_string()))?;
             let total_time_sailing: u64 = row
                 .take("total_time_sailing")
-                .ok_or("missing total_time_sailing")?;
+                .ok_or(AppError::Database("missing total_time_sailing".to_string()))?;
             let total_time_motoring: u64 = row
                 .take("total_time_motoring")
-                .ok_or("missing total_time_motoring")?;
+                .ok_or(AppError::Database("missing total_time_motoring".to_string()))?;
             let total_time_moored: u64 = row
                 .take("total_time_moored")
-                .ok_or("missing total_time_moored")?;
+                .ok_or(AppError::Database("missing total_time_moored".to_string()))?;
             let uuid: Option<String> = row.take("uuid").unwrap_or(None);
 
             let start_ts_clean = start_ts.trim_end_matches('Z');
@@ -308,7 +308,7 @@ impl VesselDatabase {
         trip_id: i64,
         trip_start: SystemTime,
         trip_end: SystemTime,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), AppError> {
         let mut conn = self.pool.get_conn()?;
         let mut tx = conn.start_transaction(mysql::TxOpts::default())?;
 

@@ -53,7 +53,7 @@ impl UdpBroadcaster {
     /// # Returns
     /// * `Ok(Self)` - Broadcaster created successfully (or disabled)
     /// * `Err(String)` - Socket creation failed when enabled
-    pub fn new(destination: String, bind_address: String, enabled: bool) -> Result<Self, String> {
+    pub fn new(destination: String, bind_address: String, enabled: bool) -> Result<Self, crate::error::AppError> {
         let socket = if enabled {
             match Self::create_socket(&destination, &bind_address) {
                 Ok(sock) => {
@@ -64,10 +64,10 @@ impl UdpBroadcaster {
                     Some(sock)
                 }
                 Err(e) => {
-                    return Err(format!(
+                    return Err(crate::error::AppError::Io(format!(
                         "Failed to bind UDP socket to {}: {}",
                         bind_address, e
-                    ));
+                    )));
                 }
             }
         } else {

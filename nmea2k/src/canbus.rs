@@ -7,10 +7,10 @@ pub use crate::stream_reader::N2kFrame;
 const CAN_CONNECTION_RETRY_INTERVAL_SECS: u64 = 5; // Interval between CAN connection retries
 
 /// Opens a CAN socket with automatic retry on failure
-/// 
+///
 /// # Arguments
 /// * `interface` - Name of the CAN interface (e.g., "can0", "vcan0")
-/// 
+///
 /// # Returns
 /// A connected CanSocket
 pub fn open_can_socket_with_retry(interface: &str) -> CanSocket {
@@ -22,7 +22,10 @@ pub fn open_can_socket_with_retry(interface: &str) -> CanSocket {
             }
             Err(e) => {
                 warn!("Failed to open CAN interface '{}': {}", interface, e);
-                warn!("Retrying in {} seconds...", CAN_CONNECTION_RETRY_INTERVAL_SECS);
+                warn!(
+                    "Retrying in {} seconds...",
+                    CAN_CONNECTION_RETRY_INTERVAL_SECS
+                );
                 std::thread::sleep(Duration::from_secs(CAN_CONNECTION_RETRY_INTERVAL_SECS));
             }
         }
@@ -30,10 +33,10 @@ pub fn open_can_socket_with_retry(interface: &str) -> CanSocket {
 }
 
 /// Configures a CAN socket with NMEA2000-specific settings
-/// 
+///
 /// # Arguments
 /// * `socket` - The CAN socket to configure
-/// 
+///
 /// # Returns
 /// Result indicating success or failure
 pub fn configure_nmea2k_socket(socket: &mut CanSocket) -> Result<(), Box<dyn Error>> {
@@ -44,39 +47,41 @@ pub fn configure_nmea2k_socket(socket: &mut CanSocket) -> Result<(), Box<dyn Err
 }
 
 /// Reads a CAN frame and converts it to NMEA2000 extended ID format
-/// 
+///
 /// # Arguments
 /// * `socket` - The CAN socket to read from
-/// 
+///
 /// # Returns
 /// Result containing the extended ID and data, or an error
 pub fn read_nmea2k_frame(socket: &CanSocket) -> Result<(ExtendedId, Vec<u8>), std::io::Error> {
     let frame = socket.read_frame()?;
-    
+
     // NMEA2000 uses 29-bit extended CAN identifiers
     let can_id = frame.can_id();
-    let extended_id = ExtendedId::new(can_id.as_raw())
-        .ok_or_else(|| std::io::Error::new(
+    let extended_id = ExtendedId::new(can_id.as_raw()).ok_or_else(|| {
+        std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "Invalid CAN ID for NMEA2000"
-        ))?;
-    
+            "Invalid CAN ID for NMEA2000",
+        )
+    })?;
+
     let data = frame.data().to_vec();
-    
+
     Ok((extended_id, data))
 }
 
 #[cfg(test)]
 mod tests {
-    
+
     #[test]
     fn test_configure_socket_sets_timeout() {
         // Note: This test requires a virtual CAN interface
         // Run: sudo modprobe vcan && sudo ip link add dev vcan0 type vcan && sudo ip link set up vcan0
         // For CI/CD, this test should be conditional or mocked
-        
+
         // We can't easily test this without a real/virtual CAN interface
         // but we can at least verify the function exists and has the right signature
+        // @TODO: Consider using a mock CAN socket for more thorough testing
         assert!(true);
     }
 }

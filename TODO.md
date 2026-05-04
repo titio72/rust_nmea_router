@@ -13,17 +13,6 @@ A fixed `thread::sleep(500ms)` stalls message processing during recovery. Replac
 
 ---
 
-## Architecture
-
-### Consistent error hierarchy
-**File**: throughout
-
-The codebase mixes `Box<dyn Error>`, inline `format!()` strings promoted to errors, and direct panics. Consider defining a typed `AppError` enum for the three main failure domains (Database, Io, Configuration) to make error propagation explicit and enable structured logging.
-
----
-
----
-
 ## Test Coverage
 
 ### Error path tests
