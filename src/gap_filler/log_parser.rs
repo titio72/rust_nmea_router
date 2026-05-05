@@ -242,7 +242,7 @@ pub fn read_entries_in_range(
     }
 
     // Ensure entries are sorted by timestamp (files may overlap slightly near boundaries)
-    entries.sort_by(|a, b| a.timestamp().cmp(&b.timestamp()));
+    entries.sort_by_key(|a| a.timestamp());
     entries
 }
 

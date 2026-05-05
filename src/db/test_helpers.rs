@@ -71,6 +71,7 @@ pub fn teardown_test_db(db: &VesselDatabase) -> Result<(), Box<dyn Error>> {
 // DATA GENERATION HELPERS
 // ============================================================================
 /// Add a test trip to the databases
+#[allow(clippy::too_many_arguments)]
 pub fn add_test_trip(
     db: &VesselDatabase,
     description: String,
@@ -111,6 +112,7 @@ pub fn add_test_trip(
 }
 
 /// Add a test vessel status record to the database
+#[allow(clippy::too_many_arguments)]
 pub fn add_test_vessel_status(
     db: &VesselDatabase,
     timestamp: SystemTime,

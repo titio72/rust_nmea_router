@@ -37,7 +37,11 @@
     },
 
     // Tasks
-    "tasks.version": "2.0.0"
+    "tasks.version": "2.0.0",
+    "chat.tools.terminal.autoApprove": {
+      "cargo clippy": true,
+      "uniq": true
+    }
   },
   "extensions": {
     "recommendations": [

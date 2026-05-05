@@ -53,7 +53,11 @@ impl UdpBroadcaster {
     /// # Returns
     /// * `Ok(Self)` - Broadcaster created successfully (or disabled)
     /// * `Err(String)` - Socket creation failed when enabled
-    pub fn new(destination: String, bind_address: String, enabled: bool) -> Result<Self, crate::error::AppError> {
+    pub fn new(
+        destination: String,
+        bind_address: String,
+        enabled: bool,
+    ) -> Result<Self, crate::error::AppError> {
         let socket = if enabled {
             match Self::create_socket(&destination, &bind_address) {
                 Ok(sock) => {
@@ -146,7 +150,7 @@ impl UdpBroadcaster {
                 Ok(_) => {
                     self.message_count += 1;
                     self.rate_limiter.insert(topic.to_string(), now);
-                    if self.message_count % 1000 == 0 {
+                    if self.message_count.is_multiple_of(1000) {
                         debug!(
                             "Broadcasted {} NMEA0183 messages via UDP",
                             self.message_count

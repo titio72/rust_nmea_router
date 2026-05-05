@@ -57,12 +57,12 @@ fn median_position(positions: &[(f64, f64)]) -> Option<Position> {
     lats.sort_by(|a, b| a.partial_cmp(b).unwrap());
     lons.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mid = lats.len() / 2;
-    let lat = if lats.len() % 2 == 0 {
+    let lat = if lats.len().is_multiple_of(2) {
         (lats[mid - 1] + lats[mid]) / 2.0
     } else {
         lats[mid]
     };
-    let lon = if lons.len() % 2 == 0 {
+    let lon = if lons.len().is_multiple_of(2) {
         (lons[mid - 1] + lons[mid]) / 2.0
     } else {
         lons[mid]
@@ -317,7 +317,7 @@ fn synthesize_interval(
             total_time_ms,
             wind_speed_kn,
             wind_speed_variance: None,
-            wind_angle_deg: wind_angle_deg,
+            wind_angle_deg,
             wind_angle_variance: None,
             cog_deg,
             average_heading_deg,

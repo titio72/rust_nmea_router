@@ -5,24 +5,24 @@ use std::collections::HashMap;
 use crate::pgns::N2kMessage;
 
 /// NMEA2000 Stream Reader
-/// 
+///
 /// This module provides a stateful stream reader for NMEA2000 CAN frames.
 /// It handles:
 /// - Single-frame messages (decoded immediately)
 /// - Fast packet messages (assembled from multiple frames)
-/// 
+///
 /// # Usage
-/// 
+///
 /// ```no_run
 /// use nmea2k::N2kStreamReader;
 /// use socketcan::ExtendedId;
-/// 
+///
 /// let mut reader = N2kStreamReader::new();
-/// 
+///
 /// // Example: Push frames into the reader
 /// let can_id = ExtendedId::new(0x09F80001).unwrap();
 /// let data = vec![0xC0, 0x0F, 0x7B, 0x26, 0x36, 0xD0, 0x86, 0x3A];
-/// 
+///
 /// if let Some(complete_message) = reader.process_frame(can_id, &data) {
 ///     // A complete message is available
 ///     println!("PGN: {}", complete_message.identifier.pgn());
@@ -47,14 +47,14 @@ impl FastPacketBuffer {
         } else {
             1 + (total_len - 6).div_ceil(7)
         };
-        
+
         Self {
             frames: Vec::new(),
             total_len,
             expected_frames,
         }
     }
-    
+
     fn add_frame(&mut self, frame_index: usize, frame_data: &[u8]) {
         // Explicit extraction of payload bytes:
         // Frame 0: bytes [2..8] = 6 bytes of payload
@@ -68,20 +68,20 @@ impl FastPacketBuffer {
             }
         } else {
             // Subsequent frames: skip 1 byte of header (sequence + frame counter)
-            if frame_data.len() >= 1 {
+            if !frame_data.is_empty() {
                 frame_data[1..].to_vec()
             } else {
                 frame_data.to_vec()
             }
         };
-        
+
         self.frames.push(payload);
     }
-    
+
     fn is_complete(&self) -> bool {
         self.frames.len() >= self.expected_frames
     }
-    
+
     fn get_complete_data(&self) -> Vec<u8> {
         let mut data = Vec::new();
         for frame in &self.frames {
@@ -117,17 +117,17 @@ impl N2kStreamReader {
     }
 
     /// Process a CAN frame and return a complete message if available
-    /// 
+    ///
     /// # Arguments
     /// * `can_id` - The extended CAN ID
     /// * `data` - The CAN frame data
-    /// 
+    ///
     /// # Returns
     /// `Some(N2kFrame)` if a complete message is ready, `None` otherwise
     pub fn process_frame(&mut self, can_id: ExtendedId, data: &[u8]) -> Option<N2kFrame> {
         let identifier = Identifier::from_can_id(can_id);
         let pgn = identifier.pgn();
-        
+
         // Check if this is a fast packet PGN
         if self.is_fast_packet_pgn(pgn) && data.len() == 8 {
             self.process_fast_packet(identifier, data)
@@ -148,17 +148,17 @@ impl N2kStreamReader {
         let mut packet_data = [0u8; 8];
         packet_data.copy_from_slice(data);
         let fast_packet = FastPacket(packet_data);
-        
+
         let pgn = identifier.pgn();
         let source = identifier.source();
         let key = (pgn, source);
-        
+
         if fast_packet.is_first() {
             // First frame - start new buffer
             if let Some(total_len) = fast_packet.total_len() {
                 let mut buffer = FastPacketBuffer::new(total_len as usize);
                 buffer.add_frame(0, &packet_data);
-                
+
                 if buffer.is_complete() {
                     // Single-frame fast packet
                     let complete_data = buffer.get_complete_data();
@@ -177,7 +177,7 @@ impl N2kStreamReader {
             // Subsequent frame - add to existing buffer
             let frame_index = buffer.frames.len();
             buffer.add_frame(frame_index, &packet_data);
-            
+
             if buffer.is_complete() {
                 let complete_data = buffer.get_complete_data();
                 self.fast_packet_buffers.remove(&key);
@@ -190,15 +190,31 @@ impl N2kStreamReader {
                 });
             }
         }
-        
+
         None
     }
 
     fn is_fast_packet_pgn(&self, pgn: u32) -> bool {
         matches!(
             pgn,
-            126996 | 127233 | 127237 | 127489 | 127493 | 127505 | 128275 | 129029
-                | 129038 | 129039 | 129040 | 129041 | 129284 | 129540 | 129793 | 129794 | 129809 | 129810
+            126996
+                | 127233
+                | 127237
+                | 127489
+                | 127493
+                | 127505
+                | 128275
+                | 129029
+                | 129038
+                | 129039
+                | 129040
+                | 129041
+                | 129284
+                | 129540
+                | 129793
+                | 129794
+                | 129809
+                | 129810
         )
     }
 }
@@ -255,9 +271,18 @@ mod tests {
         ];
 
         // Frames 1–3: message is incomplete, reader returns None
-        assert!(reader.process_frame(can_id, frames[0]).is_none(), "frame 0 should be incomplete");
-        assert!(reader.process_frame(can_id, frames[1]).is_none(), "frame 1 should be incomplete");
-        assert!(reader.process_frame(can_id, frames[2]).is_none(), "frame 2 should be incomplete");
+        assert!(
+            reader.process_frame(can_id, frames[0]).is_none(),
+            "frame 0 should be incomplete"
+        );
+        assert!(
+            reader.process_frame(can_id, frames[1]).is_none(),
+            "frame 1 should be incomplete"
+        );
+        assert!(
+            reader.process_frame(can_id, frames[2]).is_none(),
+            "frame 2 should be incomplete"
+        );
 
         // Frame 4 completes the message
         let result = reader.process_frame(can_id, frames[3]);
@@ -318,10 +343,22 @@ mod tests {
         ];
 
         // Frames 1–4: message is incomplete
-        assert!(reader.process_frame(can_id, frames[0]).is_none(), "frame 0 should be incomplete");
-        assert!(reader.process_frame(can_id, frames[1]).is_none(), "frame 1 should be incomplete");
-        assert!(reader.process_frame(can_id, frames[2]).is_none(), "frame 2 should be incomplete");
-        assert!(reader.process_frame(can_id, frames[3]).is_none(), "frame 3 should be incomplete");
+        assert!(
+            reader.process_frame(can_id, frames[0]).is_none(),
+            "frame 0 should be incomplete"
+        );
+        assert!(
+            reader.process_frame(can_id, frames[1]).is_none(),
+            "frame 1 should be incomplete"
+        );
+        assert!(
+            reader.process_frame(can_id, frames[2]).is_none(),
+            "frame 2 should be incomplete"
+        );
+        assert!(
+            reader.process_frame(can_id, frames[3]).is_none(),
+            "frame 3 should be incomplete"
+        );
 
         // Frame 5 completes the message
         let result = reader.process_frame(can_id, frames[4]);
@@ -372,9 +409,18 @@ mod tests {
         ];
 
         // Frames 1–3: message is incomplete
-        assert!(reader.process_frame(can_id, frames[0]).is_none(), "frame 0 should be incomplete");
-        assert!(reader.process_frame(can_id, frames[1]).is_none(), "frame 1 should be incomplete");
-        assert!(reader.process_frame(can_id, frames[2]).is_none(), "frame 2 should be incomplete");
+        assert!(
+            reader.process_frame(can_id, frames[0]).is_none(),
+            "frame 0 should be incomplete"
+        );
+        assert!(
+            reader.process_frame(can_id, frames[1]).is_none(),
+            "frame 1 should be incomplete"
+        );
+        assert!(
+            reader.process_frame(can_id, frames[2]).is_none(),
+            "frame 2 should be incomplete"
+        );
 
         // Frame 4 completes the message
         let result = reader.process_frame(can_id, frames[3]);
@@ -430,12 +476,30 @@ mod tests {
         ];
 
         // Frames 0–5: message is incomplete, reader returns None
-        assert!(reader.process_frame(can_id, frames[0]).is_none(), "frame 0 should be incomplete");
-        assert!(reader.process_frame(can_id, frames[1]).is_none(), "frame 1 should be incomplete");
-        assert!(reader.process_frame(can_id, frames[2]).is_none(), "frame 2 should be incomplete");
-        assert!(reader.process_frame(can_id, frames[3]).is_none(), "frame 3 should be incomplete");
-        assert!(reader.process_frame(can_id, frames[4]).is_none(), "frame 4 should be incomplete");
-        assert!(reader.process_frame(can_id, frames[5]).is_none(), "frame 5 should be incomplete");
+        assert!(
+            reader.process_frame(can_id, frames[0]).is_none(),
+            "frame 0 should be incomplete"
+        );
+        assert!(
+            reader.process_frame(can_id, frames[1]).is_none(),
+            "frame 1 should be incomplete"
+        );
+        assert!(
+            reader.process_frame(can_id, frames[2]).is_none(),
+            "frame 2 should be incomplete"
+        );
+        assert!(
+            reader.process_frame(can_id, frames[3]).is_none(),
+            "frame 3 should be incomplete"
+        );
+        assert!(
+            reader.process_frame(can_id, frames[4]).is_none(),
+            "frame 4 should be incomplete"
+        );
+        assert!(
+            reader.process_frame(can_id, frames[5]).is_none(),
+            "frame 5 should be incomplete"
+        );
 
         // Frame 7 completes the message
         let result = reader.process_frame(can_id, frames[6]);
@@ -498,9 +562,18 @@ mod tests {
         ];
 
         // Frames 1–3: message is incomplete, reader returns None
-        assert!(reader.process_frame(can_id, frames[0]).is_none(), "frame 0 should be incomplete");
-        assert!(reader.process_frame(can_id, frames[1]).is_none(), "frame 1 should be incomplete");
-        assert!(reader.process_frame(can_id, frames[2]).is_none(), "frame 2 should be incomplete");
+        assert!(
+            reader.process_frame(can_id, frames[0]).is_none(),
+            "frame 0 should be incomplete"
+        );
+        assert!(
+            reader.process_frame(can_id, frames[1]).is_none(),
+            "frame 1 should be incomplete"
+        );
+        assert!(
+            reader.process_frame(can_id, frames[2]).is_none(),
+            "frame 2 should be incomplete"
+        );
 
         // Frame 4 completes the message
         let result = reader.process_frame(can_id, frames[3]);

@@ -4,11 +4,11 @@ use crate::db::types::{
     TrackPoint, TripLeg, TripLegsData, TripSummary, VesselDatabase, WebMetricData,
     WindStatisticsData,
 };
+use crate::error::AppError;
 use crate::utilities::haversine_distance_nm;
 use chrono::{DateTime, NaiveDate, Utc};
 use mysql::params;
 use mysql::prelude::Queryable;
-use crate::error::AppError;
 use tracing::warn;
 
 /// Get a value from a database row, logging a warning if the default is used.
@@ -51,7 +51,11 @@ fn parse_trim_ms(a: &Option<String>, b: &Option<String>) -> u64 {
         return 0;
     };
     let diff = (tb - ta).num_milliseconds();
-    if diff > 0 { diff as u64 } else { 0 }
+    if diff > 0 {
+        diff as u64
+    } else {
+        0
+    }
 }
 
 struct LegRecord {
@@ -70,7 +74,9 @@ fn find_nav_start_idx(records: &[LegRecord]) -> (Option<usize>, &'static str) {
         let idx = records.iter().position(|r| !r.engine_on);
         (idx, "engine_transition")
     } else {
-        let idx = records.iter().position(|r| r.speed_kn >= NAV_SPEED_THRESHOLD_KN);
+        let idx = records
+            .iter()
+            .position(|r| r.speed_kn >= NAV_SPEED_THRESHOLD_KN);
         (idx, "speed_fallback")
     }
 }
@@ -81,7 +87,9 @@ fn find_nav_end_idx(records: &[LegRecord]) -> (Option<usize>, &'static str) {
         let idx = records.iter().rposition(|r| !r.engine_on);
         (idx, "engine_transition")
     } else {
-        let idx = records.iter().rposition(|r| r.speed_kn >= NAV_SPEED_THRESHOLD_KN);
+        let idx = records
+            .iter()
+            .rposition(|r| r.speed_kn >= NAV_SPEED_THRESHOLD_KN);
         (idx, "speed_fallback")
     }
 }
@@ -114,32 +122,44 @@ fn finalize_leg(
     let (nav_start_idx, start_method) = find_nav_start_idx(records);
     let (nav_end_idx, end_method) = find_nav_end_idx(records);
 
-    let (nav_start_timestamp, nav_end_timestamp, nav_distance_nm, nav_time_ms, nav_detection_method) =
-        match (nav_start_idx, nav_end_idx) {
-            (Some(si), Some(ei)) if si <= ei => {
-                let nav_dist = records[si..=ei].iter().map(|r| r.distance_nm).sum();
-                let nav_time = records[si..=ei].iter().map(|r| r.time_ms).sum();
-                let method = if start_method == "engine_transition" && end_method == "engine_transition" {
-                    "engine_transition"
-                } else {
-                    "speed_fallback"
-                };
-                (
-                    Some(records[si].timestamp.clone()),
-                    Some(records[ei].timestamp.clone()),
-                    nav_dist,
-                    nav_time,
-                    Some(method.to_string()),
-                )
-            }
-            _ => (None, None, 0.0, 0, None),
-        };
+    let (
+        nav_start_timestamp,
+        nav_end_timestamp,
+        nav_distance_nm,
+        nav_time_ms,
+        nav_detection_method,
+    ) = match (nav_start_idx, nav_end_idx) {
+        (Some(si), Some(ei)) if si <= ei => {
+            let nav_dist = records[si..=ei].iter().map(|r| r.distance_nm).sum();
+            let nav_time = records[si..=ei].iter().map(|r| r.time_ms).sum();
+            let method = if start_method == "engine_transition" && end_method == "engine_transition"
+            {
+                "engine_transition"
+            } else {
+                "speed_fallback"
+            };
+            (
+                Some(records[si].timestamp.clone()),
+                Some(records[ei].timestamp.clone()),
+                nav_dist,
+                nav_time,
+                Some(method.to_string()),
+            )
+        }
+        _ => (None, None, 0.0, 0, None),
+    };
 
     let end_lat = records.iter().rev().find_map(|r| r.lat);
     let end_lon = records.iter().rev().find_map(|r| r.lon);
 
-    let start_timestamp = records.first().map(|r| r.timestamp.clone()).unwrap_or_default();
-    let end_timestamp = records.last().map(|r| r.timestamp.clone()).unwrap_or_default();
+    let start_timestamp = records
+        .first()
+        .map(|r| r.timestamp.clone())
+        .unwrap_or_default();
+    let end_timestamp = records
+        .last()
+        .map(|r| r.timestamp.clone())
+        .unwrap_or_default();
 
     Some(TripLeg {
         leg_number,
@@ -165,18 +185,11 @@ fn finalize_leg(
 }
 
 impl VesselDatabase {
-    pub fn fetch_trip(
-        &self,
-        trip_id: u32,
-    ) -> Result<Option<TripSummary>, AppError> {
-        let mut conn = self
-            .pool
-            .get_conn()
-?;
+    pub fn fetch_trip(&self, trip_id: u32) -> Result<Option<TripSummary>, AppError> {
+        let mut conn = self.pool.get_conn()?;
 
-        let row: Option<mysql::Row> = conn
-            .exec_first(
-                r"SELECT id, description,
+        let row: Option<mysql::Row> = conn.exec_first(
+            r"SELECT id, description,
                      DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as start_ts,
                      DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
                      total_distance_sailed, total_distance_motoring,
@@ -184,11 +197,10 @@ impl VesselDatabase {
                      total_time_sailing, total_time_motoring, total_time_moored, uuid
               FROM trips
               WHERE id = :trip_id",
-                mysql::params! {
-                    "trip_id" => trip_id,
-                },
-            )
-?;
+            mysql::params! {
+                "trip_id" => trip_id,
+            },
+        )?;
 
         if let Some(row) = row {
             let trip = TripSummary {
@@ -244,10 +256,7 @@ impl VesselDatabase {
                     uuid
              FROM trips WHERE ";
 
-        let mut conn = self
-            .pool
-            .get_conn()
-?;
+        let mut conn = self.pool.get_conn()?;
 
         let results: Vec<mysql::Row> = if let Some(year) = year {
             conn.exec(
@@ -256,8 +265,7 @@ impl VesselDatabase {
                     SELECT_TRIPS
                 ),
                 mysql::params! { "year" => year },
-            )
-?
+            )?
         } else if let Some(months) = last_months {
             conn.exec(
                 format!("{} start_timestamp >= DATE_SUB(NOW(), INTERVAL :months MONTH) ORDER BY start_timestamp DESC", SELECT_TRIPS),
@@ -267,8 +275,7 @@ impl VesselDatabase {
             conn.query(format!(
                 "{} 1=1 ORDER BY start_timestamp DESC",
                 SELECT_TRIPS
-            ))
-?
+            ))?
         };
 
         let trips = results
@@ -305,18 +312,11 @@ impl VesselDatabase {
         Ok(trips)
     }
 
-    pub fn fetch_trip_by_uuid(
-        &self,
-        trip_uuid: &str,
-    ) -> Result<Option<TripSummary>, AppError> {
-        let mut conn = self
-            .pool
-            .get_conn()
-?;
+    pub fn fetch_trip_by_uuid(&self, trip_uuid: &str) -> Result<Option<TripSummary>, AppError> {
+        let mut conn = self.pool.get_conn()?;
 
-        let row: Option<mysql::Row> = conn
-            .exec_first(
-                r"SELECT id, description,
+        let row: Option<mysql::Row> = conn.exec_first(
+            r"SELECT id, description,
                      DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as start_ts,
                      DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
                      total_distance_sailed, total_distance_motoring,
@@ -324,11 +324,10 @@ impl VesselDatabase {
                      total_time_sailing, total_time_motoring, total_time_moored, uuid
               FROM trips
               WHERE uuid = :uuid",
-                mysql::params! {
-                    "uuid" => trip_uuid,
-                },
-            )
-?;
+            mysql::params! {
+                "uuid" => trip_uuid,
+            },
+        )?;
 
         if let Some(row) = row {
             let trip = TripSummary {
@@ -371,18 +370,12 @@ impl VesselDatabase {
 
     /// Fetch monthly statistics since January 2020
     /// Returns monthly sailed and motored nautical miles, including months with no activity
-    pub fn fetch_monthly_statistics(
-        &self,
-    ) -> Result<MonthlyStatistics, AppError> {
-        let mut conn = self
-            .pool
-            .get_conn()
-?;
+    pub fn fetch_monthly_statistics(&self) -> Result<MonthlyStatistics, AppError> {
+        let mut conn = self.pool.get_conn()?;
 
         // Get all trip data grouped by year and month
-        let results: Vec<mysql::Row> = conn
-            .query(
-                r"SELECT YEAR(start_timestamp) as year,
+        let results: Vec<mysql::Row> = conn.query(
+            r"SELECT YEAR(start_timestamp) as year,
                      MONTH(start_timestamp) as month,
                      SUM(total_distance_sailed) as sailing_distance,
                      SUM(total_distance_motoring) as motoring_distance
@@ -390,8 +383,7 @@ impl VesselDatabase {
               WHERE start_timestamp >= '2020-01-01'
               GROUP BY YEAR(start_timestamp), MONTH(start_timestamp)
               ORDER BY year ASC, month ASC",
-            )
-?;
+        )?;
 
         // Build a map of (year, month) -> (sailing_distance, motoring_distance)
         let mut month_data: std::collections::HashMap<(i32, u32), (f64, f64)> =
@@ -463,10 +455,7 @@ impl VesselDatabase {
         end: Option<DateTime<Utc>>,
         max_points: Option<usize>,
     ) -> Result<Vec<TrackPoint>, AppError> {
-        let mut conn = self
-            .pool
-            .get_conn()
-?;
+        let mut conn = self.pool.get_conn()?;
 
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
             conn.exec(
@@ -481,8 +470,7 @@ impl VesselDatabase {
                      AND COALESCE((SELECT end_timestamp FROM trips WHERE id = :trip_id), NOW())
                  ORDER BY timestamp",
                 mysql::params! { "trip_id" => trip_id },
-            )
-?
+            )?
         } else if let (Some(start), Some(end)) = (start, end) {
             conn.exec(
                 "SELECT DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.000Z') as timestamp,
@@ -495,12 +483,11 @@ impl VesselDatabase {
                     "start" => start.format("%Y-%m-%d %H:%M:%S").to_string(),
                     "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
                 },
-            )
-?
+            )?
         } else {
             return Err(AppError::Database(
-            "Either trip_id or both start and end timestamps are required".to_string(),
-        ));
+                "Either trip_id or both start and end timestamps are required".to_string(),
+            ));
         };
 
         // min_interval_ms derived from max_points interpreted as max samples per hour.
@@ -589,10 +576,7 @@ impl VesselDatabase {
         end: Option<DateTime<Utc>>,
         max_points: Option<usize>,
     ) -> Result<Vec<WebMetricData>, AppError> {
-        let mut conn = self
-            .pool
-            .get_conn()
-?;
+        let mut conn = self.pool.get_conn()?;
 
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
             conn.exec(
@@ -617,12 +601,11 @@ impl VesselDatabase {
                     "start" => start.format("%Y-%m-%d %H:%M:%S").to_string(),
                     "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
                 },
-            )
-?
+            )?
         } else {
             return Err(AppError::Database(
-            "Either trip_id or both start and end timestamps are required".to_string(),
-        ));
+                "Either trip_id or both start and end timestamps are required".to_string(),
+            ));
         };
 
         let metrics: Vec<WebMetricData> = results
@@ -696,7 +679,9 @@ impl VesselDatabase {
         max_points: Option<usize>,
     ) -> Result<MultiMetricData, AppError> {
         if metrics.is_empty() {
-            return Err(AppError::Database("At least one metric_id is required".to_string()));
+            return Err(AppError::Database(
+                "At least one metric_id is required".to_string(),
+            ));
         }
 
         let in_clause = metrics
@@ -705,10 +690,7 @@ impl VesselDatabase {
             .collect::<Vec<_>>()
             .join(",");
 
-        let mut conn = self
-            .pool
-            .get_conn()
-?;
+        let mut conn = self.pool.get_conn()?;
 
         // in_clause is built from &[u8] typed integers — safe to inline.
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
@@ -740,12 +722,11 @@ impl VesselDatabase {
                     "start" => start.format("%Y-%m-%d %H:%M:%S").to_string(),
                     "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
                 },
-            )
-?
+            )?
         } else {
             return Err(AppError::Database(
-            "Either trip_id or both start and end timestamps are required".to_string(),
-        ));
+                "Either trip_id or both start and end timestamps are required".to_string(),
+            ));
         };
 
         // Partition rows into per-metric Vecs
@@ -853,10 +834,7 @@ impl VesselDatabase {
         }
 
         // Aggregate on the database side: one row per 0.5-kn speed bucket
-        let mut conn = self
-            .pool
-            .get_conn()
-?;
+        let mut conn = self.pool.get_conn()?;
 
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
             conn.exec(
@@ -871,8 +849,7 @@ impl VesselDatabase {
                  AND average_speed_kn IS NOT NULL
                  GROUP BY FLOOR(average_speed_kn / 0.5) * 0.5",
                 mysql::params! { "trip_id" => trip_id },
-            )
-?
+            )?
         } else if let (Some(start), Some(end)) = (start, end) {
             conn.exec(
                 "SELECT FLOOR(average_speed_kn / 0.5) * 0.5 AS speed,
@@ -887,12 +864,11 @@ impl VesselDatabase {
                     "start" => start.format("%Y-%m-%d %H:%M:%S").to_string(),
                     "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
                 },
-            )
-?
+            )?
         } else {
             return Err(AppError::Database(
-            "Either trip_id or both start and end timestamps are required".to_string(),
-        ));
+                "Either trip_id or both start and end timestamps are required".to_string(),
+            ));
         };
 
         for row in results {
@@ -942,10 +918,7 @@ impl VesselDatabase {
 
         // Aggregate on the database side: one row per 5-degree wind-angle bucket.
         // Wind distance = speed (kn) * period duration (h) = speed * total_time_ms / 3_600_000
-        let mut conn = self
-            .pool
-            .get_conn()
-?;
+        let mut conn = self.pool.get_conn()?;
 
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
             conn.exec(
@@ -961,8 +934,7 @@ impl VesselDatabase {
                  AND average_wind_speed_kn IS NOT NULL
                  GROUP BY FLOOR(average_wind_angle_deg / 5.0) * 5.0",
                 mysql::params! { "trip_id" => trip_id },
-            )
-?
+            )?
         } else if let (Some(start), Some(end)) = (start, end) {
             conn.exec(
                 "SELECT FLOOR(average_wind_angle_deg / 5.0) * 5.0 AS angle,
@@ -978,12 +950,11 @@ impl VesselDatabase {
                     "start" => start.format("%Y-%m-%d %H:%M:%S").to_string(),
                     "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
                 },
-            )
-?
+            )?
         } else {
             return Err(AppError::Database(
-            "Either trip_id or both start and end timestamps are required".to_string(),
-        ));
+                "Either trip_id or both start and end timestamps are required".to_string(),
+            ));
         };
 
         for row in results {
@@ -1016,14 +987,8 @@ impl VesselDatabase {
     /// Fetch trip legs data - divides trip into legs between mooring periods.
     /// Results are cached in trip_legs_cache for closed trips (end_timestamp > 24h ago).
     /// User nav window overrides from trip_legs_nav_overrides are applied after computation.
-    pub fn fetch_trip_legs(
-        &self,
-        trip_id: u32,
-    ) -> Result<TripLegsData, AppError> {
-        let mut conn = self
-            .pool
-            .get_conn()
-?;
+    pub fn fetch_trip_legs(&self, trip_id: u32) -> Result<TripLegsData, AppError> {
+        let mut conn = self.pool.get_conn()?;
 
         let is_closed = self.trip_is_closed(&mut conn, trip_id)?;
 
@@ -1038,7 +1003,10 @@ impl VesselDatabase {
 
         if is_closed {
             if let Err(e) = self.save_trip_legs_to_cache(&mut conn, trip_id, &legs_data.legs) {
-                warn!("Failed to write trip_legs_cache for trip {}: {}", trip_id, e);
+                warn!(
+                    "Failed to write trip_legs_cache for trip {}: {}",
+                    trip_id, e
+                );
             }
         }
 
@@ -1050,7 +1018,7 @@ impl VesselDatabase {
         &self,
         conn: &mut mysql::PooledConn,
         trip_id: u32,
-        legs: &mut Vec<TripLeg>,
+        legs: &mut [TripLeg],
     ) -> Result<(), AppError> {
         conn.query_drop(
             r"CREATE TABLE IF NOT EXISTS trip_legs_nav_overrides (
@@ -1063,8 +1031,7 @@ impl VesselDatabase {
                 corrected_at   DATETIME(3)  NOT NULL,
                 PRIMARY KEY (trip_id, leg_number)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
-        )
-?;
+        )?;
 
         let rows: Vec<mysql::Row> = conn
             .exec(
@@ -1092,11 +1059,7 @@ impl VesselDatabase {
         Ok(())
     }
 
-    fn trip_is_closed(
-        &self,
-        conn: &mut mysql::PooledConn,
-        trip_id: u32,
-    ) -> Result<bool, AppError> {
+    fn trip_is_closed(&self, conn: &mut mysql::PooledConn, trip_id: u32) -> Result<bool, AppError> {
         let count: u32 = conn
             .exec_first(
                 "SELECT COUNT(*) FROM trips WHERE id = :trip_id AND end_timestamp < DATE_SUB(NOW(), INTERVAL 24 HOUR)",
@@ -1134,8 +1097,7 @@ impl VesselDatabase {
                 nav_detection_method VARCHAR(20)     NULL,
                 PRIMARY KEY (trip_id, leg_number)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
-        )
-?;
+        )?;
         // Best-effort migrations for columns added in later versions.
         // Silently ignored on read-only DB users (trips_viewer).
         for sql in &[
@@ -1152,9 +1114,8 @@ impl VesselDatabase {
             let _ = conn.query_drop(sql);
         }
 
-        let rows: Vec<mysql::Row> = conn
-            .exec(
-                r"SELECT leg_number, start_timestamp, end_timestamp,
+        let rows: Vec<mysql::Row> = conn.exec(
+            r"SELECT leg_number, start_timestamp, end_timestamp,
                          total_distance_nm, sailing_distance_nm, motoring_distance_nm,
                          sailing_time_ms, motoring_time_ms,
                          start_lat, start_lon, end_lat, end_lon,
@@ -1163,9 +1124,8 @@ impl VesselDatabase {
                   FROM trip_legs_cache
                   WHERE trip_id = :trip_id
                   ORDER BY leg_number",
-                mysql::params! { "trip_id" => trip_id },
-            )
-?;
+            mysql::params! { "trip_id" => trip_id },
+        )?;
 
         if rows.is_empty() {
             return Ok(None);
@@ -1284,15 +1244,11 @@ impl VesselDatabase {
                     leg.nav_detection_method.as_deref().into(),
                 ]
             }),
-        )
-?;
+        )?;
         Ok(())
     }
 
-    pub fn invalidate_trip_legs_cache(
-        &self,
-        trip_id: u32,
-    ) -> Result<(), AppError> {
+    pub fn invalidate_trip_legs_cache(&self, trip_id: u32) -> Result<(), AppError> {
         let mut conn = self.pool.get_conn()?;
         conn.query_drop(
             r"CREATE TABLE IF NOT EXISTS trip_legs_cache (
@@ -1311,39 +1267,36 @@ impl VesselDatabase {
                 end_lon              DOUBLE          NULL,
                 PRIMARY KEY (trip_id, leg_number)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
-        )
-?;
+        )?;
         conn.exec_drop(
             "DELETE FROM trip_legs_cache WHERE trip_id = :trip_id",
             mysql::params! { "trip_id" => trip_id },
-        )
-?;
+        )?;
         Ok(())
     }
 
     /// Populate trip_legs_cache for all closed trips that have no cached legs yet.
     /// Returns the number of trips whose legs were computed and stored.
+    #[allow(dead_code)]
     pub fn backfill_trip_legs_cache(&self) -> Result<usize, AppError> {
-        let mut conn = self
-            .pool
-            .get_conn()
-?;
+        let mut conn = self.pool.get_conn()?;
 
-        let trip_ids: Vec<u32> = conn
-            .query(
-                r"SELECT t.id FROM trips t
+        let trip_ids: Vec<u32> = conn.query(
+            r"SELECT t.id FROM trips t
                   WHERE t.end_timestamp < DATE_SUB(NOW(), INTERVAL 24 HOUR)
                     AND NOT EXISTS (
                       SELECT 1 FROM trip_legs_cache c WHERE c.trip_id = t.id
                     )
                   ORDER BY t.id",
-            )
-?;
+        )?;
 
         let count = trip_ids.len();
         for trip_id in trip_ids {
             if let Err(e) = self.fetch_trip_legs(trip_id) {
-                warn!("backfill_trip_legs_cache: failed for trip {}: {}", trip_id, e);
+                warn!(
+                    "backfill_trip_legs_cache: failed for trip {}: {}",
+                    trip_id, e
+                );
             }
         }
         Ok(count)
@@ -1355,10 +1308,7 @@ impl VesselDatabase {
         &self,
         trip_id: Option<u32>,
     ) -> Result<Vec<NavAnalysisRow>, AppError> {
-        let mut conn = self
-            .pool
-            .get_conn()
-?;
+        let mut conn = self.pool.get_conn()?;
 
         // Ensure overrides table exists (best-effort).
         let _ = conn.query_drop(
@@ -1462,9 +1412,8 @@ impl VesselDatabase {
         conn: &mut mysql::PooledConn,
         trip_id: u32,
     ) -> Result<TripLegsData, AppError> {
-        let results: Vec<mysql::Row> = conn
-            .exec(
-                r"SELECT
+        let results: Vec<mysql::Row> = conn.exec(
+            r"SELECT
                 DATE_FORMAT(timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as timestamp,
                 latitude,
                 longitude,
@@ -1478,9 +1427,8 @@ impl VesselDatabase {
                  (SELECT start_timestamp FROM trips WHERE id = :trip_id)
                  AND COALESCE((SELECT end_timestamp FROM trips WHERE id = :trip_id), NOW())
              ORDER BY timestamp",
-                mysql::params! { "trip_id" => trip_id },
-            )
-?;
+            mysql::params! { "trip_id" => trip_id },
+        )?;
 
         let mut legs = Vec::new();
         let mut leg_number = 0_u32;
@@ -1515,12 +1463,9 @@ impl VesselDatabase {
             if is_moored {
                 if in_leg {
                     leg_number += 1;
-                    if let Some(leg) = finalize_leg(
-                        &current_leg,
-                        leg_number,
-                        leg_start_lat,
-                        leg_start_lon,
-                    ) {
+                    if let Some(leg) =
+                        finalize_leg(&current_leg, leg_number, leg_start_lat, leg_start_lon)
+                    {
                         legs.push(leg);
                     } else {
                         leg_number -= 1;
@@ -1550,7 +1495,8 @@ impl VesselDatabase {
 
         if in_leg && !current_leg.is_empty() {
             leg_number += 1;
-            if let Some(leg) = finalize_leg(&current_leg, leg_number, leg_start_lat, leg_start_lon) {
+            if let Some(leg) = finalize_leg(&current_leg, leg_number, leg_start_lat, leg_start_lon)
+            {
                 legs.push(leg);
             }
         }
@@ -1564,14 +1510,10 @@ impl VesselDatabase {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<TrackAnalytics, AppError> {
-        let mut conn = self
-            .pool
-            .get_conn()
-?;
+        let mut conn = self.pool.get_conn()?;
 
-        let results: Vec<mysql::Row> = conn
-            .exec(
-                r"SELECT
+        let results: Vec<mysql::Row> = conn.exec(
+            r"SELECT
                 DATE_FORMAT(vs.timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as timestamp,
                 vs.latitude,
                 vs.longitude,
@@ -1584,12 +1526,11 @@ impl VesselDatabase {
              WHERE vs.timestamp BETWEEN :start AND :end
              AND vs.average_speed_kn IS NOT NULL
              ORDER BY vs.timestamp",
-                mysql::params! {
-                    "start" => start.format("%Y-%m-%d %H:%M:%S").to_string(),
-                    "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
-                },
-            )
-?;
+            mysql::params! {
+                "start" => start.format("%Y-%m-%d %H:%M:%S").to_string(),
+                "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
+            },
+        )?;
 
         if results.is_empty() {
             return Ok(TrackAnalytics {
@@ -1698,10 +1639,7 @@ impl VesselDatabase {
     /// Fetch heatmap data - distance traveled grouped by day for 365 days before the given date.
     /// Uses a per-day database cache (heatmap_cache) to avoid recomputing past days.
     /// Today is always recomputed fresh since vessel_status data for it is still being written.
-    pub fn fetch_heatmap(
-        &self,
-        end_date: NaiveDate,
-    ) -> Result<HeatmapData, AppError> {
+    pub fn fetch_heatmap(&self, end_date: NaiveDate) -> Result<HeatmapData, AppError> {
         let end_dt = end_date;
         let start_dt = end_dt - chrono::Duration::days(365);
 
@@ -1714,10 +1652,7 @@ impl VesselDatabase {
             today - chrono::Duration::days(1)
         };
 
-        let mut conn = self
-            .pool
-            .get_conn()
-?;
+        let mut conn = self.pool.get_conn()?;
 
         // Ensure the cache table exists so existing deployments work without a manual migration
         conn.query_drop(
@@ -1729,16 +1664,14 @@ impl VesselDatabase {
         )?;
 
         // Step 1: Load already-cached days for [start_dt, cache_end]
-        let cached_rows: Vec<mysql::Row> = conn
-            .exec(
-                "SELECT DATE_FORMAT(date, '%Y-%m-%d') as day, distance_nm \
+        let cached_rows: Vec<mysql::Row> = conn.exec(
+            "SELECT DATE_FORMAT(date, '%Y-%m-%d') as day, distance_nm \
              FROM heatmap_cache WHERE date BETWEEN :start AND :end",
-                mysql::params! {
-                    "start" => start_dt.to_string(),
-                    "end" => cache_end.to_string(),
-                },
-            )
-?;
+            mysql::params! {
+                "start" => start_dt.to_string(),
+                "end" => cache_end.to_string(),
+            },
+        )?;
 
         let mut day_distances: std::collections::HashMap<String, f64> =
             std::collections::HashMap::new();
@@ -1766,19 +1699,17 @@ impl VesselDatabase {
 
         // Step 3: Recompute from the first missing date to cache_end using a simple range query
         if let Some(from_dt) = recompute_from {
-            let results: Vec<mysql::Row> = conn
-                .exec(
-                    "SELECT DATE_FORMAT(DATE(timestamp), '%Y-%m-%d') as day, \
+            let results: Vec<mysql::Row> = conn.exec(
+                "SELECT DATE_FORMAT(DATE(timestamp), '%Y-%m-%d') as day, \
                         COALESCE(SUM(COALESCE(total_distance_nm, 0)), 0) as total_distance \
                  FROM vessel_status \
                  WHERE timestamp >= :from_dt AND DATE(timestamp) <= :cache_end AND is_moored = 0 \
                  GROUP BY DATE(timestamp)",
-                    mysql::params! {
-                        "from_dt" => from_dt.to_string(),
-                        "cache_end" => cache_end.to_string(),
-                    },
-                )
-?;
+                mysql::params! {
+                    "from_dt" => from_dt.to_string(),
+                    "cache_end" => cache_end.to_string(),
+                },
+            )?;
 
             let mut computed: std::collections::HashMap<String, f64> =
                 std::collections::HashMap::new();
@@ -1810,22 +1741,19 @@ impl VesselDatabase {
                 conn.exec_batch(
                     "INSERT IGNORE INTO heatmap_cache (date, distance_nm) VALUES (?, ?)",
                     rows.iter().map(|(date, dist)| (date.as_str(), *dist)),
-                )
-?;
+                )?;
             }
         }
 
         // Step 4: Always recompute today fresh if it falls within the requested window
         if end_dt >= today {
             let today_str = today.format("%Y-%m-%d").to_string();
-            let row: Option<mysql::Row> = conn
-                .exec_first(
-                    "SELECT COALESCE(SUM(COALESCE(total_distance_nm, 0)), 0) as total_distance \
+            let row: Option<mysql::Row> = conn.exec_first(
+                "SELECT COALESCE(SUM(COALESCE(total_distance_nm, 0)), 0) as total_distance \
                  FROM vessel_status \
                  WHERE DATE(timestamp) = :today AND is_moored = 0",
-                    mysql::params! { "today" => &today_str },
-                )
-?;
+                mysql::params! { "today" => &today_str },
+            )?;
             let dist: f64 = row
                 .and_then(|r| r.get_opt("total_distance").and_then(|v| v.ok()))
                 .unwrap_or(0.0);

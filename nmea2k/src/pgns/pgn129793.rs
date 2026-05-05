@@ -1,7 +1,9 @@
-use std::fmt;
 use crate::pgns::nmea2000_date_time::N2kDateTime;
+use std::fmt;
 
-use super::ais_helpers::{read_bits, read_signed_bits, gnss_type_description, repeat_indicator_description};
+use super::ais_helpers::{
+    gnss_type_description, read_bits, read_signed_bits, repeat_indicator_description,
+};
 
 /// AIS UTC and Date Report (PGN 129793)
 /// Reports precise time and date synchronization from AIS receiver
@@ -15,9 +17,9 @@ pub struct AisUtcDateReport {
     pub latitude_raw: i32,
     pub position_accuracy: bool,
     pub raim: bool,
-    pub position_time_raw: u32,    // × 0.0001 seconds since midnight
-    pub position_date: u16,        // Days since epoch (1970-01-01)
-    pub gnss_type: u8,             // GNSS position type
+    pub position_time_raw: u32, // × 0.0001 seconds since midnight
+    pub position_date: u16,     // Days since epoch (1970-01-01)
+    pub gnss_type: u8,          // GNSS position type
     pub date_time: N2kDateTime,
 }
 
@@ -71,7 +73,6 @@ impl AisUtcDateReport {
     pub fn get_repeat_indicator_description(&self) -> &'static str {
         repeat_indicator_description(self.repeat_indicator)
     }
-
 }
 
 impl fmt::Display for AisUtcDateReport {
@@ -125,14 +126,20 @@ mod tests {
 
     #[test]
     fn test_get_longitude_degrees() {
-        let payload = [0x04, 0xa6, 0xb0, 0x25, 0x00, 0x8a, 0xe7, 0xd9, 0x05, 0x20, 0x0a, 0x44, 0x1a, 0xfc, 0xc0, 0x08, 0x69, 0x1e, 0x00, 0x00, 0x08, 0x1a, 0x50, 0x7f, 0x00, 0xfc, 0xff];
+        let payload = [
+            0x04, 0xa6, 0xb0, 0x25, 0x00, 0x8a, 0xe7, 0xd9, 0x05, 0x20, 0x0a, 0x44, 0x1a, 0xfc,
+            0xc0, 0x08, 0x69, 0x1e, 0x00, 0x00, 0x08, 0x1a, 0x50, 0x7f, 0x00, 0xfc, 0xff,
+        ];
         let report = AisUtcDateReport::from_bytes(&payload).unwrap();
         assert_eq!(report.get_longitude_degrees(), 9.8166666);
         assert_eq!(report.get_latitude_degrees(), 44.0666656);
-        assert_eq!(report.date_time.to_date_time(), DateTime::parse_from_rfc3339("2026-02-22T14:10:20+00:00").unwrap()); // 2026-02-22T14:10:20Z
+        assert_eq!(
+            report.date_time.to_date_time(),
+            DateTime::parse_from_rfc3339("2026-02-22T14:10:20+00:00").unwrap()
+        ); // 2026-02-22T14:10:20Z
         assert_eq!(report.gnss_type, 7); // Surveyed
-        assert_eq!(report.position_accuracy, false); // Low accuracy
-        assert_eq!(report.raim, false); // RAIM not in use
+        assert!(!report.position_accuracy); // Low accuracy
+        assert!(!report.raim); // RAIM not in use
         assert_eq!(report.message_id, 4); // Base station report
         assert_eq!(report.repeat_indicator, 0); // Initial
         assert_eq!(report.mmsi, 2470054); // MMSI

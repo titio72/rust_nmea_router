@@ -126,13 +126,13 @@ impl PositionQueue {
         }
 
         let mid = lats.len() / 2;
-        let median_lat = if lats.len() % 2 == 0 {
+        let median_lat = if lats.len().is_multiple_of(2) {
             (lats[mid - 1] + lats[mid]) / 2.0
         } else {
             lats[mid]
         };
 
-        let median_lon = if lons.len() % 2 == 0 {
+        let median_lon = if lons.len().is_multiple_of(2) {
             (lons[mid - 1] + lons[mid]) / 2.0
         } else {
             lons[mid]

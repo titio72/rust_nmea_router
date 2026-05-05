@@ -3,7 +3,7 @@
 /// NMEA2000 AIS payloads (and similar marine binary protocols) pack fields at arbitrary
 /// bit boundaries. Standard byte-aligned `from_le_bytes` does not work for these;
 /// instead, fields must be read bit-by-bit across byte boundaries.
-
+///
 /// Read an unsigned integer from a bit-aligned position in a little-endian bit stream.
 ///
 /// Bits are indexed from the LSB of byte 0 outward: bit 0 is the LSB of `data[0]`,
@@ -70,7 +70,11 @@ pub(crate) fn read_signed_bits(data: &[u8], bit_offset: usize, bit_len: usize) -
 ///
 /// # Returns
 /// A cleaned `String` with padding removed and special characters escaped.
-pub(crate) fn extract_text_from_bytes(data: &[u8], byte_start: usize, byte_length: usize) -> String {
+pub(crate) fn extract_text_from_bytes(
+    data: &[u8],
+    byte_start: usize,
+    byte_length: usize,
+) -> String {
     if byte_start >= data.len() {
         return String::new();
     }
@@ -102,15 +106,15 @@ pub(crate) fn extract_text_from_bytes(data: &[u8], byte_start: usize, byte_lengt
     for i in 0..end {
         let c = data[byte_start + i] as char;
         match c {
-            '\x08' => result.push_str("\\b"),   // backspace
-            '\n'   => result.push_str("\\n"),   // newline
-            '\r'   => result.push_str("\\r"),   // carriage return
-            '\t'   => result.push_str("\\t"),   // tab
-            '"'    => result.push_str("\\\""),  // double quote
-            '\\'   => result.push_str("\\\\"),  // backslash
-            '/'    => result.push_str("\\/"),   // forward slash
-            c if c >= ' ' && c <= '~' => result.push(c), // printable ASCII
-            _ => {} // skip control chars and non-ASCII
+            '\x08' => result.push_str("\\b"),                // backspace
+            '\n' => result.push_str("\\n"),                  // newline
+            '\r' => result.push_str("\\r"),                  // carriage return
+            '\t' => result.push_str("\\t"),                  // tab
+            '"' => result.push_str("\\\""),                  // double quote
+            '\\' => result.push_str("\\\\"),                 // backslash
+            '/' => result.push_str("\\/"),                   // forward slash
+            c if (' '..='~').contains(&c) => result.push(c), // printable ASCII
+            _ => {}                                          // skip control chars and non-ASCII
         }
     }
 
@@ -172,9 +176,8 @@ mod tests {
     fn test_extract_text_basic() {
         // "NASHORN" followed by space padding
         let data = [
-            0x4e, 0x41, 0x53, 0x48, 0x4f, 0x52, 0x4e,
-            0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
-            0x20, 0x20, 0x20, 0x20, 0x20,
+            0x4e, 0x41, 0x53, 0x48, 0x4f, 0x52, 0x4e, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+            0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
         ];
         assert_eq!(extract_text_from_bytes(&data, 0, 20), "NASHORN");
     }

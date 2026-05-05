@@ -152,14 +152,9 @@ impl EnvironmentalMonitor {
         self.data_samples[MetricId::WindSpeed.as_index()].add_sample(true_wind_speed, now);
 
         // now process wind angle
-        let boat_heading = if self.last_heading_degrees.is_none()
-            || self.last_heading_event.is_none()
-            || now.duration_since(self.last_heading_event.unwrap()) > Duration::from_secs(1)
-        {
-            // Heading data is none or stale
-            return;
-        } else {
-            self.last_heading_degrees.unwrap()
+        let boat_heading = match (self.last_heading_degrees, self.last_heading_event) {
+            (Some(heading), Some(event)) if now.duration_since(event) <= Duration::from_secs(1) => heading,
+            _ => return, // Heading data is none or stale
         };
 
         let absolute_angle = (boat_heading + true_wind_angle_deg) % 360.0;

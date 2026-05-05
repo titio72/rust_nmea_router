@@ -86,12 +86,12 @@ impl VesselDatabase {
     /// Delete all trips whose UUID is not in keep_uuids, cascading to vessel_status
     /// and environmental_data. All deletions run inside a single transaction.
     /// Returns the number of trips deleted.
-    pub fn delete_trips_not_in_uuids(&self, keep_uuids: &[String]) -> Result<usize, Box<dyn Error>> {
+    pub fn delete_trips_not_in_uuids(
+        &self,
+        keep_uuids: &[String],
+    ) -> Result<usize, Box<dyn Error>> {
         // Validate UUIDs to prevent any SQL injection risk before embedding in literal.
-        let valid_uuids: Vec<&String> = keep_uuids
-            .iter()
-            .filter(|u| is_valid_uuid(u))
-            .collect();
+        let valid_uuids: Vec<&String> = keep_uuids.iter().filter(|u| is_valid_uuid(u)).collect();
 
         if valid_uuids.len() != keep_uuids.len() {
             warn!(
@@ -153,10 +153,7 @@ impl VesselDatabase {
                 "DELETE FROM vessel_status WHERE timestamp >= :start AND timestamp <= :end",
                 params! { "start" => start_ts, "end" => end_ts },
             )?;
-            tx.exec_drop(
-                "DELETE FROM trips WHERE id = :id",
-                params! { "id" => id },
-            )?;
+            tx.exec_drop("DELETE FROM trips WHERE id = :id", params! { "id" => id })?;
         }
 
         tx.commit()?;
@@ -176,8 +173,7 @@ fn is_valid_uuid(s: &str) -> bool {
     if s.len() != 36 {
         return false;
     }
-    s.chars()
-        .all(|c| c.is_ascii_hexdigit() || c == '-')
+    s.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
 #[cfg(test)]
@@ -278,7 +274,9 @@ mod tests {
         let (_, uuid1) = make_trip(&db, "Trip A", t, 2);
         let (_, uuid2) = make_trip(&db, "Trip B", t.add(Duration::from_secs(3 * ONE_HOUR_S)), 2);
 
-        let trips = db.get_trips_by_uuids(&[uuid1.clone(), uuid2.clone()]).expect("should succeed");
+        let trips = db
+            .get_trips_by_uuids(&[uuid1.clone(), uuid2.clone()])
+            .expect("should succeed");
         assert_eq!(trips.len(), 2);
         for trip in &trips {
             assert!(trip["trip"].is_object());
@@ -296,7 +294,9 @@ mod tests {
         let (_, uuid1) = make_trip(&db, "Trip A", t, 2);
         make_trip(&db, "Trip B", t.add(Duration::from_secs(3 * ONE_HOUR_S)), 2);
 
-        let trips = db.get_trips_by_uuids(&[uuid1.clone()]).expect("should succeed");
+        let trips = db
+            .get_trips_by_uuids(std::slice::from_ref(&uuid1))
+            .expect("should succeed");
         assert_eq!(trips.len(), 1);
         assert_eq!(trips[0]["trip"]["desc"].as_str(), Some("Trip A"));
     }
@@ -369,34 +369,75 @@ mod tests {
         // Trip we keep — add some vessel_status inside its time window
         let (_, uuid_keep) = make_trip(&db, "Keep", t, 2);
         add_test_vessel_status(
-            &db, t.add(Duration::from_secs(ONE_HOUR_S)),
-            43.0, 10.0, 5.0, 6.0, None, None, false, EngineStatus::Off, 0.1, 30000, None, None,
-        ).expect("add vessel_status failed");
+            &db,
+            t.add(Duration::from_secs(ONE_HOUR_S)),
+            43.0,
+            10.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            0.1,
+            30000,
+            None,
+            None,
+        )
+        .expect("add vessel_status failed");
 
         // Trip we delete — in a later time window; add vessel_status + env data
         let t2 = end.add(Duration::from_secs(ONE_HOUR_S));
         make_trip(&db, "Delete", t2, 2);
         add_test_vessel_status(
-            &db, t2.add(Duration::from_secs(ONE_HOUR_S)),
-            44.0, 11.0, 3.0, 4.0, None, None, false, EngineStatus::Off, 0.2, 30000, None, None,
-        ).expect("add vessel_status failed");
+            &db,
+            t2.add(Duration::from_secs(ONE_HOUR_S)),
+            44.0,
+            11.0,
+            3.0,
+            4.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            0.2,
+            30000,
+            None,
+            None,
+        )
+        .expect("add vessel_status failed");
         add_test_env(
-            &db, t2.add(Duration::from_secs(ONE_HOUR_S)),
-            1, Some(101325.0), Some(101500.0), Some(101100.0), "Pa",
-        ).expect("add env failed");
+            &db,
+            t2.add(Duration::from_secs(ONE_HOUR_S)),
+            1,
+            Some(101325.0),
+            Some(101500.0),
+            Some(101100.0),
+            "Pa",
+        )
+        .expect("add env failed");
 
         let vs_before = count_rows(&db, "vessel_status");
         let em_before = count_rows(&db, "environmental_data");
         assert_eq!(vs_before, 2);
         assert_eq!(em_before, 1);
 
-        db.delete_trips_not_in_uuids(&[uuid_keep]).expect("should succeed");
+        db.delete_trips_not_in_uuids(&[uuid_keep])
+            .expect("should succeed");
 
         // vessel_status and env_data for the deleted trip should be gone;
         // the row belonging to the kept trip must remain.
         assert_eq!(count_rows(&db, "trips"), 1);
-        assert_eq!(count_rows(&db, "vessel_status"), 1, "cascade should remove deleted-trip VS row");
-        assert_eq!(count_rows(&db, "environmental_data"), 0, "cascade should remove deleted-trip env row");
+        assert_eq!(
+            count_rows(&db, "vessel_status"),
+            1,
+            "cascade should remove deleted-trip VS row"
+        );
+        assert_eq!(
+            count_rows(&db, "environmental_data"),
+            0,
+            "cascade should remove deleted-trip env row"
+        );
     }
 
     #[test]
@@ -404,7 +445,10 @@ mod tests {
     fn test_sync_status_never_synced() {
         let db = setup_db();
         let status = db.get_sync_status().expect("should succeed");
-        assert!(status.last_synced_at.is_none(), "fresh DB has no sync timestamp");
+        assert!(
+            status.last_synced_at.is_none(),
+            "fresh DB has no sync timestamp"
+        );
     }
 
     #[test]
@@ -425,12 +469,29 @@ mod tests {
         let t = SystemTime::now();
 
         let (_, uuid1) = make_trip(&db, "Trip Alpha", t, 2);
-        let (_, uuid2) = make_trip(&db, "Trip Beta", t.add(Duration::from_secs(3 * ONE_HOUR_S)), 2);
+        let (_, uuid2) = make_trip(
+            &db,
+            "Trip Beta",
+            t.add(Duration::from_secs(3 * ONE_HOUR_S)),
+            2,
+        );
         add_test_vessel_status(
-            &db, t.add(Duration::from_secs(ONE_HOUR_S)),
-            43.5, 10.5, 5.5, 6.5, Some(12.0), Some(45.0), false, EngineStatus::On,
-            0.5, 30000, Some(90.0), None,
-        ).expect("add vessel_status failed");
+            &db,
+            t.add(Duration::from_secs(ONE_HOUR_S)),
+            43.5,
+            10.5,
+            5.5,
+            6.5,
+            Some(12.0),
+            Some(45.0),
+            false,
+            EngineStatus::On,
+            0.5,
+            30000,
+            Some(90.0),
+            None,
+        )
+        .expect("add vessel_status failed");
 
         let all_uuids = db.get_all_trip_uuids().expect("get UUIDs");
         let updated_trips = db.get_trips_by_uuids(&all_uuids).expect("get trips");
@@ -441,9 +502,12 @@ mod tests {
         assert_eq!(count_rows(&db, "trips"), 0);
 
         // Manifest step: no orphans to delete on empty DB
-        let deleted = db.delete_trips_not_in_uuids(&all_uuids).expect("delete orphans");
+        let deleted = db
+            .delete_trips_not_in_uuids(&all_uuids)
+            .expect("delete orphans");
         assert_eq!(deleted, 0);
-        db.set_system_status_string("last_synced_at", "2026-04-25T10:00:00+00:00").expect("set ts");
+        db.set_system_status_string("last_synced_at", "2026-04-25T10:00:00+00:00")
+            .expect("set ts");
 
         // Per-trip step
         for trip_value in &updated_trips {
@@ -452,14 +516,21 @@ mod tests {
         }
 
         assert_eq!(count_rows(&db, "trips"), 2);
-        assert_eq!(count_rows(&db, "vessel_status"), 1, "vessel_status row restored");
+        assert_eq!(
+            count_rows(&db, "vessel_status"),
+            1,
+            "vessel_status row restored"
+        );
 
         let uuids_after = db.get_all_trip_uuids().expect("get UUIDs after");
         assert!(uuids_after.contains(&uuid1));
         assert!(uuids_after.contains(&uuid2));
 
         let status = db.get_sync_status().expect("get sync status");
-        assert_eq!(status.last_synced_at.as_deref(), Some("2026-04-25T10:00:00+00:00"));
+        assert_eq!(
+            status.last_synced_at.as_deref(),
+            Some("2026-04-25T10:00:00+00:00")
+        );
     }
 
     #[test]
@@ -470,7 +541,12 @@ mod tests {
 
         let (_, uuid1) = make_trip(&db, "Trip 1", t, 2);
         let (_, uuid2) = make_trip(&db, "Trip 2", t.add(Duration::from_secs(3 * ONE_HOUR_S)), 2);
-        make_trip(&db, "Trip 3 deleted", t.add(Duration::from_secs(6 * ONE_HOUR_S)), 2);
+        make_trip(
+            &db,
+            "Trip 3 deleted",
+            t.add(Duration::from_secs(6 * ONE_HOUR_S)),
+            2,
+        );
 
         // Manifest only lists trips 1 & 2 — trip 3 is orphan
         let deleted = db

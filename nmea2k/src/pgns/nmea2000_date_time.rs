@@ -8,18 +8,16 @@ pub struct N2kDateTime {
 
 impl N2kDateTime {
     pub fn new(date: u16, time: f64) -> Option<Self> {
-        Some(Self {
-            date,
-            time,
-        })    
+        Some(Self { date, time })
     }
 
     pub fn from_date_time(date_time: &DateTime<chrono::Utc>) -> Self {
         let epoch = DateTime::<chrono::Utc>::from_timestamp(0, 0);
         let duration = date_time.signed_duration_since(epoch.unwrap());
         let total_days = duration.num_days() as u16;
-        let seconds_since_midnight = (date_time.hour() * 3600 + date_time.minute() * 60 + date_time.second()) as f64
-            + (date_time.timestamp_subsec_micros() as f64) * 0.000001;
+        let seconds_since_midnight =
+            (date_time.hour() * 3600 + date_time.minute() * 60 + date_time.second()) as f64
+                + (date_time.timestamp_subsec_micros() as f64) * 0.000001;
         N2kDateTime {
             date: total_days,
             time: seconds_since_midnight,
@@ -40,10 +38,10 @@ impl N2kDateTime {
         // NMEA2000 date is days since January 1, 1970
         let days_since_epoch = self.date as i64;
         let seconds_from_date = days_since_epoch * 86400;
-        
+
         // NMEA2000 time is in units of 0.0001 seconds since midnight
-        let seconds_since_midnight = (self.time as f64 * 0.0001) as i64;
-        
+        let seconds_since_midnight = (self.time * 0.0001) as i64;
+
         seconds_from_date + seconds_since_midnight
     }
 
@@ -57,7 +55,7 @@ impl N2kDateTime {
     /// Get milliseconds component
     pub fn milliseconds(&self) -> u32 {
         // Time is in units of 0.0001 seconds (100 microseconds)
-        let total_ms = (self.time as f64 * 0.0001 * 1000.0) as u32;
+        let total_ms = (self.time * 0.0001 * 1000.0) as u32;
         total_ms % 1000
     }
 

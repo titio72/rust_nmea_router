@@ -13,12 +13,16 @@ pub enum CourseBearingReference {
 
 impl fmt::Display for CourseBearingReference {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", match self {
-            CourseBearingReference::True => "True",
-            CourseBearingReference::Magnetic => "Magnetic",
-            CourseBearingReference::Error => "Error",
-            CourseBearingReference::Unknown(_) => "Unknown",
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                CourseBearingReference::True => "True",
+                CourseBearingReference::Magnetic => "Magnetic",
+                CourseBearingReference::Error => "Error",
+                CourseBearingReference::Unknown(_) => "Unknown",
+            }
+        )
     }
 }
 
@@ -189,6 +193,7 @@ mod tests {
     }
 
     #[test]
+    #[deny(clippy::approx_constant)]
     fn test_navigation_data_from_bytes_known_values() {
         let data = build_test_frame();
         let msg = NavigationData::from_bytes(&data).unwrap();
@@ -202,6 +207,7 @@ mod tests {
         assert_eq!(msg.calculation_type, CalculationType::GreatCircle);
         assert_eq!(msg.eta.date, 100);
         assert!((msg.eta.time - 100000.0).abs() < 1e-9);
+
         assert!((msg.bearing_origin_to_destination - 1.5708).abs() < 1e-6);
         assert!((msg.bearing_position_to_destination - 1.0).abs() < 1e-9);
         assert_eq!(msg.origin_waypoint_number, 42);
@@ -219,7 +225,10 @@ mod tests {
         // flags = 0b01_01_01_01 = 0x55
         data[5] = 0x55;
         let msg = NavigationData::from_bytes(&data).unwrap();
-        assert_eq!(msg.course_bearing_reference, CourseBearingReference::Magnetic);
+        assert_eq!(
+            msg.course_bearing_reference,
+            CourseBearingReference::Magnetic
+        );
         assert_eq!(msg.perpendicular_crossed, PerpendicularCrossed::Yes);
         assert_eq!(msg.arrival_circle_entered, ArrivalCircleEntered::Yes);
         assert_eq!(msg.calculation_type, CalculationType::Rhumbline);

@@ -26,7 +26,7 @@ impl NMEASystemTime {
             date_time,
         }
     }
-    
+
     pub fn get_source_description(&self) -> &'static str {
         match self.source {
             0 => "GPS",
@@ -53,10 +53,7 @@ impl NMEASystemTime {
             pgn: 126992,
             sid,
             source,
-            date_time: N2kDateTime {
-                date,
-                time,
-            },
+            date_time: N2kDateTime { date, time },
         })
     }
 }
@@ -65,17 +62,20 @@ impl fmt::Display for NMEASystemTime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let timestamp = self.date_time.to_unix_timestamp();
         let ms = self.date_time.milliseconds();
-        
+
         // Convert to date/time components
         let days_since_epoch = self.date_time.date as i64;
-        let seconds_since_midnight = (self.date_time.time as f64 * 0.0001) as i64;
-        
+        let seconds_since_midnight = (self.date_time.time * 0.0001) as i64;
+
         let hours = seconds_since_midnight / 3600;
         let minutes = (seconds_since_midnight % 3600) / 60;
         let seconds = seconds_since_midnight % 60;
-        
-        write!(f, "System Time: Day {} from 1970-01-01, {:02}:{:02}:{:02}.{:03} UTC (Unix: {}.{:03}s)", 
-               days_since_epoch, hours, minutes, seconds, ms, timestamp, ms)
+
+        write!(
+            f,
+            "System Time: Day {} from 1970-01-01, {:02}:{:02}:{:02}.{:03} UTC (Unix: {}.{:03}s)",
+            days_since_epoch, hours, minutes, seconds, ms, timestamp, ms
+        )
     }
 }
 
@@ -91,7 +91,7 @@ mod tests {
             0x0A, 0x00, // Date = 10 days
             0x80, 0x51, 0x01, 0x00, // Time = 86400 (in 0.0001 second units = 8.64 seconds)
         ];
-        
+
         let time = NMEASystemTime::from_bytes(&data).unwrap();
         assert_eq!(time.sid, 1);
         assert_eq!(time.source, 2);
@@ -115,7 +115,7 @@ mod tests {
             source: 0,
             date_time: N2kDateTime { date: 0, time: 0.0 },
         };
-        
+
         let timestamp = time.date_time.to_unix_timestamp();
         assert_eq!(timestamp, 0);
     }
@@ -129,7 +129,7 @@ mod tests {
             source: 0,
             date_time: N2kDateTime { date: 1, time: 0.0 },
         };
-        
+
         let timestamp = time.date_time.to_unix_timestamp();
         assert_eq!(timestamp, 86400);
     }
@@ -141,9 +141,12 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date_time: N2kDateTime { date: 1, time: 36000000.0 },
+            date_time: N2kDateTime {
+                date: 1,
+                time: 36000000.0,
+            },
         };
-        
+
         let timestamp = time.date_time.to_unix_timestamp();
         assert_eq!(timestamp, 86400 + 3600); // 1 day + 1 hour
     }
@@ -156,7 +159,7 @@ mod tests {
             source: 0,
             date_time: N2kDateTime { date: 0, time: 0.0 },
         };
-        
+
         let ms = time.date_time.milliseconds();
         assert_eq!(ms, 0);
     }
@@ -168,9 +171,12 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date_time: N2kDateTime { date: 0, time: 15000.0 },
+            date_time: N2kDateTime {
+                date: 0,
+                time: 15000.0,
+            },
         };
-        
+
         let ms = time.date_time.milliseconds();
         assert_eq!(ms, 500); // 500 milliseconds
     }
@@ -182,9 +188,12 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date_time: N2kDateTime { date: 0, time: 10000.0 },
+            date_time: N2kDateTime {
+                date: 0,
+                time: 10000.0,
+            },
         };
-        
+
         let ms = time.date_time.milliseconds();
         assert_eq!(ms, 0); // 0 milliseconds (full second)
     }
@@ -196,9 +205,12 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date_time: N2kDateTime { date: 0, time: 37500.0 },
+            date_time: N2kDateTime {
+                date: 0,
+                time: 37500.0,
+            },
         };
-        
+
         let ms = time.date_time.milliseconds();
         assert_eq!(ms, 750); // 750 milliseconds
     }
@@ -211,9 +223,12 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date_time: N2kDateTime { date: 19723, time: 0.0 },
+            date_time: N2kDateTime {
+                date: 19723,
+                time: 0.0,
+            },
         };
-        
+
         let timestamp = time.date_time.to_unix_timestamp();
         // 19723 days * 86400 seconds/day = 1704067200 seconds
         assert_eq!(timestamp, 1704067200);

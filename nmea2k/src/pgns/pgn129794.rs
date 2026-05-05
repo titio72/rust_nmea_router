@@ -1,7 +1,10 @@
-use std::fmt;
 use crate::pgns::nmea2000_date_time::N2kDateTime;
+use std::fmt;
 
-use super::ais_helpers::{read_bits, extract_text_from_bytes, gnss_type_description, type_of_ship_description, repeat_indicator_description};
+use super::ais_helpers::{
+    extract_text_from_bytes, gnss_type_description, read_bits, repeat_indicator_description,
+    type_of_ship_description,
+};
 
 /// AIS Class A Static and Voyage Data (PGN 129794)
 /// Reports vessel name, callsign, dimensions, type, and voyage-related information
@@ -12,17 +15,17 @@ pub struct AisClassAStaticData {
     pub repeat_indicator: u8,
     pub mmsi: u32,
     pub imo_number: u32,
-    pub callsign: String,          // 7 chars
-    pub name: String,              // 20 chars
+    pub callsign: String, // 7 chars
+    pub name: String,     // 20 chars
     pub type_of_ship: u8,
-    pub length_raw: u16,           // × 0.1 meters
-    pub beam_raw: u16,             // × 0.1 meters
+    pub length_raw: u16,             // × 0.1 meters
+    pub beam_raw: u16,               // × 0.1 meters
     pub position_ref_starboard: u16, // × 0.1 meters
-    pub position_ref_bow: u16,     // × 0.1 meters
-    pub eta_date: u16,             // Days since epoch
-    pub eta_time: u32,             // × 0.0001 seconds since midnight
-    pub draft_raw: u16,            // × 0.01 meters
-    pub destination: String,       // 20 chars
+    pub position_ref_bow: u16,       // × 0.1 meters
+    pub eta_date: u16,               // Days since epoch
+    pub eta_time: u32,               // × 0.0001 seconds since midnight
+    pub draft_raw: u16,              // × 0.01 meters
+    pub destination: String,         // 20 chars
     pub ais_version: u8,
     pub gnss_type: u8,
     pub dte: bool,
@@ -40,10 +43,10 @@ impl AisClassAStaticData {
         let repeat_indicator = read_bits(data, 6, 2) as u8;
         let mmsi = read_bits(data, 8, 32) as u32;
         let imo_number = read_bits(data, 40, 32) as u32;
-        
+
         // callsign is 7 bytes of ASCII starting at byte 9
         let callsign = extract_text_from_bytes(data, 9, 7);
-        
+
         // name is 20 bytes of ASCII starting at byte 16
         let name = extract_text_from_bytes(data, 16, 20);
         let type_of_ship = read_bits(data, 288, 8) as u8;
@@ -54,7 +57,7 @@ impl AisClassAStaticData {
         let eta_date = read_bits(data, 360, 16) as u16;
         let eta_time = read_bits(data, 376, 32) as u32;
         let draft_raw = read_bits(data, 408, 16) as u16;
-        
+
         // destination is 20 bytes of ASCII starting at byte 53
         let destination = extract_text_from_bytes(data, 53, 20);
         let ais_version = read_bits(data, 584, 2) as u8;
@@ -145,10 +148,6 @@ mod tests {
 
     use crate::pgns::AisClassAStaticData;
 
-
-
-
-
     #[test]
     fn test_ais_class_a_static_data_parsing() {
         /*
@@ -186,17 +185,14 @@ mod tests {
             }}
 
         */
-        let payload = [0x05, 0xf0,0x82,0xdd,0x0e,0xf5,
-                                    0x73,0x95,0x00,0x39,0x48,0x41,0x36,
-                                    0x32,0x34,0x36,0x50,0x41,0x50,0x41,
-                                    0x40,0x40,0x40,0x40,0x40,0x40,0x40,
-                                    0x40,0x40,0x40,0x40,0x40,0x40,0x40,
-                                    0x40,0x40,0x25,0x26,0x02,0x64,0x00,
-                                    0xff,0xff,0xff,0xff,0xef,0x50,0x00,
-                                    0xd9,0x4f,0x13,0x7b,0x01,0x4c,0x49,
-                                    0x56,0x4f,0x52,0x4e,0x4f,0x40,0x40,
-                                    0x40,0x40,0x40,0x40,0x40,0x40,0x40,
-                                    0x40,0x40,0x40,0x40,0x06,0xe1,0xff];
+        let payload = [
+            0x05, 0xf0, 0x82, 0xdd, 0x0e, 0xf5, 0x73, 0x95, 0x00, 0x39, 0x48, 0x41, 0x36, 0x32,
+            0x34, 0x36, 0x50, 0x41, 0x50, 0x41, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,
+            0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x25, 0x26, 0x02, 0x64, 0x00, 0xff,
+            0xff, 0xff, 0xff, 0xef, 0x50, 0x00, 0xd9, 0x4f, 0x13, 0x7b, 0x01, 0x4c, 0x49, 0x56,
+            0x4f, 0x52, 0x4e, 0x4f, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,
+            0x40, 0x40, 0x40, 0x06, 0xe1, 0xff,
+        ];
         let static_data = AisClassAStaticData::from_bytes(&payload).unwrap();
         assert_eq!(static_data.mmsi, 249398000);
         assert_eq!(static_data.imo_number, 9794549);
@@ -210,13 +206,12 @@ mod tests {
         assert_eq!(static_data.destination.trim(), "LIVORNO");
         assert_eq!(static_data.ais_version, 2); // ITU-R M.1371-5
         assert_eq!(static_data.gnss_type, 1); // GPS
-        assert_eq!(static_data.dte, false); // DTE
+        assert!(!static_data.dte); // DTE
         assert_eq!(static_data.type_of_ship, 37); // Pleasure
-        assert_eq!(static_data.eta_date_time.unwrap().to_date_time(), DateTime::parse_from_rfc3339("2026-09-23T09:00:00Z").unwrap()); // ETA Date and Time
+        assert_eq!(
+            static_data.eta_date_time.unwrap().to_date_time(),
+            DateTime::parse_from_rfc3339("2026-09-23T09:00:00Z").unwrap()
+        ); // ETA Date and Time
         assert_eq!(static_data.class, "A");
-    
     }
-
-
-
 }
