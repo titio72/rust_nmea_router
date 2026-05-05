@@ -166,7 +166,7 @@
             </div>
             <div class="target-count">
                 <app-icon name="geo"></app-icon> <span id="vesselPosition">No vessel position</span>
-            </div>        
+            </div>
         </div>
 
         <div id="tableContainer">
@@ -249,7 +249,7 @@
 
             updateField(path, value) {
                 this.updated = Date.now();
-                
+
                 if (path === 'name') this.name = value || '';
                 else if (path === 'communication.callsignVhf') this.callsign = value || '';
                 else if (path === 'design.aisShipType') this.type = value || '';
@@ -309,7 +309,7 @@
                         if (data.updates) {
                             data.updates.forEach(update => {
                                 const context = data.context;
-                                
+
                                 // Capture vessel's own position for distance calculation
                                 // Context format: "vessels.urn:mrn:signalk:uuid:<uuid>"
                                 if (context && context.startsWith('vessels.urn:mrn:signalk:uuid:')) {
@@ -322,7 +322,7 @@
                                         });
                                     }
                                 }
-                                
+
                                 // Extract MMSI from context: "vessels.urn:mrn:imo:mmsi:123456789"
                                 const mmsiMatch = context.match(/mmsi:(\d+)$/);
                                 if (mmsiMatch) {
@@ -330,7 +330,7 @@
                                     if (!targets.has(mmsi)) {
                                         targets.set(mmsi, new AisTarget(mmsi));
                                     }
-                                    
+
                                     const target = targets.get(mmsi);
                                     if (update.values) {
                                         update.values.forEach(val => {
@@ -339,7 +339,7 @@
                                     }
                                 }
                             });
-                            
+
                             renderTable();
                         }
                     } catch (e) {
@@ -355,7 +355,7 @@
                 ws.onclose = () => {
                     console.log('WebSocket closed');
                     updateConnectionStatus(false);
-                    
+
                     // Attempt to reconnect after 5 seconds
                     reconnectTimer = setTimeout(() => {
                         connectWebSocket();
@@ -372,6 +372,10 @@
             return value.toFixed(decimals);
         }
 
+        function escapeHtml(s) {
+            return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
         function renderTable() {
             // Update position status
             const posStatus = document.getElementById('vesselPosition');
@@ -380,7 +384,7 @@
             } else {
                 posStatus.innerHTML = `No vessel position`;
             }
-            
+
             // Filter targets
             const searchTerm = document.getElementById('searchInput').value.toLowerCase();
             filteredTargets = Array.from(targets.values()).filter(t => {
@@ -397,11 +401,11 @@
             // Sort
             filteredTargets.sort((a, b) => {
                 let aVal, bVal;
-                
+
                 switch (sortBy) {
-                    case 'distance': 
-                        aVal = a.getDistance() ?? Infinity; 
-                        bVal = b.getDistance() ?? Infinity; 
+                    case 'distance':
+                        aVal = a.getDistance() ?? Infinity;
+                        bVal = b.getDistance() ?? Infinity;
                         break;
                     case 'mmsi': aVal = a.mmsi; bVal = b.mmsi; break;
                     case 'name': aVal = a.name || a.mmsi; bVal = b.name || b.mmsi; break;
@@ -415,7 +419,7 @@
                     case 'updated': aVal = a.updated; bVal = b.updated; break;
                     default: aVal = a.getDistance() ?? Infinity; bVal = b.getDistance() ?? Infinity;
                 }
-                
+
                 if (aVal < bVal) return sortAsc ? -1 : 1;
                 if (aVal > bVal) return sortAsc ? 1 : -1;
                 return 0;
@@ -432,12 +436,12 @@
                     const classHtml = `<span class="ais-class ${classLabel === 'a' ? '' : classLabel}">${t.aisClass}</span>`;
                     const distance = t.getDistance();
                     const distanceHtml = distance !== null ? distance.toFixed(1) : '-';
-                    
+                    const name = t.name ? escapeHtml(t.name) : '-';
                     return `
                         <tr class="${rowClass}">
                             <td>${distanceHtml}</td>
                             <td class="mmsi">${t.mmsi}</td>
-                            <td>${t.name || '-'}</td>
+                            <td>${name}</td>
                             <td>${classHtml}</td>
                             <td>${formatNumberHtml(t.latitude, 4)}</td>
                             <td>${formatNumberHtml(t.longitude, 4)}</td>

@@ -25,13 +25,15 @@ class TripCard extends HTMLElement {
             readOnly: this.getAttribute('data-readonly') === 'true'
         };
 
-        const sailing_percent = trip_data.total_distance_nm > 0 
-            ? (trip_data.sailing_distance_nm / trip_data.total_distance_nm * 100) 
+        const sailing_percent = trip_data.total_distance_nm > 0
+            ? (trip_data.sailing_distance_nm / trip_data.total_distance_nm * 100)
             : 0;
 
-        const motoring_percent = trip_data.total_distance_nm > 0 
-            ? (trip_data.motoring_distance_nm / trip_data.total_distance_nm * 100) 
+        const motoring_percent = trip_data.total_distance_nm > 0
+            ? (trip_data.motoring_distance_nm / trip_data.total_distance_nm * 100)
             : 0;
+
+        const desc = this.escapeHtml(trip_data.description || 'Trip ' + trip_data.id);
 
         this.shadowRoot.innerHTML = `
             <link rel="stylesheet" href="/shared.css">
@@ -78,7 +80,7 @@ class TripCard extends HTMLElement {
                 <div class="trip-line">
                     <div class="trip-header">
                         <div class="trip-title">
-                            ${trip_data.description || 'Trip ' + trip_data.id}
+                            ${desc}
                             <span class="trip-sub-title-tiny">(ID: ${trip_data.id}${trip_data.uuid ? `, UUID: ${trip_data.uuid}` : ''})</span><br>
                             <span class="trip-sub-title">${this.format_date(trip_data.start_date)} - ${this.format_date(trip_data.end_date)}</span>
                         </div>
@@ -206,6 +208,10 @@ class TripCard extends HTMLElement {
             return hours + 'h ' + minutes + 'm';
         else
             return Math.floor(hours / 24) + 'd ' + (hours % 24) + 'h ' + minutes + 'm';
+    }
+
+    escapeHtml(s) {
+        return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 }
 
