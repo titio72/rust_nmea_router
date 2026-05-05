@@ -189,10 +189,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
+    let ais_cache = ais_target_cache::new_ais_cache();
+
     // Start web server if enabled
     if config.web.enabled {
         let db_arc = vessel_db.clone(); // Clone the Arc, not the database
         let config_arc = Arc::new(config.clone());
+        let ais_cache_web = ais_cache.clone();
         let web_port = config.web.port;
 
         // Use channel to confirm web server started successfully
@@ -210,7 +213,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 };
                 rt.block_on(async {
-                    match web::start_web_server(db_arc, config_arc, web_port, startup_tx).await {
+                    match web::start_web_server(db_arc, config_arc, ais_cache_web, web_port, startup_tx).await {
                         Ok(()) => {}
                         Err(e) => {
                             warn!("Web server error: {}", e);
@@ -338,8 +341,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.signalk.rate_limit_ms,
         config.signalk.vessel_uuid.clone(),
     );
-
-    let ais_cache = ais_target_cache::get_ais_target_cache();
 
     RouterLoop::new(
         socket,

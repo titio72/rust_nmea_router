@@ -20,7 +20,7 @@ use std::{
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn, Span};
 
-use crate::ais_target_cache::{AisTargetData, get_ais_target_cache};
+use crate::ais_target_cache::{AisTargetCache, AisTargetData};
 use crate::config::Config;
 use crate::db::{
     HeatmapData, MultiMetricData, NavAnalysisRow, SpeedDistributionData, TrackAnalytics,
@@ -41,6 +41,7 @@ pub struct AppState {
     pub signalk_broadcast: Arc<SignalKBroadcastChannels>,
     pub backup_in_progress: Arc<AtomicBool>,
     pub jwt_secret: Arc<JwtSecret>,
+    pub ais_cache: Arc<std::sync::Mutex<AisTargetCache>>,
 }
 
 impl AppState {
@@ -1441,18 +1442,16 @@ pub async fn get_nav_analysis(
 }
 
 pub async fn get_ais_targets(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Json<ApiResponse<Vec<AisTargetData>>> {
-    let cache = get_ais_target_cache();
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    let result = match cache.lock() {
+    match state.ais_cache.lock() {
         Ok(c) => Json(ApiResponse::ok(c.get_recent(now_ms))),
         Err(_) => Json(ApiResponse::error("Cache unavailable".to_string())),
-    };
-    result
+    }
 }
 
 pub fn create_api_router(state: AppState) -> Router {
@@ -1555,8 +1554,14 @@ mod tests {
         VesselDatabase::new(&db_url, 2, 10).expect("Failed to connect to test database")
     }
 
-    // Helper function to create a test app
+    // Helper function to create a test app with an isolated AIS cache
     fn create_test_app() -> Router {
+        create_test_app_with_cache(crate::ais_target_cache::new_ais_cache())
+    }
+
+    fn create_test_app_with_cache(
+        ais_cache: Arc<std::sync::Mutex<AisTargetCache>>,
+    ) -> Router {
         let db = create_test_db();
         let mut config = crate::config::Config::new_default_instance();
         config.web.google_maps_api_key = Some("your_google_maps_api_key_here".to_string());
@@ -1567,6 +1572,7 @@ mod tests {
             signalk_broadcast,
             backup_in_progress: Arc::new(AtomicBool::new(false)),
             jwt_secret: Arc::new(JwtSecret::generate()),
+            ais_cache,
         };
         create_api_router(state)
     }
@@ -2451,10 +2457,12 @@ mod tests {
 
     // ---- AIS target cache endpoint tests ----
     // These do not require a database — get_ais_targets reads only the in-memory cache.
+    // Each test builds its own isolated cache via create_test_app_with_cache so tests
+    // cannot interfere with one another regardless of execution order.
 
     #[tokio::test]
     async fn test_get_ais_targets_empty_cache() {
-        let app = create_test_app();
+        let app = create_test_app_with_cache(crate::ais_target_cache::new_ais_cache());
 
         let response = app
             .oneshot(
@@ -2472,20 +2480,18 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(json["status"], "ok");
-        assert!(json["data"].is_array());
+        assert_eq!(json["data"].as_array().unwrap().len(), 0);
         assert!(json["error"].is_null());
     }
 
     #[tokio::test]
     async fn test_get_ais_targets_returns_cached_entry() {
-        use crate::ais_target_cache::get_ais_target_cache;
         use nmea2k::{MessageHandler, N2kFrame, Identifier, pgns::{N2kMessage, AisClassAStaticData}};
         use socketcan::ExtendedId;
 
-        // Pre-populate the global cache with a recognisable entry
         const TEST_MMSI: u32 = 999000001;
+        let cache = crate::ais_target_cache::new_ais_cache();
         {
-            let cache = get_ais_target_cache();
             let mut c = cache.lock().unwrap();
             let frame = N2kFrame {
                 identifier: Identifier::from_can_id(ExtendedId::new(0).unwrap()),
@@ -2518,7 +2524,7 @@ mod tests {
             c.handle_message(&frame, std::time::Instant::now());
         }
 
-        let app = create_test_app();
+        let app = create_test_app_with_cache(cache);
         let response = app
             .oneshot(
                 Request::builder()
@@ -2562,6 +2568,7 @@ mod tests {
             signalk_broadcast,
             backup_in_progress: Arc::new(AtomicBool::new(false)),
             jwt_secret: Arc::new(JwtSecret::generate()),
+            ais_cache: crate::ais_target_cache::new_ais_cache(),
         };
         (create_api_router(state), db)
     }
@@ -3066,6 +3073,7 @@ mod tests {
             signalk_broadcast,
             backup_in_progress: Arc::new(AtomicBool::new(false)),
             jwt_secret: Arc::new(JwtSecret::generate()),
+            ais_cache: crate::ais_target_cache::new_ais_cache(),
         };
         create_api_router(state)
     }

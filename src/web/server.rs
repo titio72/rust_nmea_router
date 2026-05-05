@@ -12,6 +12,7 @@ use tower_http::cors::{CorsLayer, Any};
 use tracing::info;
 
 use std::sync::atomic::AtomicBool;
+use crate::ais_target_cache::AisTargetCache;
 use crate::db::VesselDatabase;
 use crate::config::Config;
 use crate::utilities::cleanup_old_exports;
@@ -24,6 +25,7 @@ const MIN_PASSWORD_LEN: usize = 12;
 pub async fn start_web_server(
     db: Arc<RwLock<VesselDatabase>>,
     config: Arc<Config>,
+    ais_cache: Arc<std::sync::Mutex<AisTargetCache>>,
     port: u16,
     startup_signal: std::sync::mpsc::Sender<Result<(), String>>,
 ) -> Result<(), crate::error::AppError> {
@@ -50,6 +52,7 @@ pub async fn start_web_server(
         signalk_broadcast,
         backup_in_progress: Arc::new(AtomicBool::new(false)),
         jwt_secret,
+        ais_cache,
     };
 
     tokio::spawn(async {

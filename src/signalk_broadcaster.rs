@@ -288,10 +288,13 @@ impl MessageHandler for SignalKBroadcaster {
                     if let Some(v) = heading.variation {
                         self.last_variation_rad = Some(v);
                     } else if let Some(pos) = self.last_position {
+                        let unix_s = crate::utilities::instant_to_unix_millis(now) / 1000;
+                        let dt = chrono::DateTime::from_timestamp(unix_s, 0)
+                            .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
                         if let Ok(v) = crate::utilities::get_variation_deg(
                             pos.latitude,
                             pos.longitude,
-                            chrono::Utc::now(),
+                            dt,
                         ) {
                             self.last_variation_rad = Some(v.to_radians());
                         }
