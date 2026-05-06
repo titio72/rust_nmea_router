@@ -16,10 +16,12 @@ Add weather forecast capabilities to the NMEA router. When cruising, the user ca
 **Open-Meteo** — free, no API key required, two endpoints per forecast point:
 
 - **Forecast API** — ECMWF IFS HRES 9km model (1-hourly up to 90h, 3-hourly up to 144h, 6-hourly to 7 days):
-  `https://api.open-meteo.com/v1/forecast?models=ecmwf_ifs&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,cape&wind_speed_unit=kn&forecast_days=7`
+  `https://api.open-meteo.com/v1/forecast?latitude=<lat1,lat2,...>&longitude=<lon1,lon2,...>&models=ecmwf_ifs&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,cape&wind_speed_unit=kn&forecast_days=7`
 
 - **Marine API** — ECMWF WAM 9km model:
-  `https://marine-api.open-meteo.com/v1/marine?hourly=wave_height,wave_direction,wave_period&forecast_days=7`
+  `https://marine-api.open-meteo.com/v1/marine?latitude=<lat1,lat2,...>&longitude=<lon1,lon2,...>&hourly=wave_height,wave_direction,wave_period&forecast_days=7`
+
+Open-Meteo accepts multiple coordinates as comma-separated values in a single request, returning an array of forecast objects — one per coordinate. A single fetch operation for all selected POIs therefore requires exactly **2 HTTP calls** (one to each endpoint) regardless of the number of POIs selected.
 
 **Variables fetched per point:**
 - Wind speed at 10m (knots)
@@ -94,7 +96,7 @@ Each new fetch for a location inserts a new `forecast_fetch` row and a full set 
 ## Backend
 
 ### New module: `src/forecast.rs`
-Fetch logic: makes two HTTP calls per coordinate (forecast + marine APIs), merges results by timestamp, writes to DB.
+Fetch logic: makes exactly two HTTP calls (one to the forecast API, one to the marine API), each with all selected POI coordinates as comma-separated parameters. Merges the two response arrays by coordinate index and timestamp, then writes one `forecast_fetch` + N `forecast_hourly` rows per POI to the DB.
 
 ### New DB operations: `src/db/operations/forecast.rs`
 - CRUD for POIs
