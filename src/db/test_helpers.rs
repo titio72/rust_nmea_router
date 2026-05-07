@@ -37,6 +37,9 @@ pub fn reset_test_db(db: &VesselDatabase) -> Result<(), Box<dyn Error>> {
     conn.query_drop("TRUNCATE TABLE vessel_status")?;
     conn.query_drop("TRUNCATE TABLE trips")?;
     conn.query_drop("TRUNCATE TABLE system_status")?;
+    conn.query_drop("TRUNCATE TABLE forecast_hourly")?;
+    conn.query_drop("TRUNCATE TABLE forecast_fetch")?;
+    conn.query_drop("TRUNCATE TABLE forecast_poi")?;
 
     // Re-enable foreign key checks
     conn.query_drop("SET FOREIGN_KEY_CHECKS = 1")?;
