@@ -1,3 +1,6 @@
+// Callers will be wired up in later tasks on this feature branch.
+#![allow(dead_code)]
+
 use crate::db::types::VesselDatabase;
 use crate::error::AppError;
 use chrono::{DateTime, Utc};
@@ -101,6 +104,9 @@ impl VesselDatabase {
             "DELETE FROM forecast_poi WHERE id = :id",
             params! { "id" => id },
         )?;
+        if conn.affected_rows() == 0 {
+            return Err(AppError::Database(format!("Forecast POI {} not found", id)));
+        }
         Ok(())
     }
 
