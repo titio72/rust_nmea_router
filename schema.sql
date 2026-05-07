@@ -206,7 +206,7 @@ COMMENT='User corrections for nav windows; auto_nav_* preserved for calibration 
 -- LIMIT 10;
 
 -- Get mooring events (transitions from moving to moored):
--- SELECT 
+-- SELECT
 --     timestamp,
 --     latitude,
 --     longitude,
@@ -214,9 +214,56 @@ COMMENT='User corrections for nav windows; auto_nav_* preserved for calibration 
 -- FROM vessel_status v1
 -- WHERE is_moored = TRUE
 --   AND NOT EXISTS (
---       SELECT 1 FROM vessel_status v2 
---       WHERE v2.timestamp < v1.timestamp 
+--       SELECT 1 FROM vessel_status v2
+--       WHERE v2.timestamp < v1.timestamp
 --         AND v2.timestamp >= v1.timestamp - INTERVAL 5 MINUTE
 --         AND v2.is_moored = TRUE
 --   )
 -- ORDER BY timestamp DESC;
+
+-- ============================================================================
+-- FORECAST POI TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS forecast_poi (
+    id          INT AUTO_INCREMENT PRIMARY KEY,
+    name        VARCHAR(100) NOT NULL,
+    lat         DECIMAL(9,6) NOT NULL,
+    lon         DECIMAL(9,6) NOT NULL,
+    created_at  DATETIME NOT NULL,
+    INDEX idx_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='Named points of interest that guide forecast fetch locations';
+
+-- ============================================================================
+-- FORECAST FETCH TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS forecast_fetch (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    lat             DECIMAL(9,6) NOT NULL,
+    lon             DECIMAL(9,6) NOT NULL,
+    fetched_at      DATETIME NOT NULL,
+    forecast_from   DATETIME NOT NULL,
+    forecast_to     DATETIME NOT NULL,
+    INDEX idx_fetched_at (fetched_at),
+    INDEX idx_lat_lon (lat, lon)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='One record per fetch operation; coordinates stored directly, no FK to forecast_poi';
+
+-- ============================================================================
+-- FORECAST HOURLY TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS forecast_hourly (
+    id                  INT AUTO_INCREMENT PRIMARY KEY,
+    fetch_id            INT NOT NULL,
+    timestamp           DATETIME NOT NULL,
+    wind_speed_kn       DECIMAL(6,2),
+    wind_direction_deg  DECIMAL(5,1),
+    wind_gust_kn        DECIMAL(6,2),
+    wave_height_m       DECIMAL(5,2),
+    wave_period_s       DECIMAL(5,2),
+    wave_direction_deg  DECIMAL(5,1),
+    cape_j_kg           DECIMAL(8,2),
+    INDEX idx_fetch_ts (fetch_id, timestamp),
+    CONSTRAINT fk_forecast_hourly_fetch FOREIGN KEY (fetch_id) REFERENCES forecast_fetch(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='One row per forecasted hour per fetch; all timestamps UTC';
