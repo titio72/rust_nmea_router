@@ -110,11 +110,15 @@ pub async fn fetch_from_open_meteo(
         "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&models=ecmwf_ifs&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,cape&wind_speed_unit=kn&forecast_days=7&timezone=UTC",
         lats, lons
     );
-    let meteo_raw: serde_json::Value = client
+    let meteo_resp = client
         .get(&meteo_url)
         .send()
         .await
-        .map_err(|e| AppError::Io(format!("Open-Meteo forecast request failed: {}", e)))?
+        .map_err(|e| AppError::Io(format!("Open-Meteo forecast request failed: {}", e)))?;
+    if !meteo_resp.status().is_success() {
+        return Err(AppError::Io(format!("Open-Meteo forecast returned HTTP {}", meteo_resp.status())));
+    }
+    let meteo_raw: serde_json::Value = meteo_resp
         .json()
         .await
         .map_err(|e| AppError::Parse(format!("Open-Meteo forecast parse failed: {}", e)))?;
@@ -127,11 +131,15 @@ pub async fn fetch_from_open_meteo(
         "https://marine-api.open-meteo.com/v1/marine?latitude={}&longitude={}&models=ecmwf_wam&hourly=wave_height,wave_period,wave_direction&forecast_days=7&timezone=UTC",
         lats, lons
     );
-    let marine_raw: serde_json::Value = client
+    let marine_resp = client
         .get(&marine_url)
         .send()
         .await
-        .map_err(|e| AppError::Io(format!("Open-Meteo marine request failed: {}", e)))?
+        .map_err(|e| AppError::Io(format!("Open-Meteo marine request failed: {}", e)))?;
+    if !marine_resp.status().is_success() {
+        return Err(AppError::Io(format!("Open-Meteo marine returned HTTP {}", marine_resp.status())));
+    }
+    let marine_raw: serde_json::Value = marine_resp
         .json()
         .await
         .map_err(|e| AppError::Parse(format!("Open-Meteo marine parse failed: {}", e)))?;
@@ -203,7 +211,7 @@ pub fn compute_trip_overlay(inputs: &TripForecastInputs) -> Vec<TripOverlayPoint
             });
         }
 
-        hour = hour + Duration::hours(1);
+        hour += Duration::hours(1);
     }
 
     result
