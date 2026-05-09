@@ -479,6 +479,8 @@
             addChart(chartsContainer, 'absoluteWindDirectionChart', 'absoluteWindDirectionScaleBtn', toggleAbsoluteWindDirectionScale);
             addChart(chartsContainer, 'cabinTemperatureChart');
             addChart(chartsContainer, 'humidityChart');
+            addChart(chartsContainer, 'waveForecastChart');
+            addChart(chartsContainer, 'capeForecastChart');
         }
 
         function getChartColors() {
@@ -591,6 +593,7 @@
         let absoluteWindDirectionNormalized = false; // Toggle for absolute wind direction chart scale (0-360 vs -180 to 180)
         let currentAbsoluteWindData = null; // Metric data for absolute wind direction (for scale toggling)
         let currentWindSpeedData = null; // Metric data for wind speed (for chart toggling)
+        let forecastOverlay = []; // Forecast overlay data for the current trip (wind/wave/CAPE)
 
         if (!tripId) {
             //document.getElementById('tripDetails').innerHTML =
@@ -760,6 +763,20 @@
 
         async function loadTripDetails(tripId, selectedLeg) {
             try {
+                // Fetch forecast overlay (best-effort — continue without it on any error)
+                forecastOverlay = [];
+                try {
+                    const overlayResp = await fetch('/api/forecast/trip-overlay?trip_id=' + tripId);
+                    if (overlayResp.ok) {
+                        const overlayJson = await overlayResp.json();
+                        if (overlayJson.status === 'ok' && Array.isArray(overlayJson.data) && overlayJson.data.length > 0) {
+                            forecastOverlay = overlayJson.data;
+                        }
+                    }
+                } catch (e) {
+                    // No forecast data — continue without it
+                }
+
                 // Prepare trip data and time range
                 let tripData;
                 let startTime, endTime;
@@ -887,8 +904,8 @@
             // Create time series charts
             allCharts.speed = createSpeedChart(trackData);
             allCharts.heading = createHeadingChart(trackData, headingScaleNormalized);
-            allCharts.windSpeed = createWindSpeedChart(trackData);
-            allCharts.windDirection = createWindDirectionChart(trackData, windDirectionNormalized);
+            allCharts.windSpeed = createWindSpeedChart(trackData, forecastOverlay);
+            allCharts.windDirection = createWindDirectionChart(trackData, windDirectionNormalized, forecastOverlay);
 
             const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
             const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
@@ -996,8 +1013,97 @@
                 // Save wind speed data globally for chart toggling
                 currentWindSpeedData = windSpeedData;
 
+                // Render forecast-only panels (wave height/period and CAPE)
+                renderWaveForecastChart(forecastOverlay);
+                renderCapeForecastChart(forecastOverlay);
+
             } catch (error) {
                 console.error('Failed to fetch secondary charts:', error);
+            }
+        }
+
+        function renderWaveForecastChart(forecastOverlay) {
+            const wrapperCanvas = document.getElementById('waveForecastChart');
+            if (!wrapperCanvas) return;
+            const wrapper = wrapperCanvas.closest('.app-card');
+            const waveData = (forecastOverlay || []).filter(p => p.wave_height_m != null);
+            if (waveData.length > 0) {
+                const colors = getChartColors();
+                const waveCtx = wrapperCanvas.getContext('2d');
+                if (allCharts.waveForecast) { allCharts.waveForecast.destroy(); }
+                allCharts.waveForecast = new Chart(waveCtx, {
+                    type: 'line',
+                    data: {
+                        datasets: [
+                            {
+                                label: 'Wave Height (m)',
+                                data: waveData.map(p => ({ x: new Date(p.timestamp), y: p.wave_height_m })),
+                                borderColor: '#2980b9', backgroundColor: 'rgba(41,128,185,0.1)',
+                                fill: true, tension: 0.2, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y'
+                            },
+                            {
+                                label: 'Period (s)',
+                                data: forecastOverlay.filter(p => p.wave_period_s != null).map(p => ({ x: new Date(p.timestamp), y: p.wave_period_s })),
+                                borderColor: '#8e44ad', borderDash: [4, 4],
+                                fill: false, tension: 0.2, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y2'
+                            },
+                        ]
+                    },
+                    options: {
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: getTimeXScale(colors),
+                            y: { beginAtZero: true, title: { display: true, text: 'Height (m)', color: colors.text }, ticks: { color: colors.text }, grid: { color: colors.grid } },
+                            y2: { position: 'right', beginAtZero: true, title: { display: true, text: 'Period (s)', color: colors.text }, ticks: { color: colors.text }, grid: { drawOnChartArea: false } }
+                        },
+                        plugins: { legend: { labels: { color: colors.text } }, title: { display: true, text: 'Wave Forecast', color: colors.text } }
+                    }
+                });
+                if (wrapper) wrapper.style.display = '';
+            } else {
+                if (wrapper) wrapper.style.display = 'none';
+                if (allCharts.waveForecast) { allCharts.waveForecast.destroy(); allCharts.waveForecast = null; }
+            }
+        }
+
+        function renderCapeForecastChart(forecastOverlay) {
+            const wrapperCanvas = document.getElementById('capeForecastChart');
+            if (!wrapperCanvas) return;
+            const wrapper = wrapperCanvas.closest('.app-card');
+            const capeData = (forecastOverlay || []).filter(p => p.cape_j_kg != null);
+            if (capeData.length > 0) {
+                const colors = getChartColors();
+                const capeCtx = wrapperCanvas.getContext('2d');
+                if (allCharts.capeForecast) { allCharts.capeForecast.destroy(); }
+                allCharts.capeForecast = new Chart(capeCtx, {
+                    type: 'bar',
+                    data: {
+                        datasets: [{
+                            label: 'CAPE (J/kg)',
+                            data: capeData.map(p => ({ x: new Date(p.timestamp), y: p.cape_j_kg })),
+                            backgroundColor: capeData.map(p => {
+                                if ((p.cape_j_kg || 0) >= 1500) return '#e74c3c';
+                                if ((p.cape_j_kg || 0) >= 500) return '#f39c12';
+                                return '#27ae60';
+                            }),
+                        }]
+                    },
+                    options: {
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: getTimeXScale(colors),
+                            y: { beginAtZero: true, ticks: { color: colors.text }, grid: { color: colors.grid } }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            title: { display: true, text: 'CAPE — Thunderstorm Risk (J/kg)', color: colors.text }
+                        }
+                    }
+                });
+                if (wrapper) wrapper.style.display = '';
+            } else {
+                if (wrapper) wrapper.style.display = 'none';
+                if (allCharts.capeForecast) { allCharts.capeForecast.destroy(); allCharts.capeForecast = null; }
             }
         }
 
@@ -1238,7 +1344,7 @@
 
             // Recreate the wind direction chart with the new scale
             if (currentTrackData) {
-                allCharts.windDirection = createWindDirectionChart(currentTrackData, windDirectionNormalized);
+                allCharts.windDirection = createWindDirectionChart(currentTrackData, windDirectionNormalized, forecastOverlay);
             }
         }
 
@@ -1403,7 +1509,7 @@
             });
         }
 
-        function createWindSpeedChart(trackData) {
+        function createWindSpeedChart(trackData, forecastData = []) {
             const ctx = document.getElementById('windSpeedChart').getContext('2d');
             const colors = getChartColors();
 
@@ -1416,21 +1522,44 @@
                 y: point.average_wind_speed_kn
             }));
 
+            const datasets = [{
+                label: 'Wind Speed (knots)',
+                data: chartData,
+                borderColor: '#27ae60',
+                backgroundColor: 'rgba(39, 174, 96, 0.1)',
+                fill: true,
+                tension: 0.1,
+                pointRadius: 0,
+                borderWidth: 1,
+                pointHoverRadius: 5
+            }];
+
+            if (forecastData && forecastData.length > 0) {
+                const fcValid = forecastData.filter(p => p.wind_speed_kn != null);
+                if (fcValid.length > 0) {
+                    datasets.push({
+                        label: 'Forecast Wind (kn)',
+                        data: fcValid.map(p => ({ x: new Date(p.timestamp), y: p.wind_speed_kn })),
+                        borderColor: '#27ae60', borderDash: [5, 5], fill: false,
+                        tension: 0.2, pointRadius: 0, borderWidth: 1.5
+                    });
+                }
+                const gustValid = forecastData.filter(p => p.wind_gust_kn != null);
+                if (gustValid.length > 0) {
+                    datasets.push({
+                        label: 'Forecast Gust (kn)',
+                        data: gustValid.map(p => ({ x: new Date(p.timestamp), y: p.wind_gust_kn })),
+                        borderColor: '#e67e22', borderDash: [3, 3], fill: false,
+                        tension: 0.2, pointRadius: 0, borderWidth: 1.5
+                    });
+                }
+            }
+
+            const showLegend = (forecastData && forecastData.length > 0);
+
             return new Chart(ctx, {
                 type: 'line',
-                data: {
-                    datasets: [{
-                        label: 'Wind Speed (knots)',
-                        data: chartData,
-                        borderColor: '#27ae60',
-                        backgroundColor: 'rgba(39, 174, 96, 0.1)',
-                        fill: true,
-                        tension: 0.1,
-                        pointRadius: 0,
-                        borderWidth: 1,
-                        pointHoverRadius: 5
-                    }]
-                },
+                data: { datasets },
                 options: {
                     maintainAspectRatio: false,
                     scales: {
@@ -1448,7 +1577,7 @@
                     },
                     plugins: {
                         legend: {
-                            display: false,
+                            display: showLegend,
                             labels: { color: colors.text }
                         },
                         title: {
@@ -1461,7 +1590,7 @@
             });
         }
 
-        function createWindDirectionChart(trackData, normalized = false) {
+        function createWindDirectionChart(trackData, normalized = false, forecastData = []) {
             const ctx = document.getElementById('windDirectionChart').getContext('2d');
             const colors = getChartColors();
 
@@ -1480,21 +1609,39 @@
                 };
             });
 
+            const datasets = [{
+                label: 'Wind Direction (degrees)',
+                data: chartData,
+                borderColor: '#f39c12',
+                backgroundColor: 'rgba(243, 156, 18, 0.1)',
+                fill: true,
+                tension: 0.1,
+                pointRadius: 0,
+                pointHoverRadius: 5,
+                borderWidth: 1
+            }];
+
+            if (forecastData && forecastData.length > 0) {
+                const fcValid = forecastData.filter(p => p.wind_direction_deg != null);
+                if (fcValid.length > 0) {
+                    datasets.push({
+                        label: 'Forecast Dir (°)',
+                        data: fcValid.map(p => {
+                            let d = p.wind_direction_deg;
+                            if (normalized && d > 180) d -= 360;
+                            return { x: new Date(p.timestamp), y: d };
+                        }),
+                        borderColor: '#2980b9', borderDash: [5, 5], fill: false,
+                        tension: 0.2, pointRadius: 0, borderWidth: 1.5
+                    });
+                }
+            }
+
+            const showLegend = (forecastData && forecastData.length > 0);
+
             return new Chart(ctx, {
                 type: 'line',
-                data: {
-                    datasets: [{
-                        label: 'Wind Direction (degrees)',
-                        data: chartData,
-                        borderColor: '#f39c12',
-                        backgroundColor: 'rgba(243, 156, 18, 0.1)',
-                        fill: true,
-                        tension: 0.1,
-                        pointRadius: 0,
-                        pointHoverRadius: 5,
-                        borderWidth: 1
-                    }]
-                },
+                data: { datasets },
                 options: {
                     maintainAspectRatio: false,
                     scales: {
@@ -1528,7 +1675,7 @@
                     },
                     plugins: {
                         legend: {
-                            display: false,
+                            display: showLegend,
                             labels: { color: colors.text }
                         },
                         title: {
