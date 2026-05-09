@@ -101,6 +101,14 @@
 </div>
 
 <script>
+    function escHtml(s) {
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function toggleTheme() {
+        baseToggleTheme();
+    }
+
     let pois = [];
     let poiMap = null;
     let poiMarker = null;
@@ -108,12 +116,19 @@
 
     async function apiFetch(url, opts = {}) {
         const r = await fetch(url, opts);
+        if (!r.ok) {
+            throw new Error(`HTTP ${r.status}`);
+        }
         return r.json();
     }
 
     async function loadPois() {
-        const resp = await apiFetch('/api/forecast/pois');
-        pois = resp.data || [];
+        try {
+            const resp = await apiFetch('/api/forecast/pois');
+            pois = resp.data || [];
+        } catch (e) {
+            pois = [];
+        }
         renderPoiTable();
         renderFetchPoiList();
         renderViewerSelect();
@@ -123,7 +138,7 @@
         const tbody = document.getElementById('poiTableBody');
         tbody.innerHTML = pois.map(p => `
             <tr>
-                <td>${p.name}</td>
+                <td>${escHtml(p.name)}</td>
                 <td>${p.lat.toFixed(4)}</td>
                 <td>${p.lon.toFixed(4)}</td>
                 <td><button onclick="deletePoi(${p.id})" style="padding:2px 8px; font-size:12px; cursor:pointer; background:transparent; border:1px solid #e74c3c; border-radius:3px; color:#e74c3c;">Delete</button></td>
@@ -133,7 +148,7 @@
     function renderFetchPoiList() {
         document.getElementById('fetchPoiList').innerHTML = pois.map(p => `
             <label style="display:inline-flex; align-items:center; gap:6px; margin-right:16px; font-size:13px;">
-                <input type="checkbox" class="fetchPoiCheck" value="${p.id}" checked> ${p.name}
+                <input type="checkbox" class="fetchPoiCheck" value="${p.id}" checked> ${escHtml(p.name)}
             </label>`).join('');
     }
 
@@ -141,7 +156,7 @@
         const sel = document.getElementById('viewerPoiSelect');
         const prev = sel.value;
         sel.innerHTML = '<option value="">— choose —</option>' +
-            pois.map(p => `<option value="${p.id}" data-lat="${p.lat}" data-lon="${p.lon}">${p.name}</option>`).join('');
+            pois.map(p => `<option value="${p.id}" data-lat="${p.lat}" data-lon="${p.lon}">${escHtml(p.name)}</option>`).join('');
         if (prev) sel.value = prev;
     }
 
@@ -169,18 +184,22 @@
         if (!checked.length) { alert('Select at least one POI.'); return; }
         const log = document.getElementById('fetchLog');
         log.innerHTML = '<div class="fetch-log-entry">Fetching…</div>';
-        const resp = await apiFetch('/api/forecast/fetch', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ poi_ids: checked }),
-        });
-        if (resp.status === 'ok') {
-            log.innerHTML = (resp.data || []).map(r => `
-                <div class="fetch-log-entry ${r.status === 'ok' ? 'ok' : 'error'}">
-                    (${r.lat.toFixed(3)}, ${r.lon.toFixed(3)}): ${r.status}
-                </div>`).join('');
-        } else {
-            log.innerHTML = `<div class="fetch-log-entry error">${resp.error}</div>`;
+        try {
+            const resp = await apiFetch('/api/forecast/fetch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ poi_ids: checked }),
+            });
+            if (resp.status === 'ok') {
+                log.innerHTML = (resp.data || []).map(r => `
+                    <div class="fetch-log-entry ${r.status === 'ok' ? 'ok' : 'error'}">
+                        (${r.lat.toFixed(3)}, ${r.lon.toFixed(3)}): ${escHtml(r.status)}
+                    </div>`).join('');
+            } else {
+                log.innerHTML = `<div class="fetch-log-entry error">${escHtml(resp.error || 'Unknown error')}</div>`;
+            }
+        } catch (e) {
+            log.innerHTML = `<div class="fetch-log-entry error">Request failed: ${escHtml(e.message)}</div>`;
         }
     }
 
@@ -190,18 +209,22 @@
         if (!opt || !opt.value) { document.getElementById('forecastViewer').style.display = 'none'; return; }
         const lat = parseFloat(opt.dataset.lat);
         const lon = parseFloat(opt.dataset.lon);
-        const resp = await apiFetch(`/api/forecast/data?lat=${lat}&lon=${lon}`);
-        if (resp.status !== 'ok' || !resp.data) {
+        try {
+            const resp = await apiFetch(`/api/forecast/data?lat=${lat}&lon=${lon}`);
+            if (resp.status !== 'ok' || !resp.data) {
+                document.getElementById('forecastViewer').style.display = 'none';
+                return;
+            }
+            const hourly = resp.data.hourly;
+            document.getElementById('forecastViewer').style.display = 'block';
+            renderForecastCharts(hourly);
+        } catch (e) {
             document.getElementById('forecastViewer').style.display = 'none';
-            return;
         }
-        const hourly = resp.data.hourly;
-        document.getElementById('forecastViewer').style.display = 'block';
-        renderForecastCharts(hourly);
     }
 
     function getChartColors() {
-        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        const isDark = document.body.classList.contains('dark-theme');
         return {
             text: isDark ? '#e0e0e0' : '#333333',
             grid: isDark ? '#3a3a3a' : '#eeeeee',
