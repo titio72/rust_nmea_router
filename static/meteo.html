@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meteo - NMEA Router</title>
+    <link rel="icon" type="image/png" href="/images/nmeasail.png">
+    <link rel="stylesheet" href="/shared.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+    <script src="/js/shared-theme.js"></script>
+    <script src="/libs/chart.min.js"></script>
+    <script src="/libs/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <style>
+        #poiMap { height: 300px; width: 100%; border-radius: 6px; }
+        .poi-table { width: 100%; border-collapse: collapse; }
+        .poi-table th, .poi-table td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border-color); font-size: 13px; }
+        .poi-table th { font-weight: bold; color: var(--text-bold); }
+        .fetch-log { font-size: 12px; color: var(--text-secondary); margin-top: 8px; max-height: 120px; overflow-y: auto; }
+        .fetch-log-entry { padding: 2px 0; }
+        .fetch-log-entry.ok { color: var(--link-color); }
+        .fetch-log-entry.error { color: #e74c3c; }
+        .chart-panel { margin-top: 20px; }
+        .chart-panel canvas { height: 180px !important; }
+    </style>
+</head>
+<body>
+<div class="header-bar">
+    <div class="header-left">
+        <img id="brandLogo" src="/images/nmeasail.png" alt="Logo" class="brand-logo">
+        <span class="header-title">Meteo Forecast</span>
+    </div>
+    <div class="header-right">
+        <a href="/" class="nav-link">Dashboard</a>
+        <button id="themeBtn" class="theme-toggle" onclick="toggleTheme()">🌙</button>
+    </div>
+</div>
+
+<div style="max-width:1500px; margin:0 auto; padding:20px;">
+
+    <!-- POI Manager -->
+    <div class="level-1-container" style="margin-bottom:20px;">
+        <h2 style="font-size:16px; font-weight:bold; margin-bottom:15px; color:var(--text-bold);">Points of Interest</h2>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+            <div>
+                <table class="poi-table">
+                    <thead><tr><th>Name</th><th>Lat</th><th>Lon</th><th></th></tr></thead>
+                    <tbody id="poiTableBody"></tbody>
+                </table>
+                <div style="margin-top:16px;">
+                    <strong style="font-size:13px;">Add POI</strong>
+                    <div style="display:flex; gap:8px; margin-top:8px; align-items:center; flex-wrap:wrap;">
+                        <input id="poiName" type="text" placeholder="Name" style="flex:2; min-width:100px; padding:6px; border:1px solid var(--border-color); border-radius:4px; background:var(--bg-primary); color:var(--text-primary);">
+                        <input id="poiLat" type="number" step="0.0001" placeholder="Lat" style="flex:1; min-width:80px; padding:6px; border:1px solid var(--border-color); border-radius:4px; background:var(--bg-primary); color:var(--text-primary);">
+                        <input id="poiLon" type="number" step="0.0001" placeholder="Lon" style="flex:1; min-width:80px; padding:6px; border:1px solid var(--border-color); border-radius:4px; background:var(--bg-primary); color:var(--text-primary);">
+                        <button onclick="addPoi()" style="padding:6px 14px; background:var(--link-color); color:#fff; border:none; border-radius:4px; cursor:pointer;">Add</button>
+                    </div>
+                    <div style="font-size:12px; color:var(--text-secondary); margin-top:6px;">Click the map to set coordinates.</div>
+                </div>
+            </div>
+            <div id="poiMap"></div>
+        </div>
+    </div>
+
+    <!-- Fetch Panel -->
+    <div class="level-1-container" style="margin-bottom:20px;">
+        <h2 style="font-size:16px; font-weight:bold; margin-bottom:15px; color:var(--text-bold);">Fetch Forecast</h2>
+        <div id="fetchPoiList" style="margin-bottom:12px;"></div>
+        <button onclick="fetchForecast()" style="padding:8px 20px; background:var(--link-color); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:14px;">Fetch Forecast (7 days)</button>
+        <div class="fetch-log" id="fetchLog"></div>
+    </div>
+
+    <!-- Forecast Viewer -->
+    <div class="level-1-container">
+        <h2 style="font-size:16px; font-weight:bold; margin-bottom:15px; color:var(--text-bold);">Forecast Viewer</h2>
+        <div style="margin-bottom:12px;">
+            <label style="font-size:13px; color:var(--text-secondary);">Select POI: </label>
+            <select id="viewerPoiSelect" onchange="loadForecastViewer()" style="padding:6px; border:1px solid var(--border-color); border-radius:4px; background:var(--bg-primary); color:var(--text-primary);">
+                <option value="">— choose —</option>
+            </select>
+        </div>
+        <div id="forecastViewer" style="display:none;">
+            <div class="chart-panel">
+                <div style="font-size:13px; font-weight:bold; color:var(--text-bold); margin-bottom:4px;">Wind Speed & Gusts (knots)</div>
+                <canvas id="windSpeedForecastChart"></canvas>
+            </div>
+            <div class="chart-panel">
+                <div style="font-size:13px; font-weight:bold; color:var(--text-bold); margin-bottom:4px;">Wind Direction (°)</div>
+                <canvas id="windDirForecastChart"></canvas>
+            </div>
+            <div class="chart-panel">
+                <div style="font-size:13px; font-weight:bold; color:var(--text-bold); margin-bottom:4px;">Wave Height & Period</div>
+                <canvas id="waveForecastChart"></canvas>
+            </div>
+            <div class="chart-panel">
+                <div style="font-size:13px; font-weight:bold; color:var(--text-bold); margin-bottom:4px;">CAPE (J/kg) — Thunderstorm Risk</div>
+                <canvas id="capeForecastChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let pois = [];
+    let poiMap = null;
+    let poiMarker = null;
+    let forecastCharts = {};
+
+    async function apiFetch(url, opts = {}) {
+        const r = await fetch(url, opts);
+        return r.json();
+    }
+
+    async function loadPois() {
+        const resp = await apiFetch('/api/forecast/pois');
+        pois = resp.data || [];
+        renderPoiTable();
+        renderFetchPoiList();
+        renderViewerSelect();
+    }
+
+    function renderPoiTable() {
+        const tbody = document.getElementById('poiTableBody');
+        tbody.innerHTML = pois.map(p => `
+            <tr>
+                <td>${p.name}</td>
+                <td>${p.lat.toFixed(4)}</td>
+                <td>${p.lon.toFixed(4)}</td>
+                <td><button onclick="deletePoi(${p.id})" style="padding:2px 8px; font-size:12px; cursor:pointer; background:transparent; border:1px solid #e74c3c; border-radius:3px; color:#e74c3c;">Delete</button></td>
+            </tr>`).join('');
+    }
+
+    function renderFetchPoiList() {
+        document.getElementById('fetchPoiList').innerHTML = pois.map(p => `
+            <label style="display:inline-flex; align-items:center; gap:6px; margin-right:16px; font-size:13px;">
+                <input type="checkbox" class="fetchPoiCheck" value="${p.id}" checked> ${p.name}
+            </label>`).join('');
+    }
+
+    function renderViewerSelect() {
+        const sel = document.getElementById('viewerPoiSelect');
+        const prev = sel.value;
+        sel.innerHTML = '<option value="">— choose —</option>' +
+            pois.map(p => `<option value="${p.id}" data-lat="${p.lat}" data-lon="${p.lon}">${p.name}</option>`).join('');
+        if (prev) sel.value = prev;
+    }
+
+    async function addPoi() {
+        const name = document.getElementById('poiName').value.trim();
+        const lat = parseFloat(document.getElementById('poiLat').value);
+        const lon = parseFloat(document.getElementById('poiLon').value);
+        if (!name || isNaN(lat) || isNaN(lon)) { alert('Name, lat, and lon are required.'); return; }
+        await apiFetch('/api/forecast/pois', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, lat, lon }),
+        });
+        document.getElementById('poiName').value = '';
+        await loadPois();
+    }
+
+    async function deletePoi(id) {
+        await apiFetch(`/api/forecast/pois?id=${id}`, { method: 'DELETE' });
+        await loadPois();
+    }
+
+    async function fetchForecast() {
+        const checked = [...document.querySelectorAll('.fetchPoiCheck:checked')].map(el => parseInt(el.value));
+        if (!checked.length) { alert('Select at least one POI.'); return; }
+        const log = document.getElementById('fetchLog');
+        log.innerHTML = '<div class="fetch-log-entry">Fetching…</div>';
+        const resp = await apiFetch('/api/forecast/fetch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ poi_ids: checked }),
+        });
+        if (resp.status === 'ok') {
+            log.innerHTML = (resp.data || []).map(r => `
+                <div class="fetch-log-entry ${r.status === 'ok' ? 'ok' : 'error'}">
+                    (${r.lat.toFixed(3)}, ${r.lon.toFixed(3)}): ${r.status}
+                </div>`).join('');
+        } else {
+            log.innerHTML = `<div class="fetch-log-entry error">${resp.error}</div>`;
+        }
+    }
+
+    async function loadForecastViewer() {
+        const sel = document.getElementById('viewerPoiSelect');
+        const opt = sel.selectedOptions[0];
+        if (!opt || !opt.value) { document.getElementById('forecastViewer').style.display = 'none'; return; }
+        const lat = parseFloat(opt.dataset.lat);
+        const lon = parseFloat(opt.dataset.lon);
+        const resp = await apiFetch(`/api/forecast/data?lat=${lat}&lon=${lon}`);
+        if (resp.status !== 'ok' || !resp.data) {
+            document.getElementById('forecastViewer').style.display = 'none';
+            return;
+        }
+        const hourly = resp.data.hourly;
+        document.getElementById('forecastViewer').style.display = 'block';
+        renderForecastCharts(hourly);
+    }
+
+    function getChartColors() {
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        return {
+            text: isDark ? '#e0e0e0' : '#333333',
+            grid: isDark ? '#3a3a3a' : '#eeeeee',
+        };
+    }
+
+    function renderForecastCharts(hourly) {
+        Object.values(forecastCharts).forEach(c => c.destroy());
+        forecastCharts = {};
+
+        const times = hourly.map(p => new Date(p.timestamp));
+        const colors = getChartColors();
+
+        const timeOpts = {
+            type: 'time',
+            time: { unit: 'day', displayFormats: { day: 'MMM d' } },
+            ticks: { color: colors.text },
+            grid: { color: colors.grid },
+        };
+
+        forecastCharts.wind = new Chart(document.getElementById('windSpeedForecastChart'), {
+            type: 'line',
+            data: {
+                labels: times,
+                datasets: [
+                    { label: 'Wind (kn)', data: hourly.map(p => p.wind_speed_kn), borderColor: '#27ae60', backgroundColor: 'rgba(39,174,96,0.1)', fill: true, tension: 0.2, pointRadius: 0, borderWidth: 1.5 },
+                    { label: 'Gust (kn)', data: hourly.map(p => p.wind_gust_kn), borderColor: '#e67e22', borderDash: [4, 4], fill: false, tension: 0.2, pointRadius: 0, borderWidth: 1.5 },
+                ]
+            },
+            options: { maintainAspectRatio: false, scales: { x: timeOpts, y: { beginAtZero: true, ticks: { color: colors.text }, grid: { color: colors.grid } } }, plugins: { legend: { labels: { color: colors.text } } } }
+        });
+
+        forecastCharts.windDir = new Chart(document.getElementById('windDirForecastChart'), {
+            type: 'scatter',
+            data: { datasets: [{ label: 'Wind Dir (°)', data: times.map((t, i) => ({ x: t, y: hourly[i].wind_direction_deg })), borderColor: '#3498db', pointRadius: 2, showLine: true, tension: 0.1 }] },
+            options: { maintainAspectRatio: false, scales: { x: timeOpts, y: { min: 0, max: 360, ticks: { color: colors.text, stepSize: 90 }, grid: { color: colors.grid } } }, plugins: { legend: { display: false } } }
+        });
+
+        forecastCharts.wave = new Chart(document.getElementById('waveForecastChart'), {
+            type: 'line',
+            data: {
+                labels: times,
+                datasets: [
+                    { label: 'Wave Height (m)', data: hourly.map(p => p.wave_height_m), borderColor: '#2980b9', backgroundColor: 'rgba(41,128,185,0.1)', fill: true, tension: 0.2, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y' },
+                    { label: 'Period (s)', data: hourly.map(p => p.wave_period_s), borderColor: '#8e44ad', borderDash: [4, 4], fill: false, tension: 0.2, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y2' },
+                ]
+            },
+            options: { maintainAspectRatio: false, scales: { x: timeOpts, y: { beginAtZero: true, ticks: { color: colors.text }, grid: { color: colors.grid } }, y2: { position: 'right', beginAtZero: true, ticks: { color: colors.text }, grid: { drawOnChartArea: false } } }, plugins: { legend: { labels: { color: colors.text } } } }
+        });
+
+        forecastCharts.cape = new Chart(document.getElementById('capeForecastChart'), {
+            type: 'bar',
+            data: {
+                labels: times,
+                datasets: [{
+                    label: 'CAPE (J/kg)',
+                    data: hourly.map(p => p.cape_j_kg),
+                    backgroundColor: hourly.map(p => {
+                        const v = p.cape_j_kg || 0;
+                        if (v >= 1500) return '#e74c3c';
+                        if (v >= 500) return '#f39c12';
+                        return '#27ae60';
+                    }),
+                }]
+            },
+            options: { maintainAspectRatio: false, scales: { x: timeOpts, y: { beginAtZero: true, ticks: { color: colors.text }, grid: { color: colors.grid } } }, plugins: { legend: { display: false } } }
+        });
+    }
+
+    function initMap() {
+        poiMap = L.map('poiMap').setView([43.0, 9.0], 6);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors', maxZoom: 16
+        }).addTo(poiMap);
+        poiMap.on('click', e => {
+            document.getElementById('poiLat').value = e.latlng.lat.toFixed(5);
+            document.getElementById('poiLon').value = e.latlng.lng.toFixed(5);
+            if (poiMarker) poiMarker.remove();
+            poiMarker = L.marker(e.latlng).addTo(poiMap);
+        });
+    }
+
+    initMap();
+    loadPois();
+</script>
+</body>
+</html>
