@@ -284,7 +284,7 @@
                     data: hourly.map(p => p.cape_j_kg),
                     backgroundColor: hourly.map(p => {
                         const v = p.cape_j_kg || 0;
-                        if (v >= 1500) return '#e74c3c';
+                        if (v > 1500) return '#e74c3c';
                         if (v >= 500) return '#f39c12';
                         return '#27ae60';
                     }),

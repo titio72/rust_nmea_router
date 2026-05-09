@@ -481,6 +481,11 @@
             addChart(chartsContainer, 'humidityChart');
             addChart(chartsContainer, 'waveForecastChart');
             addChart(chartsContainer, 'capeForecastChart');
+            // Hide wave and CAPE forecast panels until data is available
+            const waveCard = document.getElementById('waveForecastChart').closest('.app-card');
+            if (waveCard) waveCard.style.display = 'none';
+            const capeCard = document.getElementById('capeForecastChart').closest('.app-card');
+            if (capeCard) capeCard.style.display = 'none';
         }
 
         function getChartColors() {
@@ -1082,7 +1087,7 @@
                             label: 'CAPE (J/kg)',
                             data: capeData.map(p => ({ x: new Date(p.timestamp), y: p.cape_j_kg })),
                             backgroundColor: capeData.map(p => {
-                                if ((p.cape_j_kg || 0) >= 1500) return '#e74c3c';
+                                if ((p.cape_j_kg || 0) > 1500) return '#e74c3c';
                                 if ((p.cape_j_kg || 0) >= 500) return '#f39c12';
                                 return '#27ae60';
                             }),
