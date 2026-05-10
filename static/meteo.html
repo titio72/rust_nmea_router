@@ -78,6 +78,7 @@
             <select id="viewerPoiSelect" onchange="loadForecastViewer()" style="padding:6px; border:1px solid var(--border-color); border-radius:4px; background:var(--bg-primary); color:var(--text-primary);">
                 <option value="">— choose —</option>
             </select>
+            <span id="viewerStatus" style="margin-left:12px; font-size:12px; color:var(--text-secondary);"></span>
         </div>
         <div id="forecastViewer" style="display:none;">
             <div class="chart-panel">
@@ -203,23 +204,44 @@
         }
     }
 
+    function setViewerStatus(msg) {
+        document.getElementById('viewerStatus').textContent = msg;
+    }
+
     async function loadForecastViewer() {
         const sel = document.getElementById('viewerPoiSelect');
         const opt = sel.selectedOptions[0];
-        if (!opt || !opt.value) { document.getElementById('forecastViewer').style.display = 'none'; return; }
+        if (!opt || !opt.value) {
+            document.getElementById('forecastViewer').style.display = 'none';
+            setViewerStatus('');
+            return;
+        }
         const lat = parseFloat(opt.dataset.lat);
         const lon = parseFloat(opt.dataset.lon);
+        setViewerStatus('Loading…');
+
+        let resp;
         try {
-            const resp = await apiFetch(`/api/forecast/data?lat=${lat}&lon=${lon}`);
-            if (resp.status !== 'ok' || !resp.data) {
-                document.getElementById('forecastViewer').style.display = 'none';
-                return;
-            }
-            const hourly = resp.data.hourly;
-            document.getElementById('forecastViewer').style.display = 'block';
-            renderForecastCharts(hourly);
+            resp = await apiFetch(`/api/forecast/data?lat=${lat}&lon=${lon}`);
         } catch (e) {
             document.getElementById('forecastViewer').style.display = 'none';
+            setViewerStatus(`Error: ${e.message}`);
+            return;
+        }
+
+        if (resp.status !== 'ok' || !resp.data) {
+            document.getElementById('forecastViewer').style.display = 'none';
+            setViewerStatus('No forecast data — fetch forecast first.');
+            return;
+        }
+
+        setViewerStatus('');
+        const hourly = resp.data.hourly;
+        document.getElementById('forecastViewer').style.display = 'block';
+        try {
+            renderForecastCharts(hourly);
+        } catch (e) {
+            setViewerStatus(`Chart error: ${e.message}`);
         }
     }
 
