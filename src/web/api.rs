@@ -1537,9 +1537,11 @@ pub async fn post_forecast_fetch(
     };
 
     let mut results = Vec::new();
-    for forecast in fetched {
-        let lat = forecast.lat;
-        let lon = forecast.lon;
+    for (i, forecast) in fetched.iter().enumerate() {
+        // Use the original POI coordinates, not the grid-snapped ones returned by Open-Meteo.
+        // Open-Meteo snaps coords to its model grid (~9km), so storing the snapped lat/lon
+        // would break the coordinate-based lookup in fetch_forecast_data.
+        let (lat, lon) = coords.get(i).copied().unwrap_or((forecast.lat, forecast.lon));
         let status = match state.db().insert_forecast(lat, lon, forecast.fetched_at, &forecast.hourly) {
             Ok(_) => "ok".to_string(),
             Err(e) => format!("error: {}", e),
