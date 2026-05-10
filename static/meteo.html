@@ -21,7 +21,7 @@
         .fetch-log-entry.ok { color: var(--link-color); }
         .fetch-log-entry.error { color: #e74c3c; }
         .chart-panel { margin-top: 20px; }
-        .chart-panel canvas { height: 180px !important; }
+        .chart-panel .chart-canvas-wrapper { position: relative; height: 180px; }
     </style>
 </head>
 <body>
@@ -82,19 +82,19 @@
         <div id="forecastViewer" style="display:none;">
             <div class="chart-panel">
                 <div style="font-size:13px; font-weight:bold; color:var(--text-bold); margin-bottom:4px;">Wind Speed & Gusts (knots)</div>
-                <canvas id="windSpeedForecastChart"></canvas>
+                <div class="chart-canvas-wrapper"><canvas id="windSpeedForecastChart"></canvas></div>
             </div>
             <div class="chart-panel">
                 <div style="font-size:13px; font-weight:bold; color:var(--text-bold); margin-bottom:4px;">Wind Direction (°)</div>
-                <canvas id="windDirForecastChart"></canvas>
+                <div class="chart-canvas-wrapper"><canvas id="windDirForecastChart"></canvas></div>
             </div>
             <div class="chart-panel">
                 <div style="font-size:13px; font-weight:bold; color:var(--text-bold); margin-bottom:4px;">Wave Height & Period</div>
-                <canvas id="waveForecastChart"></canvas>
+                <div class="chart-canvas-wrapper"><canvas id="waveForecastChart"></canvas></div>
             </div>
             <div class="chart-panel">
                 <div style="font-size:13px; font-weight:bold; color:var(--text-bold); margin-bottom:4px;">CAPE (J/kg) — Thunderstorm Risk</div>
-                <canvas id="capeForecastChart"></canvas>
+                <div class="chart-canvas-wrapper"><canvas id="capeForecastChart"></canvas></div>
             </div>
         </div>
     </div>
