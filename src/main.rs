@@ -24,6 +24,7 @@ mod time_monitor;
 mod trip;
 mod udp_broadcaster;
 pub mod forecast;
+mod forecast_poller;
 pub mod utilities;
 mod vessel_monitor;
 mod vessel_status_handler;

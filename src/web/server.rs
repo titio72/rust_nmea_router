@@ -3,14 +3,17 @@ use axum::{
     routing::{get, get_service, post},
     extract::DefaultBodyLimit,
     middleware,
-    http::{Method, header},
+    http::{Method, header, HeaderValue},
 };
+use tower::ServiceBuilder;
+use tower_http::set_header::SetResponseHeaderLayer;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use tower_http::services::ServeDir;
 use tower_http::cors::{CorsLayer, Any};
 use tracing::info;
 
+use crate::forecast_poller::{ForecastPollerStatus, run_poller};
 use std::sync::atomic::AtomicBool;
 use crate::ais_target_cache::AisTargetCache;
 use crate::db::VesselDatabase;
@@ -46,17 +49,26 @@ pub async fn start_web_server(
 
     let jwt_secret = Arc::new(JwtSecret::generate());
 
+    let poller_status = Arc::new(std::sync::Mutex::new(ForecastPollerStatus::default()));
+
     let state = AppState {
-        db,
+        db: db.clone(),
         config,
         signalk_broadcast,
         backup_in_progress: Arc::new(AtomicBool::new(false)),
         jwt_secret,
         ais_cache,
+        poller_status: poller_status.clone(),
     };
 
     tokio::spawn(async {
         cleanup_old_exports().await;
+    });
+
+    let poller_db = db.clone();
+    let poller_status_arc = poller_status.clone();
+    tokio::spawn(async move {
+        run_poller(poller_db, poller_status_arc).await;
     });
 
     let api_router = create_api_router(state.clone());
@@ -70,7 +82,14 @@ pub async fn start_web_server(
         .merge(auth_routes)
         .nest("/api", api_router)
         .route("/signalk/v1/stream", get(super::signalk::signalk_stream).with_state(state.clone()))
-        .nest_service("/", get_service(ServeDir::new("static")).handle_error(|error| async move {
+        .nest_service("/", get_service(
+            ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("no-cache"),
+                ))
+                .service(ServeDir::new("static"))
+        ).handle_error(|error| async move {
             (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Unhandled internal error: {}", error),

@@ -42,6 +42,7 @@ pub struct AppState {
     pub backup_in_progress: Arc<AtomicBool>,
     pub jwt_secret: Arc<JwtSecret>,
     pub ais_cache: Arc<std::sync::Mutex<AisTargetCache>>,
+    pub poller_status: Arc<std::sync::Mutex<crate::forecast_poller::ForecastPollerStatus>>,
 }
 
 impl AppState {
@@ -1595,6 +1596,7 @@ mod tests {
             backup_in_progress: Arc::new(AtomicBool::new(false)),
             jwt_secret: Arc::new(JwtSecret::generate()),
             ais_cache,
+            poller_status: Arc::new(std::sync::Mutex::new(crate::forecast_poller::ForecastPollerStatus::default())),
         };
         create_api_router(state)
     }
@@ -2591,6 +2593,7 @@ mod tests {
             backup_in_progress: Arc::new(AtomicBool::new(false)),
             jwt_secret: Arc::new(JwtSecret::generate()),
             ais_cache: crate::ais_target_cache::new_ais_cache(),
+            poller_status: Arc::new(std::sync::Mutex::new(crate::forecast_poller::ForecastPollerStatus::default())),
         };
         (create_api_router(state), db)
     }
@@ -3096,6 +3099,7 @@ mod tests {
             backup_in_progress: Arc::new(AtomicBool::new(false)),
             jwt_secret: Arc::new(JwtSecret::generate()),
             ais_cache: crate::ais_target_cache::new_ais_cache(),
+            poller_status: Arc::new(std::sync::Mutex::new(crate::forecast_poller::ForecastPollerStatus::default())),
         };
         create_api_router(state)
     }
