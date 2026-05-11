@@ -228,24 +228,8 @@ pub struct DownloadBackupQuery {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ForecastPoiIdQuery {
-    pub id: u32,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ForecastDataQuery {
-    pub lat: f64,
-    pub lon: f64,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct ForecastTripOverlayQuery {
     pub trip_id: u32,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct FetchForecastBody {
-    pub poi_ids: Vec<u32>,
 }
 
 fn parse_datetime_str(s: &str) -> Result<DateTime<Utc>, StatusCode> {
@@ -1475,96 +1459,6 @@ pub async fn get_ais_targets(
     }
 }
 
-pub async fn get_forecast_pois(
-    State(state): State<AppState>,
-) -> Result<Json<ApiResponse<Vec<crate::db::operations::forecast::ForecastPoi>>>, StatusCode> {
-    match state.db().list_forecast_pois() {
-        Ok(pois) => Ok(Json(ApiResponse::ok(pois))),
-        Err(e) => {
-            error!(error = %e, "Failed to list forecast POIs");
-            Ok(Json(ApiResponse::error(e.to_string())))
-        }
-    }
-}
-
-pub async fn create_forecast_poi(
-    State(state): State<AppState>,
-    Json(body): Json<crate::db::operations::forecast::NewForecastPoi>,
-) -> Result<Json<ApiResponse<u32>>, StatusCode> {
-    match state.db().create_forecast_poi(&body.name, body.lat, body.lon) {
-        Ok(id) => Ok(Json(ApiResponse::ok(id))),
-        Err(e) => {
-            error!(error = %e, "Failed to create forecast POI");
-            Ok(Json(ApiResponse::error(e.to_string())))
-        }
-    }
-}
-
-pub async fn delete_forecast_poi(
-    State(state): State<AppState>,
-    Query(params): Query<ForecastPoiIdQuery>,
-) -> Result<Json<ApiResponse<String>>, StatusCode> {
-    match state.db().delete_forecast_poi(params.id) {
-        Ok(_) => Ok(Json(ApiResponse::ok("deleted".to_string()))),
-        Err(e) => {
-            error!(error = %e, poi_id = params.id, "Failed to delete forecast POI");
-            Ok(Json(ApiResponse::error(e.to_string())))
-        }
-    }
-}
-
-pub async fn post_forecast_fetch(
-    State(state): State<AppState>,
-    Json(body): Json<FetchForecastBody>,
-) -> Result<Json<ApiResponse<Vec<crate::forecast::FetchPoiResult>>>, StatusCode> {
-    let all_pois = match state.db().list_forecast_pois() {
-        Ok(p) => p,
-        Err(e) => return Ok(Json(ApiResponse::error(e.to_string()))),
-    };
-    let coords: Vec<(f64, f64)> = all_pois
-        .iter()
-        .filter(|p| body.poi_ids.contains(&p.id))
-        .map(|p| (p.lat, p.lon))
-        .collect();
-
-    if coords.is_empty() {
-        return Ok(Json(ApiResponse::error("No matching POIs found".to_string())));
-    }
-
-    let fetched = match crate::forecast::fetch_from_open_meteo(&coords).await {
-        Ok(f) => f,
-        Err(e) => return Ok(Json(ApiResponse::error(e.to_string()))),
-    };
-
-    let mut results = Vec::new();
-    for (i, forecast) in fetched.iter().enumerate() {
-        // Use the original POI coordinates, not the grid-snapped ones returned by Open-Meteo.
-        // Open-Meteo snaps coords to its model grid (~9km), so storing the snapped lat/lon
-        // would break the coordinate-based lookup in fetch_forecast_data.
-        let (lat, lon) = coords.get(i).copied().unwrap_or((forecast.lat, forecast.lon));
-        let status = match state.db().insert_forecast(lat, lon, forecast.fetched_at, &forecast.hourly) {
-            Ok(_) => "ok".to_string(),
-            Err(e) => format!("error: {}", e),
-        };
-        results.push(crate::forecast::FetchPoiResult { lat, lon, status });
-    }
-
-    Ok(Json(ApiResponse::ok(results)))
-}
-
-pub async fn get_forecast_data(
-    State(state): State<AppState>,
-    Query(params): Query<ForecastDataQuery>,
-) -> Result<Json<ApiResponse<Option<crate::db::operations::forecast::ForecastData>>>, StatusCode> {
-    match state.db().fetch_forecast_data(params.lat, params.lon) {
-        Ok(data) => Ok(Json(ApiResponse::ok(data))),
-        Err(e) => {
-            error!(error = %e, "Failed to fetch forecast data");
-            Ok(Json(ApiResponse::error(e.to_string())))
-        }
-    }
-}
-
 pub async fn get_forecast_trip_overlay(
     State(state): State<AppState>,
     Query(params): Query<ForecastTripOverlayQuery>,
@@ -1599,8 +1493,6 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/heatmap", get(get_heatmap))
         .route("/nav_analysis", get(get_nav_analysis))
         .route("/ais_targets", get(get_ais_targets))
-        .route("/forecast/pois", get(get_forecast_pois))
-        .route("/forecast/data", get(get_forecast_data))
         .route("/forecast/trip-overlay", get(get_forecast_trip_overlay))
         .route("/config/google_maps_key", get(get_google_maps_key))
         .route("/config/read_only", get(get_read_only))
@@ -1637,10 +1529,7 @@ pub fn create_api_router(state: AppState) -> Router {
             .route("/backup", delete(delete_backup))
             .route("/backup/download", get(download_backup))
             .route("/system/shutdown", post(system_shutdown))
-            .route("/sync/push", post(post_sync_push))
-            .route("/forecast/pois", post(create_forecast_poi))
-            .route("/forecast/pois", delete(delete_forecast_poi))
-            .route("/forecast/fetch", post(post_forecast_fetch));
+            .route("/sync/push", post(post_sync_push));
     }
 
     router

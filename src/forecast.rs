@@ -1,6 +1,3 @@
-// Callers will be wired up in later tasks on this feature branch.
-#![allow(dead_code)]
-
 use crate::db::operations::forecast::{ForecastHourlyPoint, TripForecastInputs};
 use crate::error::AppError;
 use crate::utilities::haversine_distance_nm;
@@ -15,13 +12,6 @@ pub struct FetchedForecast {
     pub lon: f64,
     pub fetched_at: DateTime<Utc>,
     pub hourly: Vec<ForecastHourlyPoint>,
-}
-
-#[derive(Debug, serde::Serialize)]
-pub struct FetchPoiResult {
-    pub lat: f64,
-    pub lon: f64,
-    pub status: String,
 }
 
 #[derive(Debug, serde::Serialize, Clone)]
@@ -54,6 +44,7 @@ struct MeteoResponse {
     hourly: MeteoHourly,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct MarineHourly {
     time: Vec<String>,
@@ -62,6 +53,7 @@ struct MarineHourly {
     wave_direction: Option<Vec<Option<f64>>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct MarineResponse {
     latitude: f64,
@@ -92,24 +84,42 @@ const MAX_DISTANCE_NM: f64 = 25.0;
 
 // ── Public functions ──────────────────────────────────────────────────────────
 
-pub async fn fetch_from_open_meteo(
-    coords: &[(f64, f64)],
+pub(crate) fn build_meteo_bbox_url(lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) -> String {
+    format!(
+        "https://api.open-meteo.com/v1/forecast\
+         ?latitude_min={lat_min}&latitude_max={lat_max}\
+         &longitude_min={lon_min}&longitude_max={lon_max}\
+         &models=ecmwf_ifs\
+         &hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,cape\
+         &wind_speed_unit=kn&forecast_days=7&timezone=UTC",
+        lat_min = lat_min, lat_max = lat_max,
+        lon_min = lon_min, lon_max = lon_max,
+    )
+}
+
+pub(crate) fn build_marine_bbox_url(lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) -> String {
+    format!(
+        "https://marine-api.open-meteo.com/v1/marine\
+         ?latitude_min={lat_min}&latitude_max={lat_max}\
+         &longitude_min={lon_min}&longitude_max={lon_max}\
+         &models=ecmwf_wam\
+         &hourly=wave_height,wave_period,wave_direction\
+         &forecast_days=7&timezone=UTC",
+        lat_min = lat_min, lat_max = lat_max,
+        lon_min = lon_min, lon_max = lon_max,
+    )
+}
+
+pub async fn fetch_area_forecast(
+    lat_min: f64,
+    lat_max: f64,
+    lon_min: f64,
+    lon_max: f64,
 ) -> Result<Vec<FetchedForecast>, AppError> {
-    if coords.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let lats: String = coords.iter().map(|(lat, _)| lat.to_string()).collect::<Vec<_>>().join(",");
-    let lons: String = coords.iter().map(|(_, lon)| lon.to_string()).collect::<Vec<_>>().join(",");
-
     let client = reqwest::Client::new();
     let fetched_at = Utc::now();
 
-    // Forecast (wind + CAPE)
-    let meteo_url = format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&models=ecmwf_ifs&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,cape&wind_speed_unit=kn&forecast_days=7&timezone=UTC",
-        lats, lons
-    );
+    let meteo_url = build_meteo_bbox_url(lat_min, lat_max, lon_min, lon_max);
     let meteo_resp = client
         .get(&meteo_url)
         .send()
@@ -122,15 +132,12 @@ pub async fn fetch_from_open_meteo(
         .json()
         .await
         .map_err(|e| AppError::Parse(format!("Open-Meteo forecast parse failed: {}", e)))?;
-    let meteo_responses: Vec<MeteoResponse> = serde_json::from_value::<OneOrMany<MeteoResponse>>(meteo_raw)
-        .map_err(|e| AppError::Parse(e.to_string()))?
-        .into_vec();
+    let meteo_responses: Vec<MeteoResponse> =
+        serde_json::from_value::<OneOrMany<MeteoResponse>>(meteo_raw)
+            .map_err(|e| AppError::Parse(e.to_string()))?
+            .into_vec();
 
-    // Marine (waves)
-    let marine_url = format!(
-        "https://marine-api.open-meteo.com/v1/marine?latitude={}&longitude={}&models=ecmwf_wam&hourly=wave_height,wave_period,wave_direction&forecast_days=7&timezone=UTC",
-        lats, lons
-    );
+    let marine_url = build_marine_bbox_url(lat_min, lat_max, lon_min, lon_max);
     let marine_resp = client
         .get(&marine_url)
         .send()
@@ -143,21 +150,25 @@ pub async fn fetch_from_open_meteo(
         .json()
         .await
         .map_err(|e| AppError::Parse(format!("Open-Meteo marine parse failed: {}", e)))?;
-    let marine_responses: Vec<MarineResponse> = serde_json::from_value::<OneOrMany<MarineResponse>>(marine_raw)
-        .map_err(|e| AppError::Parse(e.to_string()))?
-        .into_vec();
+    let marine_responses: Vec<MarineResponse> =
+        serde_json::from_value::<OneOrMany<MarineResponse>>(marine_raw)
+            .map_err(|e| AppError::Parse(e.to_string()))?
+            .into_vec();
 
-    // Merge by index
     let mut results = Vec::new();
-    for (i, _coord) in coords.iter().enumerate() {
-        let Some(meteo) = meteo_responses.get(i) else { continue };
+    for (i, meteo) in meteo_responses.iter().enumerate() {
         let marine = marine_responses.get(i);
-
         let n = meteo.hourly.time.len();
         let mut hourly = Vec::with_capacity(n);
 
         for j in 0..n {
-            let timestamp = format!("{}:00Z", meteo.hourly.time[j]);
+            let raw = &meteo.hourly.time[j];
+            let timestamp = if raw.len() == 16 {
+                // "YYYY-MM-DDTHH:MM" → append :00Z
+                format!("{}:00Z", raw)
+            } else {
+                raw.clone()
+            };
             hourly.push(ForecastHourlyPoint {
                 timestamp,
                 wind_speed_kn: meteo.hourly.wind_speed_10m.as_ref().and_then(|v| v.get(j).copied().flatten()),
@@ -321,6 +332,18 @@ mod tests {
             wave_direction_deg: Some(wave_dir),
             cape_j_kg: Some(cape),
         }
+    }
+
+    #[test]
+    fn test_bbox_url_contains_expected_params() {
+        let url = build_meteo_bbox_url(43.0, 44.0, 8.0, 9.0);
+        assert!(url.contains("latitude_min=43"), "url: {}", url);
+        assert!(url.contains("latitude_max=44"), "url: {}", url);
+        assert!(url.contains("longitude_min=8"), "url: {}", url);
+        assert!(url.contains("longitude_max=9"), "url: {}", url);
+        // URL must not use old comma-separated coordinate lists (latitude=X,Y style)
+        assert!(!url.contains("latitude="), "URL should not have comma-separated coords: {}", url);
+        assert!(!url.contains("longitude="), "URL should not have comma-separated coords: {}", url);
     }
 
     #[test]
