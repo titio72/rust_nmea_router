@@ -7,3 +7,4 @@ logs/
 /backups/
 package-lock.json
 .mcp.json
+.superpowers/
