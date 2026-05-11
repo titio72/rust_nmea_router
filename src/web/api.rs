@@ -233,6 +233,25 @@ pub struct ForecastTripOverlayQuery {
     pub trip_id: u32,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ForecastAreaIdQuery {
+    pub id: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ForecastAreaTripQuery {
+    pub trip_id: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ForecastStatusResponse {
+    pub online: bool,
+    pub last_fetch: Option<String>,
+    pub next_fetch: Option<String>,
+    pub area_count: u64,
+    pub point_count: u64,
+}
+
 fn parse_datetime_str(s: &str) -> Result<DateTime<Utc>, StatusCode> {
     // Try RFC3339 first (e.g. "2026-01-20T10:00:00Z")
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
@@ -1476,6 +1495,63 @@ pub async fn get_forecast_trip_overlay(
     Ok(Json(ApiResponse::ok(overlay)))
 }
 
+pub async fn get_forecast_areas(
+    State(state): State<AppState>,
+    Query(params): Query<ForecastAreaTripQuery>,
+) -> Result<Json<ApiResponse<Vec<crate::db::operations::forecast::TripForecastArea>>>, StatusCode> {
+    match state.db().list_forecast_areas(params.trip_id) {
+        Ok(areas) => Ok(Json(ApiResponse::ok(areas))),
+        Err(e) => {
+            error!(error = %e, trip_id = params.trip_id, "Failed to list forecast areas");
+            Ok(Json(ApiResponse::error(e.to_string())))
+        }
+    }
+}
+
+pub async fn create_forecast_area(
+    State(state): State<AppState>,
+    Json(body): Json<crate::db::operations::forecast::NewTripForecastArea>,
+) -> Result<Json<ApiResponse<u32>>, StatusCode> {
+    match state.db().create_forecast_area(&body) {
+        Ok(id) => Ok(Json(ApiResponse::ok(id))),
+        Err(e) => {
+            error!(error = %e, "Failed to create forecast area");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn delete_forecast_area(
+    State(state): State<AppState>,
+    Query(params): Query<ForecastAreaIdQuery>,
+) -> Result<Json<ApiResponse<()>>, StatusCode> {
+    match state.db().delete_forecast_area(params.id) {
+        Ok(true)  => Ok(Json(ApiResponse::ok(()))),
+        Ok(false) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            error!(error = %e, area_id = params.id, "Failed to delete forecast area");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_forecast_status(
+    State(state): State<AppState>,
+    Query(params): Query<ForecastAreaTripQuery>,
+) -> Result<Json<ApiResponse<ForecastStatusResponse>>, StatusCode> {
+    let poller = state.poller_status.lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone();
+    let (area_count, point_count) = state.db().get_forecast_counts(params.trip_id).unwrap_or((0, 0));
+    Ok(Json(ApiResponse::ok(ForecastStatusResponse {
+        online: poller.online,
+        last_fetch: poller.last_fetch.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+        next_fetch: poller.next_fetch.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+        area_count,
+        point_count,
+    })))
+}
+
 pub fn create_api_router(state: AppState) -> Router {
     let read_only = state.config.web.read_only;
 
@@ -1495,6 +1571,8 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/nav_analysis", get(get_nav_analysis))
         .route("/ais_targets", get(get_ais_targets))
         .route("/forecast/trip-overlay", get(get_forecast_trip_overlay))
+        .route("/forecast/areas", get(get_forecast_areas))
+        .route("/forecast/status", get(get_forecast_status))
         .route("/config/google_maps_key", get(get_google_maps_key))
         .route("/config/read_only", get(get_read_only))
         .route("/sync/status", get(get_sync_status))
@@ -1530,7 +1608,9 @@ pub fn create_api_router(state: AppState) -> Router {
             .route("/backup", delete(delete_backup))
             .route("/backup/download", get(download_backup))
             .route("/system/shutdown", post(system_shutdown))
-            .route("/sync/push", post(post_sync_push));
+            .route("/sync/push", post(post_sync_push))
+            .route("/forecast/areas", post(create_forecast_area))
+            .route("/forecast/areas", delete(delete_forecast_area));
     }
 
     router

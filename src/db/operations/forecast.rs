@@ -102,16 +102,13 @@ impl VesselDatabase {
         Ok(id as u32)
     }
 
-    pub fn delete_forecast_area(&self, id: u32) -> Result<(), AppError> {
+    pub fn delete_forecast_area(&self, id: u32) -> Result<bool, AppError> {
         let mut conn = self.pool.get_conn()?;
         conn.exec_drop(
             "DELETE FROM trip_forecast_area WHERE id = :id",
             params! { "id" => id },
         )?;
-        if conn.affected_rows() == 0 {
-            return Err(AppError::Database(format!("Forecast area {} not found", id)));
-        }
-        Ok(())
+        Ok(conn.affected_rows() > 0)
     }
 
     // ── Forecast data ─────────────────────────────────────────────────────────
