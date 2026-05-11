@@ -6,9 +6,11 @@
     <title>Trip Details - NMEA Router</title>
     <link rel="icon" type="image/png" href="/images/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
     <script src="/js/shared-theme.js?v=3"></script>
     <script src="/libs/chart.min.js"></script>
     <script src="/libs/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
     <!-- Google Maps API will be loaded dynamically -->
     <style>
         #tripDetails {
@@ -309,6 +311,31 @@
             </div>
             <div class="chartsContainer" id="chartsContainerLeg"> <!-- leg specific charts here --> </div>
             <div class="chartsContainer" id="chartsContainerTrip"> <!-- full trip charts here --> </div>
+        </div>
+    </div>
+    <div class="level-1-container" id="forecastAreasContainer" style="display:none; margin-top:20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+            <h2 style="font-size:16px; font-weight:bold; color:var(--text-bold); margin:0;">Forecast Areas</h2>
+            <span id="forecastPollerStatus" style="font-size:12px; color:var(--text-secondary);"></span>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+            <div>
+                <div id="forecastAreaList" style="margin-bottom:12px;"></div>
+                <div id="forecastAreaControls" style="display:none;">
+                    <button id="drawAreaBtn" onclick="startDrawArea()"
+                        style="padding:6px 14px; background:var(--link-color); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:13px;">
+                        Draw Area
+                    </button>
+                    <button id="cancelDrawBtn" onclick="cancelDrawArea()"
+                        style="display:none; padding:6px 14px; background:#e74c3c; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:13px; margin-left:8px;">
+                        Cancel
+                    </button>
+                    <span id="drawAreaHint" style="font-size:12px; color:var(--text-secondary); margin-left:10px; display:none;">
+                        Click and drag on the map to draw a bounding box
+                    </span>
+                </div>
+            </div>
+            <div id="forecastAreaMap" style="height:260px; border-radius:6px; border:1px solid var(--border-color);"></div>
         </div>
     </div>
     <script>
@@ -858,6 +885,11 @@
                 await renderTripCharts(tripData, trackData, startTime, endTime, isFullTrip).catch(error => {
                     console.error('Failed to load trip charts:', error);
                 });
+
+                // Init forecast areas section
+                const tripEndMs = tripData.end_date ? new Date(tripData.end_date).getTime() : 0;
+                const isActive = (Date.now() - tripEndMs) < 7_200_000; // within 2h = active trip
+                initForecastAreasSection(tripId, isActive);
             } catch (error) {
                 console.error('Failed to load trip details:', error);
             }
@@ -2765,6 +2797,198 @@
 
             // Convert HSL to RGB (with full saturation and lightness)
             return hslToRgb(hue, 100, 50);
+        }
+
+        // ── Forecast Areas ────────────────────────────────────────────────────────────
+
+        let forecastAreaMap = null;
+        let forecastAreaRectangles = [];
+        let drawStart = null;
+        let drawRect = null;
+        let isDrawing = false;
+        let currentTripId = null;
+        let isActiveTripForForecast = false;
+        let forecastStatusInterval = null;
+
+        function initForecastAreaMap() {
+            if (forecastAreaMap) { forecastAreaMap.remove(); }
+            forecastAreaMap = L.map('forecastAreaMap').setView([43.0, 9.0], 5);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap', maxZoom: 16
+            }).addTo(forecastAreaMap);
+
+            forecastAreaMap.on('mousedown', onMapMouseDown);
+            forecastAreaMap.on('mousemove', onMapMouseMove);
+            forecastAreaMap.on('mouseup', onMapMouseUp);
+        }
+
+        function startDrawArea() {
+            isDrawing = true;
+            document.getElementById('cancelDrawBtn').style.display = '';
+            document.getElementById('drawAreaBtn').style.display = 'none';
+            document.getElementById('drawAreaHint').style.display = '';
+            forecastAreaMap.dragging.disable();
+        }
+
+        function cancelDrawArea() {
+            isDrawing = false;
+            drawStart = null;
+            if (drawRect) { forecastAreaMap.removeLayer(drawRect); drawRect = null; }
+            document.getElementById('cancelDrawBtn').style.display = 'none';
+            document.getElementById('drawAreaBtn').style.display = '';
+            document.getElementById('drawAreaHint').style.display = 'none';
+            forecastAreaMap.dragging.enable();
+        }
+
+        function onMapMouseDown(e) {
+            if (!isDrawing) return;
+            drawStart = e.latlng;
+            if (drawRect) { forecastAreaMap.removeLayer(drawRect); }
+            drawRect = L.rectangle([drawStart, drawStart], {
+                color: '#3b82f6', weight: 2, fillOpacity: 0.15
+            }).addTo(forecastAreaMap);
+        }
+
+        function onMapMouseMove(e) {
+            if (!isDrawing || !drawStart || !drawRect) return;
+            drawRect.setBounds(L.latLngBounds(drawStart, e.latlng));
+        }
+
+        async function onMapMouseUp(e) {
+            if (!isDrawing || !drawStart) return;
+            const end = e.latlng;
+            const start = drawStart;  // save before cancel nulls it
+            cancelDrawArea();
+
+            const lat_min = Math.min(start.lat, end.lat);
+            const lat_max = Math.max(start.lat, end.lat);
+            const lon_min = Math.min(start.lng, end.lng);
+            const lon_max = Math.max(start.lng, end.lng);
+
+            if (Math.abs(lat_max - lat_min) < 0.05 || Math.abs(lon_max - lon_min) < 0.05) {
+                return; // too small
+            }
+
+            try {
+                await fetch('/api/forecast/areas', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ trip_id: currentTripId, lat_min, lat_max, lon_min, lon_max }),
+                });
+                await loadForecastAreas(currentTripId);
+            } catch (err) {
+                console.error('Failed to save forecast area', err);
+            }
+        }
+
+        async function deleteForecastArea(id) {
+            try {
+                await fetch('/api/forecast/areas?id=' + id, { method: 'DELETE' });
+                await loadForecastAreas(currentTripId);
+            } catch (err) {
+                console.error('Failed to delete forecast area', err);
+            }
+        }
+
+        function renderForecastAreaList(areas) {
+            const container = document.getElementById('forecastAreaList');
+            if (!areas.length) {
+                container.innerHTML = '<div style="font-size:13px; color:var(--text-secondary);">No areas defined. Draw a bounding box on the map.</div>';
+                return;
+            }
+            container.innerHTML = areas.map(a => `
+                <div style="display:flex; justify-content:space-between; align-items:center;
+                            background:var(--bg-secondary); padding:6px 10px; border-radius:5px;
+                            margin-bottom:5px; font-size:13px;">
+                    <span>
+                        <strong>Area ${a.id}</strong>
+                        <span style="color:var(--text-secondary); font-size:11px; margin-left:8px;">
+                            ${a.lat_min.toFixed(2)}–${a.lat_max.toFixed(2)}°N &nbsp;
+                            ${a.lon_min.toFixed(2)}–${a.lon_max.toFixed(2)}°E
+                        </span>
+                    </span>
+                    ${isActiveTripForForecast
+                        ? `<button onclick="deleteForecastArea(${Number(a.id)})"
+                               style="background:transparent; border:1px solid #e74c3c; color:#e74c3c;
+                                      border-radius:3px; padding:1px 8px; font-size:11px; cursor:pointer;">
+                               Delete
+                           </button>`
+                        : ''}
+                </div>`).join('');
+        }
+
+        function renderForecastAreasOnMap(areas) {
+            forecastAreaRectangles.forEach(r => forecastAreaMap.removeLayer(r));
+            forecastAreaRectangles = [];
+            areas.forEach(a => {
+                const r = L.rectangle(
+                    [[a.lat_min, a.lon_min], [a.lat_max, a.lon_max]],
+                    { color: '#3b82f6', weight: 2, fillOpacity: 0.1 }
+                ).addTo(forecastAreaMap);
+                forecastAreaRectangles.push(r);
+            });
+            if (areas.length) {
+                const bounds = L.latLngBounds(areas.map(a => [
+                    [a.lat_min, a.lon_min], [a.lat_max, a.lon_max]
+                ]).flat());
+                forecastAreaMap.fitBounds(bounds, { padding: [20, 20] });
+            }
+        }
+
+        async function loadForecastAreas(tripId) {
+            try {
+                const resp = await fetch('/api/forecast/areas?trip_id=' + tripId);
+                const json = await resp.json();
+                const areas = json.data || [];
+                renderForecastAreaList(areas);
+                renderForecastAreasOnMap(areas);
+            } catch (err) {
+                console.error('Failed to load forecast areas', err);
+                renderForecastAreaList([]);
+                renderForecastAreasOnMap([]);
+            }
+        }
+
+        async function updateForecastStatus(tripId) {
+            try {
+                const resp = await fetch('/api/forecast/status?trip_id=' + tripId);
+                const json = await resp.json();
+                const s = json.data;
+                if (!s) return;
+                const onlineBadge = s.online
+                    ? '<span style="background:#14532d;color:#86efac;padding:2px 8px;border-radius:10px;font-size:11px;">● Fetching every 3h</span>'
+                    : '<span style="background:#7c2d12;color:#fdba74;padding:2px 8px;border-radius:10px;font-size:11px;">⚠ Offline — retrying</span>';
+                const lastFetch = s.last_fetch
+                    ? 'Last fetch: ' + new Date(s.last_fetch).toLocaleTimeString() + ' UTC'
+                    : 'No fetch yet';
+                const nextFetch = s.next_fetch
+                    ? ' · Next: ' + new Date(s.next_fetch).toLocaleTimeString()
+                    : '';
+                document.getElementById('forecastPollerStatus').innerHTML =
+                    onlineBadge + ' <span style="font-size:11px;color:var(--text-secondary);margin-left:8px;">' +
+                    lastFetch + nextFetch + ' · ' + s.point_count + ' pts</span>';
+            } catch (_) {}
+        }
+
+        function initForecastAreasSection(tripId, isActive) {
+            // Reset draw state from any previous session
+            isDrawing = false;
+            drawStart = null;
+            drawRect = null;
+
+            currentTripId = tripId;
+            isActiveTripForForecast = isActive;
+
+            document.getElementById('forecastAreasContainer').style.display = '';
+            document.getElementById('forecastAreaControls').style.display = isActive ? '' : 'none';
+
+            initForecastAreaMap();
+            if (forecastAreaMap) forecastAreaMap.invalidateSize();
+            loadForecastAreas(tripId);
+            updateForecastStatus(tripId);
+
+            if (forecastStatusInterval) clearInterval(forecastStatusInterval);
+            forecastStatusInterval = setInterval(() => updateForecastStatus(tripId), 60000);
         }
 
     </script>
