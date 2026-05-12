@@ -2817,9 +2817,12 @@
                 attribution: '© OpenStreetMap', maxZoom: 16
             }).addTo(forecastAreaMap);
 
-            forecastAreaMap.on('mousedown', onMapMouseDown);
-            forecastAreaMap.on('mousemove', onMapMouseMove);
-            forecastAreaMap.on('mouseup', onMapMouseUp);
+            // Use DOM events on the container — Leaflet's map.on() events can be
+            // swallowed by the internal drag/pan handlers even when dragging is disabled.
+            const c = forecastAreaMap.getContainer();
+            c.addEventListener('mousedown', onMapMouseDown);
+            c.addEventListener('mousemove', onMapMouseMove);
+            c.addEventListener('mouseup',   onMapMouseUp);
         }
 
         function startDrawArea() {
@@ -2828,6 +2831,7 @@
             document.getElementById('drawAreaBtn').style.display = 'none';
             document.getElementById('drawAreaHint').style.display = '';
             forecastAreaMap.dragging.disable();
+            forecastAreaMap.getContainer().style.cursor = 'crosshair';
         }
 
         function cancelDrawArea() {
@@ -2838,25 +2842,27 @@
             document.getElementById('drawAreaBtn').style.display = '';
             document.getElementById('drawAreaHint').style.display = 'none';
             forecastAreaMap.dragging.enable();
+            forecastAreaMap.getContainer().style.cursor = '';
         }
 
         function onMapMouseDown(e) {
             if (!isDrawing) return;
-            drawStart = e.latlng;
+            e.preventDefault();
+            drawStart = forecastAreaMap.mouseEventToLatLng(e);
             if (drawRect) { forecastAreaMap.removeLayer(drawRect); }
             drawRect = L.rectangle([drawStart, drawStart], {
-                color: '#3b82f6', weight: 2, fillOpacity: 0.15
+                color: '#3b82f6', weight: 2, fillOpacity: 0.15, interactive: false
             }).addTo(forecastAreaMap);
         }
 
         function onMapMouseMove(e) {
             if (!isDrawing || !drawStart || !drawRect) return;
-            drawRect.setBounds(L.latLngBounds(drawStart, e.latlng));
+            drawRect.setBounds(L.latLngBounds(drawStart, forecastAreaMap.mouseEventToLatLng(e)));
         }
 
         async function onMapMouseUp(e) {
             if (!isDrawing || !drawStart) return;
-            const end = e.latlng;
+            const end = forecastAreaMap.mouseEventToLatLng(e);
             const start = drawStart;  // save before cancel nulls it
             cancelDrawArea();
 
@@ -2982,9 +2988,13 @@
             document.getElementById('forecastAreasContainer').style.display = '';
             document.getElementById('forecastAreaControls').style.display = isActive ? '' : 'none';
 
-            initForecastAreaMap();
-            if (forecastAreaMap) forecastAreaMap.invalidateSize();
-            loadForecastAreas(tripId);
+            // Defer map init so the browser reflows the now-visible container first;
+            // without this the map gets 0×0 dimensions and mouseEventToLatLng is wrong.
+            requestAnimationFrame(() => {
+                initForecastAreaMap();
+                forecastAreaMap.invalidateSize();
+                loadForecastAreas(tripId);
+            });
             updateForecastStatus(tripId);
 
             if (forecastStatusInterval) clearInterval(forecastStatusInterval);
