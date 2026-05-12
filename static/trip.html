@@ -2894,7 +2894,7 @@
                 await fetch('/api/forecast/areas', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ trip_id: currentTripId, lat_min, lat_max, lon_min, lon_max }),
+                    body: JSON.stringify({ trip_id: Number(currentTripId), lat_min, lat_max, lon_min, lon_max }),
                 });
                 await loadForecastAreas(currentTripId);
             } catch (err) {
