@@ -1,4 +1,4 @@
-use crate::db::operations::forecast::{ForecastHourlyPoint, TripForecastInputs};
+use crate::db::operations::forecast::{FetchWithHourly, ForecastHourlyPoint, TripForecastInputs};
 use crate::error::AppError;
 use crate::utilities::haversine_distance_nm;
 use chrono::{DateTime, Duration, Utc};
@@ -16,6 +16,20 @@ pub struct FetchedForecast {
 
 #[derive(Debug, serde::Serialize, Clone)]
 pub struct TripOverlayPoint {
+    pub timestamp: String,
+    pub wind_speed_kn: Option<f64>,
+    pub wind_direction_deg: Option<f64>,
+    pub wind_gust_kn: Option<f64>,
+    pub wave_height_m: Option<f64>,
+    pub wave_period_s: Option<f64>,
+    pub wave_direction_deg: Option<f64>,
+    pub cape_j_kg: Option<f64>,
+}
+
+#[derive(Debug, serde::Serialize, Clone)]
+pub struct RouteOverlayPoint {
+    pub lat: f64,
+    pub lon: f64,
     pub timestamp: String,
     pub wind_speed_kn: Option<f64>,
     pub wind_direction_deg: Option<f64>,
@@ -228,6 +242,61 @@ pub fn compute_trip_overlay(inputs: &TripForecastInputs) -> Vec<TripOverlayPoint
     result
 }
 
+pub fn generate_route_track(
+    from_lat: f64,
+    from_lon: f64,
+    to_lat: f64,
+    to_lon: f64,
+    departure: DateTime<Utc>,
+    speed_kn: f64,
+) -> Vec<(f64, f64, DateTime<Utc>)> {
+    let distance_nm = haversine_distance_nm(from_lat, from_lon, to_lat, to_lon);
+    if distance_nm < 0.1 || speed_kn <= 0.0 {
+        return vec![(from_lat, from_lon, departure)];
+    }
+    let total_hours = distance_nm / speed_kn;
+    let num_steps = total_hours.ceil() as i64 + 1;
+    (0..num_steps)
+        .map(|h| {
+            let frac = (h as f64 / total_hours).min(1.0);
+            let lat = from_lat + frac * (to_lat - from_lat);
+            let lon = from_lon + frac * (to_lon - from_lon);
+            let ts = departure + Duration::hours(h);
+            (lat, lon, ts)
+        })
+        .collect()
+}
+
+pub fn compute_route_overlay(
+    track: &[(f64, f64, DateTime<Utc>)],
+    fetches: &[FetchWithHourly],
+) -> Vec<RouteOverlayPoint> {
+    track
+        .iter()
+        .filter_map(|(lat, lon, ts)| {
+            let samples: Vec<(f64, f64, ForecastHourlyPoint)> = fetches
+                .iter()
+                .filter_map(|f| {
+                    nearest_hourly(&f.hourly, *ts).map(|pt| (f.lat, f.lon, pt))
+                })
+                .collect();
+            let interp = interpolate_idw(*lat, *lon, &samples)?;
+            Some(RouteOverlayPoint {
+                lat: *lat,
+                lon: *lon,
+                timestamp: ts.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                wind_speed_kn: interp.wind_speed_kn,
+                wind_direction_deg: interp.wind_direction_deg,
+                wind_gust_kn: interp.wind_gust_kn,
+                wave_height_m: interp.wave_height_m,
+                wave_period_s: interp.wave_period_s,
+                wave_direction_deg: interp.wave_direction_deg,
+                cape_j_kg: interp.cape_j_kg,
+            })
+        })
+        .collect()
+}
+
 fn nearest_track_pos(
     track: &[(f64, f64, DateTime<Utc>)],
     ts: DateTime<Utc>,
@@ -388,5 +457,62 @@ mod tests {
         let wd = result.wind_direction_deg.unwrap();
         // Result should be ~0° (or 360°), definitely not ~180°
         assert!(wd < 20.0 || wd > 340.0, "Expected ~0°, got {}°", wd);
+    }
+
+    #[test]
+    fn test_generate_route_track_point_count() {
+        use chrono::TimeZone;
+        let dep = Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap();
+        // Livorno → Capraia ≈ 35 nm at 5 kn → 7 h passage → 8 points (h=0..7)
+        let track = generate_route_track(43.55, 10.29, 43.05, 9.84, dep, 5.0);
+        assert!(track.len() >= 7 && track.len() <= 9, "Expected 7–9 points, got {}", track.len());
+        // First point at departure position
+        assert!((track[0].0 - 43.55).abs() < 0.01);
+        assert!((track[0].2 - dep).num_seconds() == 0);
+        // Last point near destination
+        let last = track.last().unwrap();
+        assert!((last.0 - 43.05).abs() < 0.1, "Expected near 43.05, got {}", last.0);
+    }
+
+    #[test]
+    fn test_generate_route_track_timestamps_advance_hourly() {
+        use chrono::TimeZone;
+        let dep = Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap();
+        let track = generate_route_track(43.55, 10.29, 43.05, 9.84, dep, 5.0);
+        for i in 1..track.len() {
+            let diff = (track[i].2 - track[i-1].2).num_hours();
+            assert_eq!(diff, 1, "Expected 1-hour steps");
+        }
+    }
+
+    #[test]
+    fn test_compute_route_overlay_returns_points_with_coords() {
+        use chrono::TimeZone;
+        use crate::db::operations::forecast::{FetchWithHourly, ForecastHourlyPoint};
+
+        let dep = Utc.with_ymd_and_hms(2026, 5, 14, 9, 0, 0).unwrap();
+        let track = generate_route_track(43.5, 9.0, 43.5, 9.5, dep, 10.0);
+        // Build hourly points that span the route timestamps
+        let hourly: Vec<ForecastHourlyPoint> = track.iter().map(|(_, _, ts)| ForecastHourlyPoint {
+            timestamp: ts.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            wind_speed_kn: Some(12.0),
+            wind_direction_deg: Some(180.0),
+            wind_gust_kn: Some(15.0),
+            wave_height_m: Some(1.0),
+            wave_period_s: Some(6.0),
+            wave_direction_deg: Some(185.0),
+            cape_j_kg: Some(0.0),
+        }).collect();
+        // Single grid point near the route
+        let fetches = vec![FetchWithHourly {
+            lat: 43.5, lon: 9.25,
+            hourly,
+        }];
+        let overlay = compute_route_overlay(&track, &fetches);
+        // Every point should have lat/lon
+        for p in &overlay {
+            assert!(p.lat >= 43.4 && p.lat <= 43.6, "lat out of range: {}", p.lat);
+        }
+        assert!(!overlay.is_empty());
     }
 }
