@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trip Planning</title>
+    <link rel="stylesheet" href="/shared.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+    <script src="/js/shared-theme.js?v=3"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <style>
+        #planMap { height: calc(100vh - 280px); min-height: 380px; border-radius: 6px; }
+        .day-tab { padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px;
+                   background: var(--bg-secondary); color: var(--text-secondary);
+                   border: 1px solid var(--border-color); }
+        .day-tab.active { background: var(--link-color); color: #fff; border-color: var(--link-color); }
+        .day-tab:hover:not(.active) { background: var(--bg-hover); }
+    </style>
+</head>
+<body>
+    <div id="headerContainer"></div>
+
+    <div style="max-width:1500px; margin:0 auto; padding:20px;">
+
+        <!-- Time scrubber -->
+        <div class="level-1-container" style="padding:14px 20px; margin-bottom:10px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <div id="dayTabsContainer" style="display:flex; gap:5px; flex-wrap:wrap;"></div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <button id="planRouteBtn" onclick="toggleRouteMode()"
+                        style="padding:5px 14px; background:var(--link-color); color:#fff; border:none;
+                               border-radius:4px; cursor:pointer; font-size:13px;">
+                        Plan Route
+                    </button>
+                </div>
+            </div>
+            <div style="display:flex; align-items:center; gap:12px;">
+                <input type="range" id="hourSlider" min="0" max="23" value="0"
+                    style="flex:1; accent-color:var(--link-color);">
+                <span id="selectedTime"
+                    style="font-size:13px; color:var(--text-bold); min-width:185px; text-align:right;"></span>
+                <button onclick="jumpToNow()"
+                    style="padding:4px 10px; font-size:12px; border:1px solid var(--border-color);
+                           border-radius:4px; background:transparent; color:var(--text-secondary); cursor:pointer;">
+                    Now
+                </button>
+            </div>
+        </div>
+
+        <!-- Route bar (hidden until route mode) -->
+        <div id="routeBar" class="level-1-container"
+             style="display:none; padding:10px 20px; margin-bottom:10px;">
+            <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; font-size:13px;">
+                <span style="color:#48bb78; font-weight:bold;">● FROM</span>
+                <span id="fromLabel" style="color:var(--text-secondary);">click map to set</span>
+                <span style="color:var(--text-secondary);">→</span>
+                <span style="color:#fc8181; font-weight:bold;">● TO</span>
+                <span id="toLabel" style="color:var(--text-secondary);">click map to set</span>
+                <span style="color:var(--border-color); margin:0 4px;">|</span>
+                <label style="color:var(--text-secondary);">Dep (UTC):
+                    <input type="datetime-local" id="depInput"
+                        style="margin-left:6px; background:var(--bg-secondary);
+                               border:1px solid var(--border-color); border-radius:4px;
+                               padding:3px 8px; color:var(--text-primary); font-size:13px;">
+                </label>
+                <label style="color:var(--text-secondary);">Speed:
+                    <input type="number" id="speedInput" value="5.5" min="1" max="20" step="0.5"
+                        style="width:64px; margin-left:6px; background:var(--bg-secondary);
+                               border:1px solid var(--border-color); border-radius:4px;
+                               padding:3px 8px; color:var(--text-primary); font-size:13px;"> kn
+                </label>
+                <button id="computeBtn" onclick="computeRoute()" disabled
+                    style="padding:5px 14px; background:var(--link-color); color:#fff; border:none;
+                           border-radius:4px; cursor:pointer; font-size:13px; opacity:0.4;">
+                    Compute
+                </button>
+            </div>
+        </div>
+
+        <!-- Map -->
+        <div class="level-1-container" style="padding:0; overflow:hidden; margin-bottom:10px;">
+            <div id="planMap"></div>
+        </div>
+
+        <!-- Stats bar -->
+        <div class="level-1-container" style="padding:12px 20px;">
+            <div style="display:flex; gap:28px; flex-wrap:wrap; font-size:13px; color:var(--text-secondary);">
+                Wind: <strong id="statWind" style="color:var(--text-primary);">—</strong>
+                &nbsp;Gust: <strong id="statGust" style="color:var(--text-primary);">—</strong>
+                &nbsp;Wave: <strong id="statWave" style="color:var(--text-primary);">—</strong>
+                &nbsp;Period: <strong id="statPeriod" style="color:var(--text-primary);">—</strong>
+                &nbsp;CAPE: <strong id="statCape" style="color:var(--text-primary);">—</strong>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('trips');
+        initializeTheme();
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const tripId = Number(urlParams.get('id'));
+
+        // ── State ─────────────────────────────────────────────────────────────────
+        let planMap = null;
+        let arrowMarkers = [];
+        let availableDays = [];
+        let selectedDay = 0;
+        let selectedHour = 0;
+        let hourDebounceTimer = null;
+
+        let routeMode = false;
+        let routeFrom = null, routeTo = null;
+        let fromMarker = null, toMarker = null;
+        let routeSegments = [];
+
+        // ── Init ─────────────────────────────────────────────────────────────────
+        async function init() {
+            planMap = L.map('planMap').setView([43.0, 9.0], 6);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap', maxZoom: 16
+            }).addTo(planMap);
+            planMap.on('click', onMapClick);
+
+            const saved = localStorage.getItem('plan_speed_kn');
+            if (saved) document.getElementById('speedInput').value = saved;
+
+            await loadAvailableDays();
+        }
+
+        async function loadAvailableDays() {
+            try {
+                const resp = await fetch('/api/forecast/status?trip_id=' + tripId);
+                const json = await resp.json();
+                if (!json.data || !json.data.last_fetch) {
+                    document.getElementById('dayTabsContainer').innerHTML =
+                        '<span style="font-size:13px; color:var(--text-secondary);">' +
+                        'No forecast data. Add areas on the trip page first.</span>';
+                    return;
+                }
+                const now = new Date();
+                availableDays = Array.from({ length: 7 }, (_, d) => {
+                    const day = new Date(now);
+                    day.setUTCDate(now.getUTCDate() + d);
+                    day.setUTCHours(0, 0, 0, 0);
+                    return {
+                        date: day,
+                        label: day.toLocaleDateString('en-GB', {
+                            weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC'
+                        })
+                    };
+                });
+                renderDayTabs();
+                selectDay(0, false);
+            } catch (err) {
+                console.error('Failed to load forecast status', err);
+            }
+        }
+
+        // ── Time scrubber ─────────────────────────────────────────────────────────
+        function renderDayTabs() {
+            document.getElementById('dayTabsContainer').innerHTML = availableDays
+                .map((d, i) =>
+                    `<button class="day-tab${i === selectedDay ? ' active' : ''}"
+                             onclick="selectDay(${i})">${d.label}</button>`)
+                .join('');
+        }
+
+        function selectDay(i, doLoad = true) {
+            selectedDay = i;
+            selectedHour = 0;
+            document.getElementById('hourSlider').value = 0;
+            renderDayTabs();
+            updateSelectedTime();
+            if (doLoad) loadGridPoints();
+        }
+
+        function updateSelectedTime() {
+            if (!availableDays[selectedDay]) return;
+            const d = new Date(availableDays[selectedDay].date);
+            d.setUTCHours(selectedHour);
+            document.getElementById('selectedTime').textContent =
+                d.toLocaleDateString('en-GB', {
+                    weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC'
+                }) + ' · ' + String(selectedHour).padStart(2, '0') + ':00 UTC';
+        }
+
+        function getSelectedISO() {
+            if (!availableDays[selectedDay]) return null;
+            const d = new Date(availableDays[selectedDay].date);
+            d.setUTCHours(selectedHour, 0, 0, 0);
+            return d.toISOString();
+        }
+
+        document.getElementById('hourSlider').addEventListener('input', function () {
+            selectedHour = parseInt(this.value);
+            updateSelectedTime();
+            clearTimeout(hourDebounceTimer);
+            hourDebounceTimer = setTimeout(loadGridPoints, 150);
+        });
+
+        function jumpToNow() {
+            const now = new Date();
+            const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+            const idx = availableDays.findIndex(d => d.date.getTime() === todayUTC.getTime());
+            if (idx >= 0) {
+                selectedHour = now.getUTCHours();
+                document.getElementById('hourSlider').value = selectedHour;
+                selectedDay = idx;
+                renderDayTabs();
+                updateSelectedTime();
+                loadGridPoints();
+            }
+        }
+
+        // ── Grid-point arrows ──────────────────────────────────────────────────────
+        async function loadGridPoints() {
+            const ts = getSelectedISO();
+            if (!ts) return;
+            try {
+                const resp = await fetch(
+                    `/api/forecast/grid-points?trip_id=${tripId}&timestamp=${encodeURIComponent(ts)}`
+                );
+                const json = await resp.json();
+                const pts = json.data || [];
+                renderArrows(pts);
+                renderStats(pts);
+            } catch (err) {
+                console.error('Failed to load grid points', err);
+            }
+        }
+
+        function windColor(speed) {
+            const t = Math.min((speed || 0) / 30, 1);
+            if (t < 0.5) return `rgb(${Math.round(2 * t * 255)},255,0)`;
+            return `rgb(255,${Math.round(2 * (1 - t) * 255)},0)`;
+        }
+
+        function renderArrows(pts) {
+            arrowMarkers.forEach(m => planMap.removeLayer(m));
+            arrowMarkers = [];
+            pts.forEach(pt => {
+                const speed = pt.wind_speed_kn || 0;
+                const dir = pt.wind_direction_deg || 0;
+                const color = windColor(speed);
+                const svg =
+                    `<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">` +
+                    `<g transform="rotate(${dir},11,11)">` +
+                    `<polygon points="11,2 15,16 11,12 7,16" fill="${color}" ` +
+                    `stroke="rgba(0,0,0,0.35)" stroke-width="0.8"/>` +
+                    `</g></svg>`;
+                const icon = L.divIcon({ html: svg, className: '', iconSize: [22, 22], iconAnchor: [11, 11] });
+                const m = L.marker([pt.lat, pt.lon], { icon }).addTo(planMap);
+                m.bindPopup(
+                    `<b>Wind:</b> ${speed.toFixed(1)} kn ${(dir).toFixed(0)}°<br>` +
+                    `<b>Gust:</b> ${(pt.wind_gust_kn || 0).toFixed(1)} kn<br>` +
+                    `<b>Wave:</b> ${(pt.wave_height_m || 0).toFixed(1)} m ` +
+                    `${(pt.wave_period_s || 0).toFixed(0)} s<br>` +
+                    `<b>CAPE:</b> ${(pt.cape_j_kg || 0).toFixed(0)} J/kg`
+                );
+                arrowMarkers.push(m);
+            });
+        }
+
+        function renderStats(pts) {
+            if (!pts.length) return;
+            const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+            const winds = pts.map(p => p.wind_speed_kn).filter(v => v != null);
+            const dirs  = pts.map(p => p.wind_direction_deg).filter(v => v != null);
+            const gusts = pts.map(p => p.wind_gust_kn).filter(v => v != null);
+            const waves = pts.map(p => p.wave_height_m).filter(v => v != null);
+            const periods = pts.map(p => p.wave_period_s).filter(v => v != null);
+            const capes = pts.map(p => p.cape_j_kg).filter(v => v != null);
+
+            let dirStr = '';
+            if (dirs.length) {
+                const sinS = dirs.reduce((s, d) => s + Math.sin(d * Math.PI / 180), 0);
+                const cosS = dirs.reduce((s, d) => s + Math.cos(d * Math.PI / 180), 0);
+                const avgDir = ((Math.atan2(sinS, cosS) * 180 / Math.PI) + 360) % 360;
+                const names = ['N','NNE','NE','ENE','E','ESE','SE','SSE',
+                                'S','SSW','SW','WSW','W','WNW','NW','NNW'];
+                dirStr = ' ' + names[Math.round(avgDir / 22.5) % 16];
+            }
+            const fmt = (arr, dec, unit) => {
+                const v = avg(arr);
+                return v != null ? `${v.toFixed(dec)} ${unit}` : '—';
+            };
+            document.getElementById('statWind').textContent =
+                winds.length ? `${avg(winds).toFixed(1)} kn${dirStr}` : '—';
+            document.getElementById('statGust').textContent   = fmt(gusts, 1, 'kn');
+            document.getElementById('statWave').textContent   = fmt(waves, 1, 'm');
+            document.getElementById('statPeriod').textContent = fmt(periods, 0, 's');
+            document.getElementById('statCape').textContent   = fmt(capes, 0, 'J/kg');
+        }
+
+        // ── Route mode ────────────────────────────────────────────────────────────
+        function toggleRouteMode() {
+            if (routeMode) {
+                clearRoute();
+            } else {
+                routeMode = true;
+                document.getElementById('planRouteBtn').textContent = 'Clear Route';
+                document.getElementById('planRouteBtn').style.background = '#e74c3c';
+                document.getElementById('routeBar').style.display = '';
+                planMap.getContainer().style.cursor = 'crosshair';
+                // Pre-fill departure from current scrubber
+                const iso = getSelectedISO();
+                if (iso) document.getElementById('depInput').value = iso.slice(0, 16);
+            }
+        }
+
+        function clearRoute() {
+            routeMode = false;
+            routeFrom = routeTo = null;
+            if (fromMarker) { planMap.removeLayer(fromMarker); fromMarker = null; }
+            if (toMarker)   { planMap.removeLayer(toMarker);   toMarker   = null; }
+            routeSegments.forEach(l => planMap.removeLayer(l));
+            routeSegments = [];
+            document.getElementById('routeBar').style.display = 'none';
+            document.getElementById('fromLabel').textContent = 'click map to set';
+            document.getElementById('toLabel').textContent   = 'click map to set';
+            document.getElementById('computeBtn').disabled = true;
+            document.getElementById('computeBtn').style.opacity = '0.4';
+            document.getElementById('planRouteBtn').textContent = 'Plan Route';
+            document.getElementById('planRouteBtn').style.background = '';
+            planMap.getContainer().style.cursor = '';
+        }
+
+        function onMapClick(e) {
+            if (!routeMode) return;
+            if (!routeFrom) {
+                routeFrom = e.latlng;
+                fromMarker = L.circleMarker(e.latlng, {
+                    color: '#48bb78', fillColor: '#48bb78', fillOpacity: 1, radius: 7, weight: 2
+                }).addTo(planMap);
+                document.getElementById('fromLabel').textContent =
+                    `${e.latlng.lat.toFixed(4)}°N  ${e.latlng.lng.toFixed(4)}°E`;
+            } else if (!routeTo) {
+                routeTo = e.latlng;
+                toMarker = L.circleMarker(e.latlng, {
+                    color: '#fc8181', fillColor: '#fc8181', fillOpacity: 1, radius: 7, weight: 2
+                }).addTo(planMap);
+                document.getElementById('toLabel').textContent =
+                    `${e.latlng.lat.toFixed(4)}°N  ${e.latlng.lng.toFixed(4)}°E`;
+            } else {
+                // Third click: replace FROM marker, reset TO and route
+                planMap.removeLayer(fromMarker);
+                routeFrom = e.latlng;
+                fromMarker = L.circleMarker(e.latlng, {
+                    color: '#48bb78', fillColor: '#48bb78', fillOpacity: 1, radius: 7, weight: 2
+                }).addTo(planMap);
+                document.getElementById('fromLabel').textContent =
+                    `${e.latlng.lat.toFixed(4)}°N  ${e.latlng.lng.toFixed(4)}°E`;
+                if (toMarker) { planMap.removeLayer(toMarker); toMarker = null; }
+                routeTo = null;
+                document.getElementById('toLabel').textContent = 'click map to set';
+                routeSegments.forEach(l => planMap.removeLayer(l));
+                routeSegments = [];
+            }
+            checkComputeReady();
+        }
+
+        function checkComputeReady() {
+            const dep   = document.getElementById('depInput').value;
+            const speed = parseFloat(document.getElementById('speedInput').value);
+            const ready = !!(routeFrom && routeTo && dep && speed > 0);
+            document.getElementById('computeBtn').disabled = !ready;
+            document.getElementById('computeBtn').style.opacity = ready ? '1' : '0.4';
+        }
+
+        document.getElementById('depInput').addEventListener('change', checkComputeReady);
+        document.getElementById('speedInput').addEventListener('input', function () {
+            localStorage.setItem('plan_speed_kn', this.value);
+            checkComputeReady();
+        });
+
+        async function computeRoute() {
+            const dep   = document.getElementById('depInput').value;   // "2026-05-14T09:00"
+            const speed = parseFloat(document.getElementById('speedInput').value);
+            if (!routeFrom || !routeTo || !dep || !(speed > 0)) return;
+
+            const departure = dep.slice(0, 16) + ':00Z';               // treat as UTC
+            const url = `/api/forecast/route?trip_id=${tripId}` +
+                `&from_lat=${routeFrom.lat}&from_lon=${routeFrom.lng}` +
+                `&to_lat=${routeTo.lat}&to_lon=${routeTo.lng}` +
+                `&departure=${encodeURIComponent(departure)}&speed_kn=${speed}`;
+
+            const btn = document.getElementById('computeBtn');
+            btn.textContent = 'Computing…';
+            btn.disabled = true;
+            try {
+                const resp = await fetch(url);
+                const json = await resp.json();
+                drawRouteLine(json.data || []);
+            } catch (err) {
+                console.error('Route forecast failed', err);
+            } finally {
+                btn.textContent = 'Compute';
+                checkComputeReady();
+            }
+        }
+
+        function drawRouteLine(pts) {
+            routeSegments.forEach(l => planMap.removeLayer(l));
+            routeSegments = [];
+            if (pts.length < 2) return;
+
+            for (let i = 0; i < pts.length - 1; i++) {
+                const p = pts[i];
+                const seg = L.polyline(
+                    [[p.lat, p.lon], [pts[i + 1].lat, pts[i + 1].lon]],
+                    { color: windColor(p.wind_speed_kn || 0), weight: 5, opacity: 0.9 }
+                ).addTo(planMap);
+                const ts = new Date(p.timestamp);
+                seg.bindPopup(
+                    `<b>${ts.toUTCString()}</b><br>` +
+                    `Wind: ${(p.wind_speed_kn || 0).toFixed(1)} kn ` +
+                    `${(p.wind_direction_deg || 0).toFixed(0)}°<br>` +
+                    `Gust: ${(p.wind_gust_kn || 0).toFixed(1)} kn<br>` +
+                    `Wave: ${(p.wave_height_m || 0).toFixed(1)} m`
+                );
+                routeSegments.push(seg);
+            }
+
+            // ETA tooltip at destination
+            const last = pts[pts.length - 1];
+            const eta  = new Date(last.timestamp);
+            const etaStr =
+                eta.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short', timeZone:'UTC' }) +
+                ' ' + eta.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', timeZone:'UTC' }) + ' UTC';
+            const windStr = last.wind_speed_kn != null ? `${last.wind_speed_kn.toFixed(1)} kn` : '—';
+            const tt = L.tooltip({ permanent: true, direction: 'right' })
+                .setContent(`ETA ${etaStr} · ${windStr}`)
+                .setLatLng([last.lat, last.lon]);
+            planMap.addLayer(tt);
+            routeSegments.push(tt);
+        }
+
+        init();
+    </script>
+</body>
+</html>
