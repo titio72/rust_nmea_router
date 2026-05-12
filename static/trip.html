@@ -2817,12 +2817,13 @@
                 attribution: '© OpenStreetMap', maxZoom: 16
             }).addTo(forecastAreaMap);
 
-            // Use DOM events on the container — Leaflet's map.on() events can be
-            // swallowed by the internal drag/pan handlers even when dragging is disabled.
+            // Register at capture phase so our handler runs before Leaflet's
+            // bubble-phase drag/pan handler. e.stopPropagation() in draw mode
+            // then prevents Leaflet from ever seeing the event.
             const c = forecastAreaMap.getContainer();
-            c.addEventListener('mousedown', onMapMouseDown);
-            c.addEventListener('mousemove', onMapMouseMove);
-            c.addEventListener('mouseup',   onMapMouseUp);
+            c.addEventListener('mousedown', onMapMouseDown, true);
+            c.addEventListener('mousemove', onMapMouseMove, true);
+            c.addEventListener('mouseup',   onMapMouseUp,   true);
         }
 
         function startDrawArea() {
@@ -2831,6 +2832,9 @@
             document.getElementById('drawAreaBtn').style.display = 'none';
             document.getElementById('drawAreaHint').style.display = '';
             forecastAreaMap.dragging.disable();
+            // Leaflet's leaflet-grab class sets cursor:grab and overrides inline style;
+            // remove it so our crosshair is visible.
+            forecastAreaMap.getContainer().classList.remove('leaflet-grab');
             forecastAreaMap.getContainer().style.cursor = 'crosshair';
         }
 
@@ -2843,10 +2847,12 @@
             document.getElementById('drawAreaHint').style.display = 'none';
             forecastAreaMap.dragging.enable();
             forecastAreaMap.getContainer().style.cursor = '';
+            forecastAreaMap.getContainer().classList.add('leaflet-grab');
         }
 
         function onMapMouseDown(e) {
             if (!isDrawing) return;
+            e.stopPropagation(); // block Leaflet's drag handler
             e.preventDefault();
             drawStart = forecastAreaMap.mouseEventToLatLng(e);
             if (drawRect) { forecastAreaMap.removeLayer(drawRect); }
@@ -2857,11 +2863,13 @@
 
         function onMapMouseMove(e) {
             if (!isDrawing || !drawStart || !drawRect) return;
+            e.stopPropagation();
             drawRect.setBounds(L.latLngBounds(drawStart, forecastAreaMap.mouseEventToLatLng(e)));
         }
 
         async function onMapMouseUp(e) {
             if (!isDrawing || !drawStart) return;
+            e.stopPropagation();
             const end = forecastAreaMap.mouseEventToLatLng(e);
             const start = drawStart;  // save before cancel nulls it
             cancelDrawArea();
