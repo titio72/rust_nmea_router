@@ -316,7 +316,12 @@
     <div class="level-1-container" id="forecastAreasContainer" style="display:none; margin-top:20px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
             <h2 style="font-size:16px; font-weight:bold; color:var(--text-bold); margin:0;">Forecast Areas</h2>
-            <span id="forecastPollerStatus" style="font-size:12px; color:var(--text-secondary);"></span>
+            <div style="display:flex; align-items:center; gap:14px;">
+                <span id="forecastPollerStatus" style="font-size:12px; color:var(--text-secondary);"></span>
+                <a id="forecastPlanningBtn" href="#" style="display:none; padding:5px 14px;
+                   background:var(--link-color); color:#fff; border-radius:4px;
+                   text-decoration:none; font-size:13px;">Planning →</a>
+            </div>
         </div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
             <div>
@@ -3002,6 +3007,12 @@
 
             document.getElementById('forecastAreasContainer').style.display = '';
             document.getElementById('forecastAreaControls').style.display = isActive ? '' : 'none';
+
+            const planBtn = document.getElementById('forecastPlanningBtn');
+            if (planBtn) {
+                planBtn.style.display = isActive ? '' : 'none';
+                planBtn.href = 'plan.html?id=' + tripId;
+            }
 
             // Defer map init so the browser reflows the now-visible container first;
             // without this the map gets 0×0 dimensions and mouseEventToLatLng is wrong.
