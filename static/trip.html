@@ -2827,8 +2827,6 @@
                 'position:absolute;inset:0;z-index:10000;display:none;cursor:crosshair;';
             forecastAreaMap.getContainer().appendChild(forecastDrawOverlay);
             forecastDrawOverlay.addEventListener('mousedown', onMapMouseDown);
-            forecastDrawOverlay.addEventListener('mousemove', onMapMouseMove);
-            forecastDrawOverlay.addEventListener('mouseup',   onMapMouseUp);
         }
 
         function startDrawArea() {
@@ -2858,11 +2856,16 @@
 
         function onMapMouseDown(e) {
             e.preventDefault();
+            e.stopPropagation(); // prevent Leaflet's container-level drag handler
             drawStart = overlayLatLng(e);
             if (drawRect) { forecastAreaMap.removeLayer(drawRect); }
             drawRect = L.rectangle([drawStart, drawStart], {
                 color: '#3b82f6', weight: 2, fillOpacity: 0.15, interactive: false
             }).addTo(forecastAreaMap);
+            // Track move/up on document so the rect follows even if the cursor
+            // leaves the overlay during a fast drag.
+            document.addEventListener('mousemove', onMapMouseMove);
+            document.addEventListener('mouseup',   onMapMouseUp);
         }
 
         function onMapMouseMove(e) {
@@ -2871,6 +2874,8 @@
         }
 
         async function onMapMouseUp(e) {
+            document.removeEventListener('mousemove', onMapMouseMove);
+            document.removeEventListener('mouseup',   onMapMouseUp);
             if (!drawStart) return;
             const end = overlayLatLng(e);
             const start = drawStart;
