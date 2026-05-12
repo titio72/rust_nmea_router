@@ -243,6 +243,23 @@ pub struct ForecastAreaTripQuery {
     pub trip_id: u32,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ForecastGridPointsQuery {
+    pub trip_id: u32,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ForecastRouteQuery {
+    pub trip_id: u32,
+    pub from_lat: f64,
+    pub from_lon: f64,
+    pub to_lat: f64,
+    pub to_lon: f64,
+    pub departure: String,
+    pub speed_kn: f64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ForecastStatusResponse {
     pub online: bool,
@@ -1552,6 +1569,49 @@ pub async fn get_forecast_status(
     })))
 }
 
+pub async fn get_forecast_grid_points(
+    State(state): State<AppState>,
+    Query(params): Query<ForecastGridPointsQuery>,
+) -> Result<Json<ApiResponse<Vec<crate::db::operations::forecast::GridPointForecast>>>, StatusCode> {
+    match state.db().get_grid_points_at(params.trip_id, &params.timestamp) {
+        Ok(pts) => Ok(Json(ApiResponse::ok(pts))),
+        Err(e) => {
+            error!(error = %e, trip_id = params.trip_id, "Failed to get grid points");
+            Ok(Json(ApiResponse::error(e.to_string())))
+        }
+    }
+}
+
+pub async fn get_forecast_route(
+    State(state): State<AppState>,
+    Query(params): Query<ForecastRouteQuery>,
+) -> Result<Json<ApiResponse<Vec<crate::forecast::RouteOverlayPoint>>>, StatusCode> {
+    let departure = match chrono::DateTime::parse_from_rfc3339(&params.departure) {
+        Ok(dt) => dt.with_timezone(&chrono::Utc),
+        Err(_) => {
+            return Ok(Json(ApiResponse::error(format!(
+                "Invalid departure timestamp: {}",
+                params.departure
+            ))));
+        }
+    };
+    let fetches = match state.db().fetch_forecast_fetches(params.trip_id) {
+        Ok(f) => f,
+        Err(e) => {
+            error!(error = %e, trip_id = params.trip_id, "Failed to load forecast fetches for route");
+            return Ok(Json(ApiResponse::error(e.to_string())));
+        }
+    };
+    let track = crate::forecast::generate_route_track(
+        params.from_lat, params.from_lon,
+        params.to_lat, params.to_lon,
+        departure,
+        params.speed_kn,
+    );
+    let overlay = crate::forecast::compute_route_overlay(&track, &fetches);
+    Ok(Json(ApiResponse::ok(overlay)))
+}
+
 pub fn create_api_router(state: AppState) -> Router {
     let read_only = state.config.web.read_only;
 
@@ -1573,6 +1633,8 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/forecast/trip-overlay", get(get_forecast_trip_overlay))
         .route("/forecast/areas", get(get_forecast_areas))
         .route("/forecast/status", get(get_forecast_status))
+        .route("/forecast/grid-points", get(get_forecast_grid_points))
+        .route("/forecast/route", get(get_forecast_route))
         .route("/config/google_maps_key", get(get_google_maps_key))
         .route("/config/read_only", get(get_read_only))
         .route("/sync/status", get(get_sync_status))
