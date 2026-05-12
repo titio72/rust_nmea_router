@@ -271,19 +271,7 @@ impl VesselDatabase {
             })
             .collect();
 
-        let fetch_rows: Vec<mysql::Row> = conn.exec(
-            "SELECT id, lat, lon FROM forecast_fetch WHERE trip_id = :trip_id",
-            params! { "trip_id" => trip_id },
-        )?;
-
-        let mut fetches = Vec::new();
-        for frow in &fetch_rows {
-            let fid: u32 = match frow.get("id") { Some(v) => v, None => continue };
-            let flat = parse_decimal(frow, "lat")?;
-            let flon = parse_decimal(frow, "lon")?;
-            let hourly = self.load_hourly(&mut conn, fid)?;
-            fetches.push(FetchWithHourly { lat: flat, lon: flon, hourly });
-        }
+        let fetches = self.fetch_forecast_fetches(trip_id)?;
 
         Ok(Some(TripForecastInputs { trip_start, trip_end, track, fetches }))
     }
@@ -332,6 +320,7 @@ impl VesselDatabase {
     }
 
     /// Loads all FetchWithHourly records for a trip without loading the vessel track.
+    /// Returns only the latest fetch per (lat, lon) grid point.
     /// Used by the route forecast endpoint.
     pub fn fetch_forecast_fetches(
         &self,
@@ -339,7 +328,16 @@ impl VesselDatabase {
     ) -> Result<Vec<FetchWithHourly>, AppError> {
         let mut conn = self.pool.get_conn()?;
         let fetch_rows: Vec<mysql::Row> = conn.exec(
-            "SELECT id, lat, lon FROM forecast_fetch WHERE trip_id = :trip_id",
+            "SELECT ff.id, ff.lat, ff.lon FROM forecast_fetch ff
+             WHERE ff.trip_id = :trip_id
+               AND ff.fetched_at = (
+                   SELECT MAX(inner_ff.fetched_at)
+                   FROM forecast_fetch inner_ff
+                   WHERE inner_ff.trip_id = ff.trip_id
+                     AND inner_ff.lat = ff.lat
+                     AND inner_ff.lon = ff.lon
+               )
+             ORDER BY ff.id",
             params! { "trip_id" => trip_id },
         )?;
         let mut fetches = Vec::new();
