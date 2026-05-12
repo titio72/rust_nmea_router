@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Trip Planning</title>
+    <title>Trip Planning - NMEA Router</title>
     <link rel="stylesheet" href="/shared.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
     <script src="/js/shared-theme.js?v=3"></script>
@@ -102,6 +102,11 @@
         const urlParams = new URLSearchParams(window.location.search);
         const tripId = Number(urlParams.get('id'));
 
+        if (!tripId) {
+            document.getElementById('dayTabsContainer').innerHTML =
+                '<span style="color:var(--text-secondary); font-size:13px;">No trip specified. Open this page from a trip.</span>';
+        }
+
         // ── State ─────────────────────────────────────────────────────────────────
         let planMap = null;
         let arrowMarkers = [];
@@ -152,7 +157,7 @@
                     };
                 });
                 renderDayTabs();
-                selectDay(0, false);
+                selectDay(0, true);
             } catch (err) {
                 console.error('Failed to load forecast status', err);
             }
@@ -264,7 +269,14 @@
         }
 
         function renderStats(pts) {
-            if (!pts.length) return;
+            if (!pts.length) {
+                document.getElementById('statWind').textContent   = '—';
+                document.getElementById('statGust').textContent   = '—';
+                document.getElementById('statWave').textContent   = '—';
+                document.getElementById('statPeriod').textContent = '—';
+                document.getElementById('statCape').textContent   = '—';
+                return;
+            }
             const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
             const winds = pts.map(p => p.wind_speed_kn).filter(v => v != null);
             const dirs  = pts.map(p => p.wind_direction_deg).filter(v => v != null);
@@ -392,6 +404,11 @@
             try {
                 const resp = await fetch(url);
                 const json = await resp.json();
+                if (json.status === 'error') {
+                    console.error('Route API error:', json.message);
+                    btn.textContent = 'Error — retry';
+                    return;
+                }
                 drawRouteLine(json.data || []);
             } catch (err) {
                 console.error('Route forecast failed', err);
@@ -437,7 +454,7 @@
             routeSegments.push(tt);
         }
 
-        init();
+        if (tripId) init();
     </script>
 </body>
 </html>
