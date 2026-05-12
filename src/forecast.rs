@@ -255,7 +255,7 @@ pub fn generate_route_track(
         return vec![(from_lat, from_lon, departure)];
     }
     let total_hours = distance_nm / speed_kn;
-    let num_steps = total_hours.ceil() as i64 + 1;
+    let num_steps = total_hours.ceil() as i64;
     (0..num_steps)
         .map(|h| {
             let frac = (h as f64 / total_hours).min(1.0);
@@ -267,6 +267,9 @@ pub fn generate_route_track(
         .collect()
 }
 
+/// IDW-interpolates forecast values at each synthetic track point.
+/// Points for which no forecast data is available within range are omitted
+/// from the output — callers should not assume output.len() == track.len().
 pub fn compute_route_overlay(
     track: &[(f64, f64, DateTime<Utc>)],
     fetches: &[FetchWithHourly],
@@ -463,13 +466,13 @@ mod tests {
     fn test_generate_route_track_point_count() {
         use chrono::TimeZone;
         let dep = Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap();
-        // Livorno → Capraia ≈ 35 nm at 5 kn → 7 h passage → 8 points (h=0..7)
+        // Livorno → Capraia ≈ 35.9 nm at 5 kn → 7.18 h passage → ceil=8 → 8 points (h=0..7)
         let track = generate_route_track(43.55, 10.29, 43.05, 9.84, dep, 5.0);
-        assert!(track.len() >= 7 && track.len() <= 9, "Expected 7–9 points, got {}", track.len());
+        assert_eq!(track.len(), 8, "Expected 8 points, got {}", track.len());
         // First point at departure position
         assert!((track[0].0 - 43.55).abs() < 0.01);
         assert!((track[0].2 - dep).num_seconds() == 0);
-        // Last point near destination
+        // Last point near destination (h=7 of 7.18h total → frac≈0.975 → lat≈43.07)
         let last = track.last().unwrap();
         assert!((last.0 - 43.05).abs() < 0.1, "Expected near 43.05, got {}", last.0);
     }
@@ -514,5 +517,7 @@ mod tests {
             assert!(p.lat >= 43.4 && p.lat <= 43.6, "lat out of range: {}", p.lat);
         }
         assert!(!overlay.is_empty());
+        // Check weather fields are populated (not just lat/lon)
+        assert!(overlay[0].wind_speed_kn.is_some(), "Expected wind_speed_kn to be interpolated");
     }
 }
