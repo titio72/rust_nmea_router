@@ -21,6 +21,19 @@ pub struct TripForecastArea {
     pub created_at: String,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct GridPointForecast {
+    pub lat: f64,
+    pub lon: f64,
+    pub wind_speed_kn: Option<f64>,
+    pub wind_direction_deg: Option<f64>,
+    pub wind_gust_kn: Option<f64>,
+    pub wave_height_m: Option<f64>,
+    pub wave_period_s: Option<f64>,
+    pub wave_direction_deg: Option<f64>,
+    pub cape_j_kg: Option<f64>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct NewTripForecastArea {
     pub trip_id: u32,
@@ -275,6 +288,71 @@ impl VesselDatabase {
         Ok(Some(TripForecastInputs { trip_start, trip_end, track, fetches }))
     }
 
+    /// Returns the most recent forecast values for every grid point of `trip_id`
+    /// at the given UTC hour.  `timestamp_iso` is RFC-3339, e.g. "2026-05-14T09:00:00Z".
+    pub fn get_grid_points_at(
+        &self,
+        trip_id: u32,
+        timestamp_iso: &str,
+    ) -> Result<Vec<GridPointForecast>, AppError> {
+        let ts_db = parse_iso_to_db(timestamp_iso)?;
+        let mut conn = self.pool.get_conn()?;
+        let rows: Vec<mysql::Row> = conn.exec(
+            "SELECT ff.lat, ff.lon,
+                    fh.wind_speed_kn, fh.wind_direction_deg, fh.wind_gust_kn,
+                    fh.wave_height_m, fh.wave_period_s, fh.wave_direction_deg, fh.cape_j_kg
+             FROM forecast_fetch ff
+             JOIN forecast_hourly fh ON fh.fetch_id = ff.id
+             WHERE ff.trip_id = :trip_id
+               AND fh.timestamp = :ts
+               AND ff.fetched_at = (
+                   SELECT MAX(inner_ff.fetched_at)
+                   FROM forecast_fetch inner_ff
+                   WHERE inner_ff.trip_id = ff.trip_id
+                     AND inner_ff.lat = ff.lat
+                     AND inner_ff.lon = ff.lon
+               )",
+            params! { "trip_id" => trip_id, "ts" => &ts_db },
+        )?;
+        rows.iter()
+            .map(|r| {
+                Ok(GridPointForecast {
+                    lat: parse_decimal(r, "lat")?,
+                    lon: parse_decimal(r, "lon")?,
+                    wind_speed_kn: parse_decimal_opt(r, "wind_speed_kn"),
+                    wind_direction_deg: parse_decimal_opt(r, "wind_direction_deg"),
+                    wind_gust_kn: parse_decimal_opt(r, "wind_gust_kn"),
+                    wave_height_m: parse_decimal_opt(r, "wave_height_m"),
+                    wave_period_s: parse_decimal_opt(r, "wave_period_s"),
+                    wave_direction_deg: parse_decimal_opt(r, "wave_direction_deg"),
+                    cape_j_kg: parse_decimal_opt(r, "cape_j_kg"),
+                })
+            })
+            .collect()
+    }
+
+    /// Loads all FetchWithHourly records for a trip without loading the vessel track.
+    /// Used by the route forecast endpoint.
+    pub fn fetch_forecast_fetches(
+        &self,
+        trip_id: u32,
+    ) -> Result<Vec<FetchWithHourly>, AppError> {
+        let mut conn = self.pool.get_conn()?;
+        let fetch_rows: Vec<mysql::Row> = conn.exec(
+            "SELECT id, lat, lon FROM forecast_fetch WHERE trip_id = :trip_id",
+            params! { "trip_id" => trip_id },
+        )?;
+        let mut fetches = Vec::new();
+        for frow in &fetch_rows {
+            let fid: u32 = match frow.get("id") { Some(v) => v, None => continue };
+            let flat = parse_decimal(frow, "lat")?;
+            let flon = parse_decimal(frow, "lon")?;
+            let hourly = self.load_hourly(&mut conn, fid)?;
+            fetches.push(FetchWithHourly { lat: flat, lon: flon, hourly });
+        }
+        Ok(fetches)
+    }
+
     fn load_hourly(
         &self,
         conn: &mut mysql::PooledConn,
@@ -444,5 +522,70 @@ mod tests {
         let trip_id = make_trip(&db);
         let last = db.get_last_fetch_time(trip_id).unwrap();
         assert!(last.is_none());
+    }
+
+    #[test]
+    #[ignore]
+    fn test_get_grid_points_at_returns_latest_fetch() {
+        let db = setup_db();
+        let trip_id = make_trip(&db);
+        let area_id = db.create_forecast_area(&NewTripForecastArea {
+            trip_id, lat_min: 43.0, lat_max: 44.0, lon_min: 8.0, lon_max: 9.0,
+        }).unwrap();
+
+        let ts = "2026-05-14T09:00:00Z";
+        let hourly = vec![ForecastHourlyPoint {
+            timestamp: ts.to_string(),
+            wind_speed_kn: Some(10.0),
+            wind_direction_deg: Some(90.0),
+            wind_gust_kn: Some(14.0),
+            wave_height_m: Some(1.0),
+            wave_period_s: Some(6.0),
+            wave_direction_deg: Some(95.0),
+            cape_j_kg: Some(50.0),
+        }];
+        // First (older) fetch — wind 10 kn
+        db.insert_forecast(trip_id, area_id, 43.5, 8.5, DateTime::parse_from_rfc3339("2026-05-14T06:00:00Z").unwrap().with_timezone(&Utc), &hourly).unwrap();
+
+        let hourly2 = vec![ForecastHourlyPoint {
+            timestamp: ts.to_string(),
+            wind_speed_kn: Some(20.0),
+            wind_direction_deg: Some(180.0),
+            wind_gust_kn: Some(25.0),
+            wave_height_m: Some(1.5),
+            wave_period_s: Some(7.0),
+            wave_direction_deg: Some(185.0),
+            cape_j_kg: Some(100.0),
+        }];
+        // Second (newer) fetch — wind 20 kn — this should win
+        db.insert_forecast(trip_id, area_id, 43.5, 8.5, DateTime::parse_from_rfc3339("2026-05-14T09:00:00Z").unwrap().with_timezone(&Utc), &hourly2).unwrap();
+
+        let pts = db.get_grid_points_at(trip_id, ts).unwrap();
+        assert_eq!(pts.len(), 1);
+        assert!((pts[0].wind_speed_kn.unwrap() - 20.0).abs() < 0.1, "Expected latest fetch (20 kn), got {:?}", pts[0].wind_speed_kn);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_fetch_forecast_fetches_returns_all_grid_points() {
+        let db = setup_db();
+        let trip_id = make_trip(&db);
+        let area_id = db.create_forecast_area(&NewTripForecastArea {
+            trip_id, lat_min: 43.0, lat_max: 44.0, lon_min: 8.0, lon_max: 9.0,
+        }).unwrap();
+
+        let hourly = vec![ForecastHourlyPoint {
+            timestamp: "2026-05-14T09:00:00Z".to_string(),
+            wind_speed_kn: Some(12.0), wind_direction_deg: Some(90.0),
+            wind_gust_kn: Some(15.0), wave_height_m: Some(1.0),
+            wave_period_s: Some(6.0), wave_direction_deg: Some(95.0),
+            cape_j_kg: Some(0.0),
+        }];
+        db.insert_forecast(trip_id, area_id, 43.2, 8.3, Utc::now(), &hourly).unwrap();
+        db.insert_forecast(trip_id, area_id, 43.6, 8.7, Utc::now(), &hourly).unwrap();
+
+        let fetches = db.fetch_forecast_fetches(trip_id).unwrap();
+        assert_eq!(fetches.len(), 2);
+        assert_eq!(fetches[0].hourly.len(), 1);
     }
 }
