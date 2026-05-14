@@ -142,10 +142,13 @@ pub async fn fetch_area_forecast(
     if !meteo_resp.status().is_success() {
         return Err(AppError::Io(format!("Open-Meteo forecast returned HTTP {}", meteo_resp.status())));
     }
-    let meteo_raw: serde_json::Value = meteo_resp
-        .json()
-        .await
-        .map_err(|e| AppError::Parse(format!("Open-Meteo forecast parse failed: {}", e)))?;
+    let meteo_body = meteo_resp.text().await
+        .map_err(|e| AppError::Io(format!("Open-Meteo forecast body read failed: {}", e)))?;
+    let meteo_raw: serde_json::Value = serde_json::from_str(&meteo_body)
+        .map_err(|e| {
+            let preview = meteo_body.chars().take(300).collect::<String>();
+            AppError::Parse(format!("Open-Meteo forecast parse failed: {} — body: {}", e, preview))
+        })?;
     let meteo_responses: Vec<MeteoResponse> =
         serde_json::from_value::<OneOrMany<MeteoResponse>>(meteo_raw)
             .map_err(|e| AppError::Parse(e.to_string()))?
