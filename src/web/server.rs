@@ -11,7 +11,8 @@ use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use tower_http::services::ServeDir;
 use tower_http::cors::{CorsLayer, Any};
-use tracing::info;
+use tower_http::catch_panic::CatchPanicLayer;
+use tracing::{info, error};
 
 use crate::forecast_poller::{ForecastPollerStatus, run_poller};
 use std::sync::atomic::AtomicBool;
@@ -102,7 +103,20 @@ pub async fn start_web_server(
                 .allow_origin(Any)
                 .allow_methods([Method::GET, Method::POST, Method::DELETE])
                 .allow_headers([header::CONTENT_TYPE, header::COOKIE]),
-        );
+        )
+        .layer(CatchPanicLayer::custom(|err: Box<dyn std::any::Any + Send>| {
+            let msg = err.downcast_ref::<&str>().copied()
+                .or_else(|| err.downcast_ref::<String>().map(|s| s.as_str()))
+                .unwrap_or("unknown panic");
+            error!(panic = msg, "Handler panicked");
+            axum::response::Response::builder()
+                .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+                .header("Content-Type", "application/json")
+                .body(axum::body::Body::from(
+                    format!(r#"{{"status":"error","error":"Internal server error: {}"}}"#, msg)
+                ))
+                .unwrap()
+        }));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("Web server binding to http://{}", addr);

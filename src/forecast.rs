@@ -98,29 +98,45 @@ const MAX_DISTANCE_NM: f64 = 25.0;
 
 // ── Public functions ──────────────────────────────────────────────────────────
 
+const GRID_STEP_DEG: f64 = 0.25;
+
+fn bbox_grid_params(lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) -> (String, String) {
+    let mut lats = Vec::new();
+    let mut lons = Vec::new();
+    let mut lat = lat_min;
+    while lat <= lat_max + 1e-9 {
+        let mut lon = lon_min;
+        while lon <= lon_max + 1e-9 {
+            lats.push(format!("{:.4}", lat));
+            lons.push(format!("{:.4}", lon));
+            lon += GRID_STEP_DEG;
+        }
+        lat += GRID_STEP_DEG;
+    }
+    (lats.join(","), lons.join(","))
+}
+
 pub(crate) fn build_meteo_bbox_url(lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) -> String {
+    let (lats, lons) = bbox_grid_params(lat_min, lat_max, lon_min, lon_max);
     format!(
         "https://api.open-meteo.com/v1/forecast\
-         ?latitude_min={lat_min}&latitude_max={lat_max}\
-         &longitude_min={lon_min}&longitude_max={lon_max}\
+         ?latitude={lats}&longitude={lons}\
          &models=ecmwf_ifs\
          &hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,cape\
          &wind_speed_unit=kn&forecast_days=7&timezone=UTC",
-        lat_min = lat_min, lat_max = lat_max,
-        lon_min = lon_min, lon_max = lon_max,
+        lats = lats, lons = lons,
     )
 }
 
 pub(crate) fn build_marine_bbox_url(lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) -> String {
+    let (lats, lons) = bbox_grid_params(lat_min, lat_max, lon_min, lon_max);
     format!(
         "https://marine-api.open-meteo.com/v1/marine\
-         ?latitude_min={lat_min}&latitude_max={lat_max}\
-         &longitude_min={lon_min}&longitude_max={lon_max}\
+         ?latitude={lats}&longitude={lons}\
          &models=ecmwf_wam\
          &hourly=wave_height,wave_period,wave_direction\
          &forecast_days=7&timezone=UTC",
-        lat_min = lat_min, lat_max = lat_max,
-        lon_min = lon_min, lon_max = lon_max,
+        lats = lats, lons = lons,
     )
 }
 
@@ -163,10 +179,13 @@ pub async fn fetch_area_forecast(
     if !marine_resp.status().is_success() {
         return Err(AppError::Io(format!("Open-Meteo marine returned HTTP {}", marine_resp.status())));
     }
-    let marine_raw: serde_json::Value = marine_resp
-        .json()
-        .await
-        .map_err(|e| AppError::Parse(format!("Open-Meteo marine parse failed: {}", e)))?;
+    let marine_body = marine_resp.text().await
+        .map_err(|e| AppError::Io(format!("Open-Meteo marine body read failed: {}", e)))?;
+    let marine_raw: serde_json::Value = serde_json::from_str(&marine_body)
+        .map_err(|e| {
+            let preview = marine_body.chars().take(300).collect::<String>();
+            AppError::Parse(format!("Open-Meteo marine parse failed: {} — body: {}", e, preview))
+        })?;
     let marine_responses: Vec<MarineResponse> =
         serde_json::from_value::<OneOrMany<MarineResponse>>(marine_raw)
             .map_err(|e| AppError::Parse(e.to_string()))?
@@ -412,13 +431,14 @@ mod tests {
     #[test]
     fn test_bbox_url_contains_expected_params() {
         let url = build_meteo_bbox_url(43.0, 44.0, 8.0, 9.0);
-        assert!(url.contains("latitude_min=43"), "url: {}", url);
-        assert!(url.contains("latitude_max=44"), "url: {}", url);
-        assert!(url.contains("longitude_min=8"), "url: {}", url);
-        assert!(url.contains("longitude_max=9"), "url: {}", url);
-        // URL must not use old comma-separated coordinate lists (latitude=X,Y style)
-        assert!(!url.contains("latitude="), "URL should not have comma-separated coords: {}", url);
-        assert!(!url.contains("longitude="), "URL should not have comma-separated coords: {}", url);
+        // Open-Meteo does not support bbox params; must use comma-separated multi-point format
+        assert!(url.contains("latitude="), "url: {}", url);
+        assert!(url.contains("longitude="), "url: {}", url);
+        assert!(!url.contains("latitude_min"), "url: {}", url);
+        assert!(!url.contains("latitude_max"), "url: {}", url);
+        // 1°×1° bbox at 0.25° step → 5×5=25 pairs
+        let lat_param = url.split("latitude=").nth(1).unwrap().split('&').next().unwrap();
+        assert_eq!(lat_param.split(',').count(), 25, "expected 25 grid points, url: {}", url);
     }
 
     #[test]

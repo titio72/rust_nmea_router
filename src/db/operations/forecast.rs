@@ -386,13 +386,17 @@ fn parse_decimal(row: &mysql::Row, col: &str) -> Result<f64, AppError> {
     match row.get_opt::<f64, _>(col) {
         Some(Ok(v)) => Ok(v),
         Some(Err(_)) => {
-            let b: Vec<u8> = row.get(col).unwrap_or_default();
-            String::from_utf8(b)
-                .map_err(|e| AppError::Parse(e.to_string()))?
-                .parse::<f64>()
-                .map_err(|e| AppError::Parse(e.to_string()))
+            // MariaDB returns DECIMAL as bytes; NULL causes get_opt::<f64> to return Err.
+            // Use get_opt::<Vec<u8>> to safely distinguish bytes from NULL.
+            match row.get_opt::<Vec<u8>, _>(col) {
+                Some(Ok(b)) => String::from_utf8(b)
+                    .map_err(|e| AppError::Parse(e.to_string()))?
+                    .parse::<f64>()
+                    .map_err(|e| AppError::Parse(e.to_string())),
+                _ => Err(AppError::Database(format!("Column {col} is NULL or non-convertible"))),
+            }
         }
-        None => Err(AppError::Database(format!("Column {} is NULL/missing", col))),
+        None => Err(AppError::Database(format!("Column {col} is NULL/missing"))),
     }
 }
 
@@ -400,8 +404,12 @@ fn parse_decimal_opt(row: &mysql::Row, col: &str) -> Option<f64> {
     match row.get_opt::<f64, _>(col) {
         Some(Ok(v)) => Some(v),
         Some(Err(_)) => {
-            let b: Vec<u8> = row.get(col)?;
-            String::from_utf8(b).ok()?.parse::<f64>().ok()
+            // MariaDB returns DECIMAL as bytes; NULL causes get_opt::<f64> to return Err.
+            // Use get_opt::<Vec<u8>> to safely distinguish bytes from NULL.
+            match row.get_opt::<Vec<u8>, _>(col) {
+                Some(Ok(b)) => String::from_utf8(b).ok()?.parse::<f64>().ok(),
+                _ => None,
+            }
         }
         None => None,
     }
