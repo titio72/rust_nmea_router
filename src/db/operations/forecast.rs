@@ -191,7 +191,7 @@ impl VesselDatabase {
             params! { "trip_id" => trip_id },
         )?;
         let Some(row) = row else { return Ok(None); };
-        let s: Option<String> = row.get("last_fetch");
+        let s: Option<String> = row.get::<Option<String>, _>("last_fetch").flatten();
         match s {
             None => Ok(None),
             Some(s) => {
