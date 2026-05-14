@@ -138,7 +138,7 @@
             try {
                 const resp = await fetch('/api/forecast/status?trip_id=' + tripId);
                 const json = await resp.json();
-                if (!json.data || !json.data.last_fetch) {
+                if (!json.data || json.data.point_count === 0) {
                     document.getElementById('dayTabsContainer').innerHTML =
                         '<span style="font-size:13px; color:var(--text-secondary);">' +
                         'No forecast data. Add areas on the trip page first.</span>';

@@ -207,7 +207,7 @@ impl VesselDatabase {
         let mut conn = self.pool.get_conn()?;
         let row: Option<mysql::Row> = conn.exec_first(
             "SELECT id FROM trips
-             WHERE end_timestamp >= DATE_SUB(NOW(), INTERVAL 2 HOUR)
+             WHERE end_timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
              ORDER BY end_timestamp DESC LIMIT 1",
             (),
         )?;
