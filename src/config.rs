@@ -53,6 +53,9 @@ pub struct Config {
     pub signalk: SignalKConfig,
     #[serde(default)]
     pub sync: SyncConfig,
+    /// Path to polar diagram CSV. Optional — when absent the route planner uses a fixed speed.
+    #[serde(default)]
+    pub polars_file_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,8 +66,6 @@ pub struct WebConfig {
     /// Port for the web server to listen on
     #[serde(default = "default_web_port")]
     pub port: u16,
-    /// Google Maps API key for the web interface
-    pub google_maps_api_key: Option<String>,
     /// Shared password for web UI access (plaintext)
     pub auth_password: Option<String>,
     /// Session lifetime in seconds (default: 7 days)
@@ -99,7 +100,6 @@ impl Default for WebConfig {
         Self {
             enabled: true,
             port: 8080,
-            google_maps_api_key: None,
             auth_password: None,
             session_duration_secs: default_session_duration_secs(),
             secure_cookies: default_secure_cookies(),
@@ -618,7 +618,7 @@ impl Config {
     }
 
     /// Apply environment variable overrides after JSON loading.
-    /// Supports: DATABASE_URL, PORT, AUTH_PASSWORD, GOOGLE_MAPS_KEY, SECURE_COOKIES, LOG_LEVEL
+    /// Supports: DATABASE_URL, PORT, AUTH_PASSWORD, SECURE_COOKIES, LOG_LEVEL
     pub fn apply_env_overrides(&mut self) {
         if let Ok(url) = std::env::var("DATABASE_URL") {
             if let Some(conn) = Self::parse_database_url(&url) {
@@ -635,9 +635,6 @@ impl Config {
         }
         if let Ok(password) = std::env::var("AUTH_PASSWORD") {
             self.web.auth_password = if password.is_empty() { None } else { Some(password) };
-        }
-        if let Ok(key) = std::env::var("GOOGLE_MAPS_KEY") {
-            self.web.google_maps_api_key = if key.is_empty() { None } else { Some(key) };
         }
         if let Ok(val) = std::env::var("SECURE_COOKIES") {
             self.web.secure_cookies = matches!(val.to_lowercase().as_str(), "true" | "1" | "yes");
@@ -684,6 +681,7 @@ impl Config {
             udp: UdpConfig::default(),
             signalk: SignalKConfig::default(),
             sync: SyncConfig::default(),
+            polars_file_path: None,
         }
     }
 }
@@ -1164,7 +1162,6 @@ mod tests {
         let config = WebConfig {
             enabled: false,
             port: 9000,
-            google_maps_api_key: Some("test_key".to_string()),
             auth_password: None,
             session_duration_secs: default_session_duration_secs(),
             secure_cookies: false,
@@ -1172,7 +1169,6 @@ mod tests {
         };
         assert!(!config.enabled);
         assert_eq!(config.port, 9000);
-        assert_eq!(config.google_maps_api_key, Some("test_key".to_string()));
     }
 
     #[test]
@@ -1180,7 +1176,6 @@ mod tests {
         let config = WebConfig {
             enabled: true,
             port: 3000,
-            google_maps_api_key: None,
             auth_password: None,
             session_duration_secs: default_session_duration_secs(),
             secure_cookies: true,
@@ -1193,7 +1188,6 @@ mod tests {
         let deserialized: WebConfig = serde_json::from_str(&json).unwrap();
         assert!(deserialized.enabled);
         assert_eq!(deserialized.port, 3000);
-        assert_eq!(deserialized.google_maps_api_key, None);
     }
 
     #[test]

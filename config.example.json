@@ -23,7 +23,6 @@
   "web": {
     "enabled": true,
     "port": 8080,
-    "google_maps_api_key": "your_google_maps_api_key_here",
     "auth_password": "change-me-use-12-chars-minimum",
     "session_duration_secs": 604800,
     "secure_cookies": true,
@@ -47,6 +46,7 @@
     "timeout_secs": 120,
     "accept_invalid_certs": false
   },
+  "polars_file_path": "/etc/nmea_router/polars.csv",
   "database": {
     "connection": {
       "host": "localhost",

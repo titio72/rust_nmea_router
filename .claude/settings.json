@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh pr *)",
+      "Bash(cargo clippy *)",
+      "Bash(git show *)",
+      "Bash(git diff *)",
+      "Bash(cargo test *)",
+      "Bash(cargo build *)",
+      "Bash(cargo run *)",
+      "Bash(sed *)",
+      "Bash(grep -n \"cargo test\" /dev/null 2>/dev/null; cargo test 2>&1 | tail -30)",
+      "Read(//dev/**)"
+    ],
+    "deny": [
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
+    ]
+  },
+  "enabledPlugins": {
+    "frontend-design@claude-plugins-official": true
+  }
+}

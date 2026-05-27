@@ -32,3 +32,15 @@ download "date-fns.min.js" \
 
 download "chartjs-adapter-date-fns.bundle.min.js" \
     "https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"
+
+download "leaflet.min.js" \
+    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"
+
+download "leaflet.min.css" \
+    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"
+
+download "leaflet.fullscreen.js" \
+    "https://cdn.jsdelivr.net/npm/leaflet.fullscreen@3.0.2/Control.FullScreen.js"
+
+download "leaflet.fullscreen.css" \
+    "https://cdn.jsdelivr.net/npm/leaflet.fullscreen@3.0.2/Control.FullScreen.css"

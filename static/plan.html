@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trip Planning - NMEA Router</title>
     <link rel="stylesheet" href="/shared.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+    <link rel="stylesheet" href="/libs/leaflet.min.css" />
     <script src="/js/shared-theme.js?v=3"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <script src="/libs/leaflet.min.js"></script>
     <style>
         #planMap { height: calc(100vh - 280px); min-height: 380px; border-radius: 6px; }
         .day-tab { padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px;
@@ -27,6 +27,11 @@
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                 <div id="dayTabsContainer" style="display:flex; gap:5px; flex-wrap:wrap;"></div>
                 <div style="display:flex; gap:8px; align-items:center;">
+                    <button id="gustToggleBtn" onclick="toggleGustMode()"
+                        style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
+                               border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
+                        Show Gust
+                    </button>
                     <button id="planRouteBtn" onclick="toggleRouteMode()"
                         style="padding:5px 14px; background:var(--link-color); color:#fff; border:none;
                                border-radius:4px; cursor:pointer; font-size:13px;">
@@ -51,11 +56,10 @@
         <div id="routeBar" class="level-1-container"
              style="display:none; padding:10px 20px; margin-bottom:10px;">
             <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; font-size:13px;">
-                <span style="color:#48bb78; font-weight:bold;">● FROM</span>
-                <span id="fromLabel" style="color:var(--text-secondary);">click map to set</span>
-                <span style="color:var(--text-secondary);">→</span>
-                <span style="color:#fc8181; font-weight:bold;">● TO</span>
-                <span id="toLabel" style="color:var(--text-secondary);">click map to set</span>
+                <span id="routeWptCount"
+                    style="color:var(--text-primary); font-weight:600; min-width:200px;">
+                    click map to add waypoints
+                </span>
                 <span style="color:var(--border-color); margin:0 4px;">|</span>
                 <label style="color:var(--text-secondary);">Dep (UTC):
                     <input type="datetime-local" id="depInput"
@@ -63,16 +67,50 @@
                                border:1px solid var(--border-color); border-radius:4px;
                                padding:3px 8px; color:var(--text-primary); font-size:13px;">
                 </label>
-                <label style="color:var(--text-secondary);">Speed:
+                <label style="color:var(--text-secondary);">Motoring speed:
                     <input type="number" id="speedInput" value="5.5" min="1" max="20" step="0.5"
                         style="width:64px; margin-left:6px; background:var(--bg-secondary);
                                border:1px solid var(--border-color); border-radius:4px;
                                padding:3px 8px; color:var(--text-primary); font-size:13px;"> kn
                 </label>
+                <label style="color:var(--text-secondary);" title="Fraction of polar speed to use (sea state, sail trim, etc.)">Polar efficiency:
+                    <input type="number" id="efficiencyInput" value="95" min="50" max="100" step="1"
+                        style="width:52px; margin-left:6px; background:var(--bg-secondary);
+                               border:1px solid var(--border-color); border-radius:4px;
+                               padding:3px 8px; color:var(--text-primary); font-size:13px;"> %
+                </label>
+                <label style="color:var(--text-secondary);" title="Motor if expected sail speed drops below this">Min sail speed:
+                    <input type="number" id="minSailInput" value="3.0" min="0" max="10" step="0.5"
+                        style="width:52px; margin-left:6px; background:var(--bg-secondary);
+                               border:1px solid var(--border-color); border-radius:4px;
+                               padding:3px 8px; color:var(--text-primary); font-size:13px;"> kn
+                </label>
+                <label style="color:var(--text-secondary);" title="Bonus score per sailed hour during route optimisation. 0 = fastest route, higher values favour more sailing.">Sail preference:
+                    <input type="number" id="sailWeightInput" value="0" min="0" max="10" step="0.5"
+                        style="width:52px; margin-left:6px; background:var(--bg-secondary);
+                               border:1px solid var(--border-color); border-radius:4px;
+                               padding:3px 8px; color:var(--text-primary); font-size:13px;"> kn
+                </label>
+                <button id="undoBtn" onclick="undoWaypoint()" disabled
+                    style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
+                           border:1px solid var(--border-color); border-radius:4px;
+                           cursor:pointer; font-size:13px;">
+                    ↩ Undo
+                </button>
+                <button id="doneBtn" onclick="doneDrawing()" disabled
+                    style="padding:5px 14px; background:#48bb78; color:#fff; border:none;
+                           border-radius:4px; cursor:pointer; font-size:13px;">
+                    ✓ Done
+                </button>
                 <button id="computeBtn" onclick="computeRoute()" disabled
                     style="padding:5px 14px; background:var(--link-color); color:#fff; border:none;
                            border-radius:4px; cursor:pointer; font-size:13px; opacity:0.4;">
                     Compute
+                </button>
+                <button id="optimizeBtn" onclick="optimizeRoute()" disabled
+                    style="padding:6px 16px; background:#805ad5; color:#fff;
+                           border:none; border-radius:4px; cursor:pointer; font-size:13px; opacity:0.4;">
+                    ⚡ Optimize
                 </button>
             </div>
         </div>
@@ -91,6 +129,49 @@
                 &nbsp;Period: <strong id="statPeriod" style="color:var(--text-primary);">—</strong>
                 &nbsp;CAPE: <strong id="statCape" style="color:var(--text-primary);">—</strong>
             </div>
+        </div>
+
+        <!-- Route summary (shown after compute) -->
+        <div id="routeSummary" class="level-1-container" style="display:none; padding:16px 20px; margin-top:10px;">
+            <div style="font-size:11px; color:var(--text-secondary); font-weight:600; letter-spacing:0.6px;
+                        text-transform:uppercase; margin-bottom:12px;">Route Summary</div>
+
+            <!-- Key stats -->
+            <div style="display:flex; flex-wrap:wrap; border:1px solid var(--border-color); border-radius:6px;
+                        overflow:hidden; margin-bottom:14px;">
+                <div style="flex:0 0 auto; padding:10px 20px; border-right:1px solid var(--border-color);">
+                    <div style="font-size:11px; color:var(--text-secondary); margin-bottom:2px;">Distance</div>
+                    <div id="sumDistance" style="font-size:22px; font-weight:700; color:var(--text-primary);">—</div>
+                </div>
+                <div style="flex:1; min-width:170px; padding:10px 20px; border-right:1px solid var(--border-color);">
+                    <div style="font-size:11px; color:var(--text-secondary); margin-bottom:2px;">Departure</div>
+                    <div id="sumDep" style="font-size:14px; font-weight:600; color:var(--text-primary);">—</div>
+                </div>
+                <div style="flex:1; min-width:170px; padding:10px 20px; border-right:1px solid var(--border-color);">
+                    <div style="font-size:11px; color:var(--text-secondary); margin-bottom:2px;">Arrival</div>
+                    <div id="sumArr" style="font-size:14px; font-weight:600; color:var(--text-primary);">—</div>
+                </div>
+                <div style="flex:0 0 auto; padding:10px 20px;">
+                    <div style="font-size:11px; color:var(--text-secondary); margin-bottom:2px;">Duration</div>
+                    <div id="sumDur" style="font-size:22px; font-weight:700; color:var(--text-primary);">—</div>
+                </div>
+            </div>
+
+            <!-- Sail / motor split -->
+            <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--text-secondary);
+                        margin-bottom:5px;">
+                <span>⛵ Sailing &nbsp;<strong id="sumSailPct" style="color:#48bb78;">—</strong></span>
+                <span>⚙ Motoring &nbsp;<strong id="sumMotorPct" style="color:#9ca3af;">—</strong></span>
+            </div>
+            <div style="height:8px; border-radius:4px; overflow:hidden; background:var(--bg-secondary);
+                        display:flex; margin-bottom:16px;">
+                <div id="modeBarSail"  style="background:#48bb78; transition:width 0.4s;"></div>
+                <div id="modeBarMotor" style="background:#9ca3af; transition:width 0.4s;"></div>
+            </div>
+
+            <!-- Speed chart -->
+            <div style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">Boat speed (kn)</div>
+            <div id="speedChartContainer"></div>
         </div>
 
     </div>
@@ -116,9 +197,20 @@
         let hourDebounceTimer = null;
 
         let routeMode = false;
-        let routeFrom = null, routeTo = null;
-        let fromMarker = null, toMarker = null;
-        let routeSegments = [];
+        let routeDone = false;
+        let routeWaypoints = [];    // L.LatLng[] in order
+        let waypointMarkers = [];   // L.CircleMarker[] one per waypoint
+        let previewLines = [];      // L.Polyline[] dashed segments between consecutive waypoints
+        let routeSegments = [];     // coloured segments from drawRouteLine
+
+        let tripInfo = null;      // raw TripSummary from /api/trip
+        let tripStart = null;     // Date object — parsed from start_date (full timestamp)
+        let tripEnd = null;       // Date object — trip end_date parsed as Date
+        let tripTrack = [];       // [{latitude, longitude, timestamp}, ...] sorted by time
+        let boatMarker = null;    // single L.circleMarker reused across slider moves
+        let lastGridPts = [];     // raw GridPointForecast[] from last API call
+        let showGust = false;     // when true, color arrows by gust speed instead of wind speed
+        let lastRouteOverlay = []; // last computed overlay — persisted across reloads
 
         // ── Init ─────────────────────────────────────────────────────────────────
         async function init() {
@@ -127,39 +219,179 @@
                 attribution: '© OpenStreetMap', maxZoom: 16
             }).addTo(planMap);
             planMap.on('click', onMapClick);
+            planMap.on('zoomend moveend', () => {
+                if (lastGridPts.length) renderArrows(interpolateDisplayGrid(lastGridPts));
+            });
+
+            const WindLegend = L.Control.extend({
+                onAdd() {
+                    const div = L.DomUtil.create('div');
+                    div.innerHTML =
+                        `<div style="background:rgba(30,30,30,0.82); padding:6px 9px; border-radius:5px;
+                                     font-size:11px; color:#ddd; min-width:130px;
+                                     border:1px solid rgba(255,255,255,0.12); pointer-events:none;">
+                            <div id="legendTitle" style="font-weight:600; margin-bottom:4px; letter-spacing:0.3px;">Wind (kn)</div>
+                            <div style="height:10px; width:120px; border-radius:2px;
+                                        border:1px solid rgba(0,0,0,0.3);
+                                        background:linear-gradient(to right,
+                                            rgb(170,170,170) 0%,
+                                            rgb(30,160,255)  14%,
+                                            rgb(0,210,180)   25%,
+                                            rgb(0,190,60)    36%,
+                                            rgb(220,210,0)   57%,
+                                            rgb(255,140,0)   79%,
+                                            rgb(220,30,0)    100%);"></div>
+                            <div style="display:flex; justify-content:space-between; width:120px; margin-top:3px;">
+                                <span>0</span><span>7</span><span>16</span><span>≥28</span>
+                            </div>
+                        </div>`;
+                    return div;
+                }
+            });
+            new WindLegend({ position: 'bottomleft' }).addTo(planMap);
 
             const saved = localStorage.getItem('plan_speed_kn');
             if (saved) document.getElementById('speedInput').value = saved;
+            const savedEff = localStorage.getItem('plan_polar_efficiency');
+            if (savedEff) document.getElementById('efficiencyInput').value = savedEff;
+            const savedMinSail = localStorage.getItem('plan_min_sail_speed');
+            if (savedMinSail) document.getElementById('minSailInput').value = savedMinSail;
+            const savedSailWeight = localStorage.getItem('plan_sail_weight');
+            if (savedSailWeight) document.getElementById('sailWeightInput').value = savedSailWeight;
 
             await loadAvailableDays();
+            await loadTripTrack();
+            updateBoatMarker();
+            restoreRoute();
+        }
+
+        async function loadTripInfo() {
+            const resp = await fetch('/api/trip?id=' + tripId);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const json = await resp.json();
+            if (!json.data) return null;
+            return json.data;   // { start_date, end_date, description, ... }
+        }
+
+        async function loadTripTrack() {
+            if (!tripId) return;
+            try {
+                const resp = await fetch('/api/track?trip_id=' + tripId + '&max_points=2000');
+                const json = await resp.json();
+                tripTrack = (json.data || [])
+                    .filter(p => p.latitude != null && p.longitude != null)
+                    .map(p => ({ ...p, ts: new Date(p.timestamp).getTime() }));
+            } catch (err) {
+                console.error('Failed to load trip track', err);
+                tripTrack = [];
+            }
+        }
+
+        // Returns the track point nearest to the selected time, or null if outside trip span.
+        function currentBoatPos() {
+            const ts = getSelectedISO();
+            if (!ts || !tripTrack.length || !tripStart || !tripEnd) return null;
+            const t = new Date(ts).getTime();
+            if (t < tripStart.getTime() || t > tripEnd.getTime()) return null;
+            let lo = 0, hi = tripTrack.length - 1, best = 0;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                if (Math.abs(tripTrack[mid].ts - t) < Math.abs(tripTrack[best].ts - t)) best = mid;
+                if (tripTrack[mid].ts < t) lo = mid + 1; else hi = mid - 1;
+            }
+            return tripTrack[best];
+        }
+
+        function updateBoatMarker() {
+            const pos = currentBoatPos();
+            if (!pos) {
+                if (boatMarker) { planMap.removeLayer(boatMarker); boatMarker = null; }
+                return;
+            }
+            if (!boatMarker) {
+                boatMarker = L.circleMarker([pos.latitude, pos.longitude], {
+                    color: '#fff', fillColor: '#3b82f6', fillOpacity: 1, radius: 8, weight: 2
+                }).addTo(planMap);
+            } else {
+                boatMarker.setLatLng([pos.latitude, pos.longitude]);
+                if (!planMap.hasLayer(boatMarker)) boatMarker.addTo(planMap);
+            }
+            boatMarker.bindTooltip(
+                new Date(pos.timestamp).toLocaleTimeString('en-GB', {
+                    hour: '2-digit', minute: '2-digit', timeZone: 'UTC'
+                }) + ' UTC',
+                { permanent: false, direction: 'right' }
+            );
         }
 
         async function loadAvailableDays() {
             try {
-                const resp = await fetch('/api/forecast/status?trip_id=' + tripId);
-                const json = await resp.json();
-                if (!json.data || json.data.point_count === 0) {
+                // Check forecast data exists
+                const statusResp = await fetch('/api/forecast/status?trip_id=' + tripId);
+                const statusJson = await statusResp.json();
+                if (!statusJson.data || statusJson.data.point_count === 0) {
                     document.getElementById('dayTabsContainer').innerHTML =
                         '<span style="font-size:13px; color:var(--text-secondary);">' +
                         'No forecast data. Add areas on the trip page first.</span>';
                     return;
                 }
-                const now = new Date();
-                availableDays = Array.from({ length: 7 }, (_, d) => {
-                    const day = new Date(now);
-                    day.setUTCDate(now.getUTCDate() + d);
-                    day.setUTCHours(0, 0, 0, 0);
-                    return {
-                        date: day,
-                        label: day.toLocaleDateString('en-GB', {
+
+                // Fetch trip date range
+                tripInfo = await loadTripInfo();
+                if (!tripInfo) {
+                    document.getElementById('dayTabsContainer').innerHTML =
+                        '<span style="font-size:13px; color:var(--text-secondary);">Trip not found.</span>';
+                    return;
+                }
+
+                // Parse trip bounds
+                tripStart = new Date(tripInfo.start_date);
+                tripEnd = new Date(tripInfo.end_date);
+
+                // Build day tabs: UTC midnight of start_date through UTC midnight of (end_date + 7 days)
+                const firstDay = new Date(tripStart);
+                firstDay.setUTCHours(0, 0, 0, 0);
+
+                const lastDay = new Date(tripEnd);
+                lastDay.setUTCHours(0, 0, 0, 0);
+                lastDay.setUTCDate(lastDay.getUTCDate() + 7);
+
+                availableDays = [];
+                const cur = new Date(firstDay);
+                while (cur <= lastDay) {
+                    availableDays.push({
+                        date: new Date(cur),
+                        label: cur.toLocaleDateString('en-GB', {
                             weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC'
                         })
-                    };
-                });
+                    });
+                    cur.setUTCDate(cur.getUTCDate() + 1);
+                }
+
                 renderDayTabs();
-                selectDay(0, true);
+
+                // Active trip: end within 2 hours of now → jump to current time
+                const isActive = (Date.now() - tripEnd.getTime()) < 7_200_000;
+                if (isActive) {
+                    const nowMs = Date.UTC(
+                        new Date().getUTCFullYear(),
+                        new Date().getUTCMonth(),
+                        new Date().getUTCDate()
+                    );
+                    if (availableDays.some(d => d.date.getTime() === nowMs)) {
+                        jumpToNow();
+                    } else {
+                        selectDay(0, true);
+                    }
+                } else {
+                    selectDay(0, true);
+                }
+
+
             } catch (err) {
-                console.error('Failed to load forecast status', err);
+                console.error('Failed to load available days', err);
+                document.getElementById('dayTabsContainer').innerHTML =
+                    '<span style="font-size:13px; color:var(--text-secondary);">Failed to load trip data. Please refresh.</span>';
             }
         }
 
@@ -179,6 +411,7 @@
             renderDayTabs();
             updateSelectedTime();
             if (doLoad) loadGridPoints();
+            updateBoatMarker();
         }
 
         function updateSelectedTime() {
@@ -202,7 +435,7 @@
             selectedHour = parseInt(this.value);
             updateSelectedTime();
             clearTimeout(hourDebounceTimer);
-            hourDebounceTimer = setTimeout(loadGridPoints, 150);
+            hourDebounceTimer = setTimeout(() => { loadGridPoints(); updateBoatMarker(); }, 150);
         });
 
         function jumpToNow() {
@@ -216,7 +449,134 @@
                 renderDayTabs();
                 updateSelectedTime();
                 loadGridPoints();
+                updateBoatMarker();
             }
+        }
+
+        // ── IDW display interpolation ─────────────────────────────────────────────
+
+        // Fast degree-based distance approximation in nautical miles (no trig in hot path).
+        function degDistNm(lat1, lon1, lat2, lon2) {
+            const dlat = lat2 - lat1;
+            const dlon = (lon2 - lon1) * Math.cos(lat1 * Math.PI / 180);
+            return Math.sqrt(dlat * dlat + dlon * dlon) * 60;
+        }
+
+        function idwInterpolate(targetLat, targetLon, sourcePts) {
+            const MAX_NM = 25;
+            const within = [];
+            for (const pt of sourcePts) {
+                const d = degDistNm(targetLat, targetLon, pt.lat, pt.lon);
+                if (d < 0.01) return pt;   // exact match
+                if (d <= MAX_NM) within.push({ pt, w: 1 / (d * d) });
+            }
+            if (!within.length) return null;
+
+            const sumW = within.reduce((s, x) => s + x.w, 0);
+            const scalar = key => {
+                const pairs = within.filter(x => x.pt[key] != null);
+                if (!pairs.length) return null;
+                const sw = pairs.reduce((s, x) => s + x.w, 0);
+                return pairs.reduce((s, x) => s + x.pt[key] * x.w, 0) / sw;
+            };
+            const angular = key => {
+                const pairs = within.filter(x => x.pt[key] != null);
+                if (!pairs.length) return null;
+                const sw = pairs.reduce((s, x) => s + x.w, 0);
+                const sinSum = pairs.reduce((s, x) => s + Math.sin(x.pt[key] * Math.PI / 180) * x.w, 0);
+                const cosSum = pairs.reduce((s, x) => s + Math.cos(x.pt[key] * Math.PI / 180) * x.w, 0);
+                const deg = Math.atan2(sinSum / sw, cosSum / sw) * 180 / Math.PI;
+                return deg < 0 ? deg + 360 : deg;
+            };
+
+            return {
+                lat: targetLat, lon: targetLon,
+                wind_speed_kn: scalar('wind_speed_kn'),
+                wind_direction_deg: angular('wind_direction_deg'),
+                wind_gust_kn: scalar('wind_gust_kn'),
+                wave_height_m: scalar('wave_height_m'),
+                wave_period_s: scalar('wave_period_s'),
+                wave_direction_deg: angular('wave_direction_deg'),
+                cape_j_kg: scalar('cape_j_kg'),
+            };
+        }
+
+        // Estimate the native grid lat and lon steps from the stored source points.
+        // Lat step: reliable median of sorted unique lat differences.
+        // Lon step: computed per lat-row, then median across rows (avoids mixing
+        // different-row lon grids that would underestimate the true step).
+        function nativeGridSteps(sourcePts) {
+            const R4 = v => Math.round(v * 10000) / 10000;
+
+            const sortedLats = [...new Set(sourcePts.map(p => R4(p.lat)))].sort((a, b) => a - b);
+            if (sortedLats.length < 2) return { lat: 0.1, lon: 0.15 };
+            const latDiffs = [];
+            for (let i = 1; i < sortedLats.length; i++) latDiffs.push(sortedLats[i] - sortedLats[i - 1]);
+            latDiffs.sort((a, b) => a - b);
+            const latStep = latDiffs[latDiffs.length >> 1];
+
+            // Group by lat row, compute per-row lon step, take median of those
+            const byLat = new Map();
+            for (const p of sourcePts) {
+                const k = Math.round(p.lat * 10000);
+                if (!byLat.has(k)) byLat.set(k, []);
+                byLat.get(k).push(R4(p.lon));
+            }
+            const rowMedians = [];
+            for (const lons of byLat.values()) {
+                const s = [...new Set(lons)].sort((a, b) => a - b);
+                const diffs = [];
+                for (let i = 1; i < s.length; i++) diffs.push(s[i] - s[i - 1]);
+                if (diffs.length) {
+                    diffs.sort((a, b) => a - b);
+                    rowMedians.push(diffs[diffs.length >> 1]);
+                }
+            }
+            rowMedians.sort((a, b) => a - b);
+            const lonStep = rowMedians.length ? rowMedians[rowMedians.length >> 1] : latStep * 1.5;
+
+            return { lat: latStep, lon: lonStep };
+        }
+
+        // Subdivide each native grid cell into SUBDIVISIONS equal parts and IDW-interpolate
+        // each sub-point from the original native grid. Performance guard: never more than
+        // MAX_SIDE columns or rows of arrows (prevents thousands of markers when zoomed out).
+        function interpolateDisplayGrid(sourcePts) {
+            if (!sourcePts.length || !planMap) return [];
+
+            const bounds = planMap.getBounds();
+            const west = bounds.getWest(), east = bounds.getEast();
+            const south = bounds.getSouth(), north = bounds.getNorth();
+
+            const SUBDIVISIONS = 3;
+            const MAX_SIDE = 30;
+            const { lat: nativeLatStep, lon: nativeLonStep } = nativeGridSteps(sourcePts);
+            const displayLatStep = Math.max(nativeLatStep / SUBDIVISIONS, (north - south) / MAX_SIDE);
+            const displayLonStep = Math.max(nativeLonStep / SUBDIVISIONS, (east - west) / MAX_SIDE);
+
+            // Clamp display grid to intersection of source data bbox and viewport
+            let srcLatMin = Infinity, srcLatMax = -Infinity, srcLonMin = Infinity, srcLonMax = -Infinity;
+            for (const p of sourcePts) {
+                if (p.lat < srcLatMin) srcLatMin = p.lat;
+                if (p.lat > srcLatMax) srcLatMax = p.lat;
+                if (p.lon < srcLonMin) srcLonMin = p.lon;
+                if (p.lon > srcLonMax) srcLonMax = p.lon;
+            }
+
+            const latMin = Math.max(south, srcLatMin);
+            const latMax = Math.min(north, srcLatMax);
+            const lonMin = Math.max(west, srcLonMin);
+            const lonMax = Math.min(east, srcLonMax);
+            if (latMin >= latMax || lonMin >= lonMax) return [];
+
+            const result = [];
+            for (let lat = latMin; lat <= latMax + 1e-9; lat += displayLatStep) {
+                for (let lon = lonMin; lon <= lonMax + 1e-9; lon += displayLonStep) {
+                    const pt = idwInterpolate(lat, lon, sourcePts);
+                    if (pt) result.push(pt);
+                }
+            }
+            return result;
         }
 
         // ── Grid-point arrows ──────────────────────────────────────────────────────
@@ -228,38 +588,59 @@
                     `/api/forecast/grid-points?trip_id=${tripId}&timestamp=${encodeURIComponent(ts)}`
                 );
                 const json = await resp.json();
-                const pts = json.data || [];
-                renderArrows(pts);
-                renderStats(pts);
+                lastGridPts = json.data || [];
+                renderArrows(interpolateDisplayGrid(lastGridPts));
+                renderStats();
             } catch (err) {
                 console.error('Failed to load grid points', err);
             }
         }
 
         function windColor(speed) {
-            const t = Math.min((speed || 0) / 30, 1);
-            if (t < 0.5) return `rgb(${Math.round(2 * t * 255)},255,0)`;
-            return `rgb(255,${Math.round(2 * (1 - t) * 255)},0)`;
+            const kn = Math.max(speed || 0, 0);
+            const stops = [
+                [0,  [170, 170, 170]],
+                [4,  [30,  160, 255]],
+                [7,  [0,   210, 180]],
+                [10, [0,   190,  60]],
+                [16, [220, 210,   0]],
+                [22, [255, 140,   0]],
+                [28, [220,  30,   0]],
+            ];
+            if (kn <= stops[0][0]) return `rgb(${stops[0][1].join(',')})`;
+            if (kn >= stops[stops.length - 1][0]) return `rgb(${stops[stops.length - 1][1].join(',')})`;
+            for (let i = 1; i < stops.length; i++) {
+                if (kn <= stops[i][0]) {
+                    const t = (kn - stops[i-1][0]) / (stops[i][0] - stops[i-1][0]);
+                    const c = stops[i-1][1].map((a, j) => Math.round(a + t * (stops[i][1][j] - a)));
+                    return `rgb(${c.join(',')})`;
+                }
+            }
         }
 
         function renderArrows(pts) {
             arrowMarkers.forEach(m => planMap.removeLayer(m));
             arrowMarkers = [];
             pts.forEach(pt => {
-                const speed = pt.wind_speed_kn || 0;
+                const wind = pt.wind_speed_kn || 0;
+                const gust = pt.wind_gust_kn || 0;
+                const speed = showGust ? gust : wind;
                 const dir = pt.wind_direction_deg || 0;
+                // wind_direction_deg is the direction the wind comes FROM; rotate +180 so
+                // the arrow points in the direction the wind is blowing TO.
+                const arrowRot = (dir + 180) % 360;
                 const color = windColor(speed);
                 const svg =
                     `<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">` +
-                    `<g transform="rotate(${dir},11,11)">` +
+                    `<g transform="rotate(${arrowRot},11,11)">` +
                     `<polygon points="11,2 15,16 11,12 7,16" fill="${color}" ` +
                     `stroke="rgba(0,0,0,0.35)" stroke-width="0.8"/>` +
                     `</g></svg>`;
                 const icon = L.divIcon({ html: svg, className: '', iconSize: [22, 22], iconAnchor: [11, 11] });
                 const m = L.marker([pt.lat, pt.lon], { icon }).addTo(planMap);
                 m.bindPopup(
-                    `<b>Wind:</b> ${speed.toFixed(1)} kn ${(dir).toFixed(0)}°<br>` +
-                    `<b>Gust:</b> ${(pt.wind_gust_kn || 0).toFixed(1)} kn<br>` +
+                    `<b>Wind:</b> ${wind.toFixed(1)} kn ${dir.toFixed(0)}°<br>` +
+                    `<b>Gust:</b> ${gust.toFixed(1)} kn<br>` +
                     `<b>Wave:</b> ${(pt.wave_height_m || 0).toFixed(1)} m ` +
                     `${(pt.wave_period_s || 0).toFixed(0)} s<br>` +
                     `<b>CAPE:</b> ${(pt.cape_j_kg || 0).toFixed(0)} J/kg`
@@ -268,42 +649,109 @@
             });
         }
 
-        function renderStats(pts) {
-            if (!pts.length) {
+        function toggleGustMode() {
+            showGust = !showGust;
+            const btn = document.getElementById('gustToggleBtn');
+            if (showGust) {
+                btn.textContent = 'Show Wind';
+                btn.style.background = 'var(--link-color)';
+                btn.style.color = '#fff';
+                btn.style.borderColor = 'var(--link-color)';
+            } else {
+                btn.textContent = 'Show Gust';
+                btn.style.background = 'var(--bg-secondary)';
+                btn.style.color = 'var(--text-secondary)';
+                btn.style.borderColor = 'var(--border-color)';
+            }
+            document.getElementById('legendTitle').textContent = showGust ? 'Gust (kn)' : 'Wind (kn)';
+            if (lastGridPts.length) renderArrows(interpolateDisplayGrid(lastGridPts));
+        }
+
+        function renderStats() {
+            const clear = () => {
                 document.getElementById('statWind').textContent   = '—';
                 document.getElementById('statGust').textContent   = '—';
                 document.getElementById('statWave').textContent   = '—';
                 document.getElementById('statPeriod').textContent = '—';
                 document.getElementById('statCape').textContent   = '—';
-                return;
-            }
-            const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
-            const winds = pts.map(p => p.wind_speed_kn).filter(v => v != null);
-            const dirs  = pts.map(p => p.wind_direction_deg).filter(v => v != null);
-            const gusts = pts.map(p => p.wind_gust_kn).filter(v => v != null);
-            const waves = pts.map(p => p.wave_height_m).filter(v => v != null);
-            const periods = pts.map(p => p.wave_period_s).filter(v => v != null);
-            const capes = pts.map(p => p.cape_j_kg).filter(v => v != null);
-
+            };
+            const pos = currentBoatPos();
+            if (!pos || !lastGridPts.length) { clear(); return; }
+            const pt = idwInterpolate(pos.latitude, pos.longitude, lastGridPts);
+            if (!pt) { clear(); return; }
             let dirStr = '';
-            if (dirs.length) {
-                const sinS = dirs.reduce((s, d) => s + Math.sin(d * Math.PI / 180), 0);
-                const cosS = dirs.reduce((s, d) => s + Math.cos(d * Math.PI / 180), 0);
-                const avgDir = ((Math.atan2(sinS, cosS) * 180 / Math.PI) + 360) % 360;
+            if (pt.wind_direction_deg != null) {
                 const names = ['N','NNE','NE','ENE','E','ESE','SE','SSE',
                                 'S','SSW','SW','WSW','W','WNW','NW','NNW'];
-                dirStr = ' ' + names[Math.round(avgDir / 22.5) % 16];
+                dirStr = ' ' + names[Math.round(pt.wind_direction_deg / 22.5) % 16];
             }
-            const fmt = (arr, dec, unit) => {
-                const v = avg(arr);
-                return v != null ? `${v.toFixed(dec)} ${unit}` : '—';
-            };
+            const fmt = (v, dec, unit) => v != null ? `${v.toFixed(dec)} ${unit}` : '—';
             document.getElementById('statWind').textContent =
-                winds.length ? `${avg(winds).toFixed(1)} kn${dirStr}` : '—';
-            document.getElementById('statGust').textContent   = fmt(gusts, 1, 'kn');
-            document.getElementById('statWave').textContent   = fmt(waves, 1, 'm');
-            document.getElementById('statPeriod').textContent = fmt(periods, 0, 's');
-            document.getElementById('statCape').textContent   = fmt(capes, 0, 'J/kg');
+                pt.wind_speed_kn != null ? `${pt.wind_speed_kn.toFixed(1)} kn${dirStr}` : '—';
+            document.getElementById('statGust').textContent   = fmt(pt.wind_gust_kn, 1, 'kn');
+            document.getElementById('statWave').textContent   = fmt(pt.wave_height_m, 1, 'm');
+            document.getElementById('statPeriod').textContent = fmt(pt.wave_period_s, 0, 's');
+            document.getElementById('statCape').textContent   = fmt(pt.cape_j_kg, 0, 'J/kg');
+        }
+
+        function totalRouteNm() {
+            let d = 0;
+            for (let i = 1; i < routeWaypoints.length; i++)
+                d += degDistNm(routeWaypoints[i - 1].lat, routeWaypoints[i - 1].lng,
+                               routeWaypoints[i].lat,     routeWaypoints[i].lng);
+            return d;
+        }
+
+        function updateRouteBar() {
+            const n  = routeWaypoints.length;
+            const nm = totalRouteNm();
+            document.getElementById('routeWptCount').textContent = n
+                ? `${n} waypoint${n !== 1 ? 's' : ''} · ${nm.toFixed(1)} nm`
+                : 'click map to add waypoints';
+
+            const undoBtn    = document.getElementById('undoBtn');
+            const doneBtn    = document.getElementById('doneBtn');
+            undoBtn.disabled = (n === 0 || routeDone);
+            doneBtn.disabled = (n < 2  || routeDone);
+            undoBtn.style.display = routeDone ? 'none' : '';
+            doneBtn.style.display = routeDone ? 'none' : '';
+
+            const dep   = document.getElementById('depInput').value;
+            const speed = parseFloat(document.getElementById('speedInput').value);
+            const ready = routeDone && n >= 2 && !!dep && speed > 0;
+            const computeBtn = document.getElementById('computeBtn');
+            computeBtn.disabled = !ready;
+            computeBtn.style.opacity = ready ? '1' : '0.4';
+
+            const optimizeBtn = document.getElementById('optimizeBtn');
+            if (optimizeBtn) {
+                const canOptimize = routeDone && routeWaypoints.length >= 2 && !!dep && speed > 0;
+                optimizeBtn.disabled = !canOptimize;
+                optimizeBtn.style.opacity = canOptimize ? '1' : '0.4';
+            }
+        }
+
+        function undoWaypoint() {
+            if (!routeWaypoints.length) return;
+            planMap.removeLayer(waypointMarkers.pop());
+            if (previewLines.length) planMap.removeLayer(previewLines.pop());
+            routeWaypoints.pop();
+            const newN = routeWaypoints.length;
+            if (newN >= 1) {
+                const lastIdx = newN - 1;
+                // First waypoint stays green; any other new-last becomes red
+                const fillColor = (lastIdx === 0) ? '#48bb78' : '#fc8181';
+                waypointMarkers[lastIdx].setStyle({ fillColor, color: '#fff' });
+            }
+            updateRouteBar();
+        }
+
+        function doneDrawing() {
+            if (routeWaypoints.length < 2) return;
+            routeDone = true;
+            planMap.getContainer().style.cursor = '';
+            updateRouteBar();
+            saveRouteState();
         }
 
         // ── Route mode ────────────────────────────────────────────────────────────
@@ -324,119 +772,187 @@
 
         function clearRoute() {
             routeMode = false;
-            routeFrom = routeTo = null;
-            if (fromMarker) { planMap.removeLayer(fromMarker); fromMarker = null; }
-            if (toMarker)   { planMap.removeLayer(toMarker);   toMarker   = null; }
+            routeDone = false;
+            waypointMarkers.forEach(m => planMap.removeLayer(m));
+            waypointMarkers = [];
+            previewLines.forEach(l => planMap.removeLayer(l));
+            previewLines = [];
+            routeWaypoints = [];
             routeSegments.forEach(l => planMap.removeLayer(l));
             routeSegments = [];
             document.getElementById('routeBar').style.display = 'none';
-            document.getElementById('fromLabel').textContent = 'click map to set';
-            document.getElementById('toLabel').textContent   = 'click map to set';
-            document.getElementById('computeBtn').disabled = true;
-            document.getElementById('computeBtn').style.opacity = '0.4';
+            document.getElementById('routeSummary').style.display = 'none';
+            document.getElementById('routeWptCount').textContent = 'click map to add waypoints';
+            lastRouteOverlay = [];
+            localStorage.removeItem(`plan_route_${tripId}`);
             document.getElementById('planRouteBtn').textContent = 'Plan Route';
             document.getElementById('planRouteBtn').style.background = '';
             planMap.getContainer().style.cursor = '';
+            updateRouteBar();
         }
 
         function onMapClick(e) {
-            if (!routeMode) return;
-            if (!routeFrom) {
-                routeFrom = e.latlng;
-                fromMarker = L.circleMarker(e.latlng, {
-                    color: '#48bb78', fillColor: '#48bb78', fillOpacity: 1, radius: 7, weight: 2
-                }).addTo(planMap);
-                document.getElementById('fromLabel').textContent =
-                    `${e.latlng.lat.toFixed(4)}°N  ${e.latlng.lng.toFixed(4)}°E`;
-            } else if (!routeTo) {
-                routeTo = e.latlng;
-                toMarker = L.circleMarker(e.latlng, {
-                    color: '#fc8181', fillColor: '#fc8181', fillOpacity: 1, radius: 7, weight: 2
-                }).addTo(planMap);
-                document.getElementById('toLabel').textContent =
-                    `${e.latlng.lat.toFixed(4)}°N  ${e.latlng.lng.toFixed(4)}°E`;
-            } else {
-                // Third click: replace FROM marker, reset TO and route
-                planMap.removeLayer(fromMarker);
-                routeFrom = e.latlng;
-                fromMarker = L.circleMarker(e.latlng, {
-                    color: '#48bb78', fillColor: '#48bb78', fillOpacity: 1, radius: 7, weight: 2
-                }).addTo(planMap);
-                document.getElementById('fromLabel').textContent =
-                    `${e.latlng.lat.toFixed(4)}°N  ${e.latlng.lng.toFixed(4)}°E`;
-                if (toMarker) { planMap.removeLayer(toMarker); toMarker = null; }
-                routeTo = null;
-                document.getElementById('toLabel').textContent = 'click map to set';
-                routeSegments.forEach(l => planMap.removeLayer(l));
-                routeSegments = [];
+            if (!routeMode || routeDone) return;
+            const n = routeWaypoints.length;
+
+            if (n > 0) {
+                const prev = routeWaypoints[n - 1];
+                previewLines.push(
+                    L.polyline([[prev.lat, prev.lng], [e.latlng.lat, e.latlng.lng]], {
+                        color: '#888', weight: 2, dashArray: '6,6', opacity: 0.7
+                    }).addTo(planMap)
+                );
+                // Previous last marker → gray (first marker always stays green)
+                if (n > 1) waypointMarkers[n - 1].setStyle({ fillColor: '#888', color: '#888' });
             }
-            checkComputeReady();
+
+            routeWaypoints.push(e.latlng);
+            const fillColor = (n === 0) ? '#48bb78' : '#fc8181';
+            waypointMarkers.push(
+                L.circleMarker(e.latlng, {
+                    color: '#fff', fillColor, fillOpacity: 1, radius: 7, weight: 2
+                }).addTo(planMap)
+            );
+            updateRouteBar();
+            saveRouteState();
         }
 
-        function checkComputeReady() {
-            const dep   = document.getElementById('depInput').value;
-            const speed = parseFloat(document.getElementById('speedInput').value);
-            const ready = !!(routeFrom && routeTo && dep && speed > 0);
-            document.getElementById('computeBtn').disabled = !ready;
-            document.getElementById('computeBtn').style.opacity = ready ? '1' : '0.4';
-        }
-
-        document.getElementById('depInput').addEventListener('change', checkComputeReady);
+        document.getElementById('depInput').addEventListener('change', updateRouteBar);
         document.getElementById('speedInput').addEventListener('input', function () {
             localStorage.setItem('plan_speed_kn', this.value);
-            checkComputeReady();
+            updateRouteBar();
+        });
+        document.getElementById('efficiencyInput').addEventListener('input', function () {
+            localStorage.setItem('plan_polar_efficiency', this.value);
+        });
+        document.getElementById('minSailInput').addEventListener('input', function () {
+            localStorage.setItem('plan_min_sail_speed', this.value);
+        });
+        document.getElementById('sailWeightInput').addEventListener('input', function () {
+            localStorage.setItem('plan_sail_weight', this.value);
         });
 
         async function computeRoute() {
-            const dep   = document.getElementById('depInput').value;   // "2026-05-14T09:00"
-            const speed = parseFloat(document.getElementById('speedInput').value);
-            if (!routeFrom || !routeTo || !dep || !(speed > 0)) return;
+            const dep        = document.getElementById('depInput').value;
+            const speed      = parseFloat(document.getElementById('speedInput').value);
+            const efficiency = parseFloat(document.getElementById('efficiencyInput').value) / 100;
+            const minSail    = parseFloat(document.getElementById('minSailInput').value);
+            if (!routeDone || routeWaypoints.length < 2 || !dep || !(speed > 0)) return;
 
-            const departure = dep.slice(0, 16) + ':00Z';               // treat as UTC
+            const departure      = dep.slice(0, 16) + ':00Z';
+            const waypointsParam = routeWaypoints
+                .map(p => `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`)
+                .join(';');
             const url = `/api/forecast/route?trip_id=${tripId}` +
-                `&from_lat=${routeFrom.lat}&from_lon=${routeFrom.lng}` +
-                `&to_lat=${routeTo.lat}&to_lon=${routeTo.lng}` +
-                `&departure=${encodeURIComponent(departure)}&speed_kn=${speed}`;
+                `&waypoints=${encodeURIComponent(waypointsParam)}` +
+                `&departure=${encodeURIComponent(departure)}` +
+                `&motoring_speed_kn=${speed}` +
+                `&polar_efficiency=${efficiency.toFixed(3)}` +
+                `&min_sail_speed_kn=${minSail}`;
 
             const btn = document.getElementById('computeBtn');
             btn.textContent = 'Computing…';
             btn.disabled = true;
+            let hadError = false;
             try {
                 const resp = await fetch(url);
                 const json = await resp.json();
                 if (json.status === 'error') {
                     console.error('Route API error:', json.message);
-                    btn.textContent = 'Error — retry';
+                    hadError = true;
                     return;
                 }
                 drawRouteLine(json.data || []);
             } catch (err) {
                 console.error('Route forecast failed', err);
+                hadError = true;
             } finally {
-                btn.textContent = 'Compute';
-                checkComputeReady();
+                btn.textContent = hadError ? 'Error — retry' : 'Compute';
+                updateRouteBar();
             }
+        }
+
+        async function optimizeRoute() {
+            const btn = document.getElementById('optimizeBtn');
+            const orig = btn.textContent;
+            const dep   = document.getElementById('depInput').value;
+            const speed = parseFloat(document.getElementById('speedInput').value);
+            if (!routeDone || routeWaypoints.length < 2 || !dep || !(speed > 0)) return;
+
+            btn.disabled = true;
+            btn.textContent = '⚡ Optimizing…';
+
+            const from       = routeWaypoints[0];                          // isochrone uses endpoints only
+            const to         = routeWaypoints[routeWaypoints.length - 1]; // intermediate waypoints are ignored
+            const departure  = dep.slice(0, 16) + ':00Z';
+            const efficiency = parseFloat(document.getElementById('efficiencyInput').value) / 100;
+            const minSail    = parseFloat(document.getElementById('minSailInput').value);
+            const sailWeight = parseFloat(document.getElementById('sailWeightInput').value) || 0;
+
+            try {
+                const url = `/api/forecast/optimal-route?trip_id=${tripId}`
+                    + `&from_lat=${from.lat.toFixed(6)}&from_lon=${from.lng.toFixed(6)}`
+                    + `&to_lat=${to.lat.toFixed(6)}&to_lon=${to.lng.toFixed(6)}`
+                    + `&departure=${encodeURIComponent(departure)}`
+                    + `&motoring_speed_kn=${speed}`
+                    + `&polar_efficiency=${efficiency.toFixed(3)}`
+                    + `&min_sail_speed_kn=${minSail}`
+                    + `&sail_weight_kn=${sailWeight.toFixed(1)}`;
+
+                const resp = await fetch(url);
+                const json = await resp.json();
+                if (json.status !== 'ok' || !json.data?.length) {
+                    btn.textContent = '✗ ' + (json.error || 'Error');
+                    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+                    return;
+                }
+                drawRouteLine(json.data);
+                btn.textContent = orig;
+                btn.disabled = false;
+            } catch (_) {
+                btn.textContent = '✗ Error';
+                setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+            }
+        }
+
+
+        function buildSegmentPopup(p) {
+            const ts   = p.timestamp ? new Date(p.timestamp).toUTCString().slice(0, 22) : '—';
+            const spd  = p.wind_speed_kn   != null ? p.wind_speed_kn.toFixed(1)   + ' kn'  : '—';
+            const dir  = p.wind_direction_deg != null ? p.wind_direction_deg.toFixed(0) + '°' : '—';
+            const gust = p.wind_gust_kn    != null ? p.wind_gust_kn.toFixed(1)    + ' kn'  : '—';
+            const wh   = p.wave_height_m   != null ? p.wave_height_m.toFixed(1)   + ' m'   : '—';
+            const wp   = p.wave_period_s   != null ? p.wave_period_s.toFixed(0)   + ' s'   : '—';
+            const spd2 = p.speed_kn        != null ? p.speed_kn.toFixed(1)        + ' kn'  : '—';
+            const twa  = p.twa_deg         != null ? p.twa_deg.toFixed(0)         + '°'    : '—';
+            return `<b>${ts}</b><br>Wind: ${spd} · ${dir} (gust ${gust})<br>`
+                 + `Wave: ${wh} / ${wp}<br>Boat speed: ${spd2} · TWA: ${twa}`;
         }
 
         function drawRouteLine(pts) {
             routeSegments.forEach(l => planMap.removeLayer(l));
             routeSegments = [];
+            previewLines.forEach(l => planMap.removeLayer(l));
+            previewLines = [];
             if (pts.length < 2) return;
+            lastRouteOverlay = pts;
+            saveRouteState();
 
             for (let i = 0; i < pts.length - 1; i++) {
                 const p = pts[i];
+                const pNext = pts[i + 1];
+                // twa_deg is null when motoring (light wind, too close to wind, or no polar loaded)
+                const isMotoring = pNext.twa_deg === null && pNext.speed_kn !== null;
                 const seg = L.polyline(
-                    [[p.lat, p.lon], [pts[i + 1].lat, pts[i + 1].lon]],
-                    { color: windColor(p.wind_speed_kn || 0), weight: 5, opacity: 0.9 }
+                    [[p.lat, p.lon], [pNext.lat, pNext.lon]],
+                    {
+                        color: windColor(p.wind_speed_kn || 0),
+                        weight: 5,
+                        opacity: 0.9,
+                        dashArray: isMotoring ? '8 7' : null
+                    }
                 ).addTo(planMap);
-                const ts = new Date(p.timestamp);
-                seg.bindPopup(
-                    `<b>${ts.toUTCString()}</b><br>` +
-                    `Wind: ${(p.wind_speed_kn || 0).toFixed(1)} kn ` +
-                    `${(p.wind_direction_deg || 0).toFixed(0)}°<br>` +
-                    `Gust: ${(p.wind_gust_kn || 0).toFixed(1)} kn<br>` +
-                    `Wave: ${(p.wave_height_m || 0).toFixed(1)} m`
-                );
+                seg.bindPopup(buildSegmentPopup(p));
                 routeSegments.push(seg);
             }
 
@@ -452,6 +968,203 @@
                 .setLatLng([last.lat, last.lon]);
             planMap.addLayer(tt);
             routeSegments.push(tt);
+            drawRouteSummary(pts);
+        }
+
+        function drawRouteSummary(pts) {
+            const panel = document.getElementById('routeSummary');
+            if (pts.length < 2) { panel.style.display = 'none'; return; }
+
+            const depMs  = new Date(pts[0].timestamp).getTime();
+            const arrMs  = new Date(pts[pts.length - 1].timestamp).getTime();
+            const totalMs = arrMs - depMs;
+            const totalHours = totalMs / 3600000;
+
+            // Total distance along track
+            let totalNm = 0;
+            for (let i = 1; i < pts.length; i++)
+                totalNm += degDistNm(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
+
+            // Sail / motor split by segment duration
+            let sailMs = 0, motorMs = 0;
+            for (let i = 1; i < pts.length; i++) {
+                const p = pts[i];
+                if (p.speed_kn == null) continue;
+                const segMs = new Date(p.timestamp).getTime() - new Date(pts[i-1].timestamp).getTime();
+                if (p.twa_deg !== null) sailMs  += segMs;
+                else                    motorMs += segMs;
+            }
+            const trackedMs = sailMs + motorMs;
+            const sailPct  = trackedMs > 0 ? sailMs  / trackedMs * 100 : 0;
+            const motorPct = trackedMs > 0 ? motorMs / trackedMs * 100 : 0;
+
+            const fmtTime = d =>
+                d.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short', timeZone:'UTC' }) +
+                ' ' + d.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', timeZone:'UTC' }) + ' UTC';
+            const fmtDur = ms => {
+                const h = Math.floor(ms / 3600000);
+                const m = Math.round((ms % 3600000) / 60000);
+                return m > 0 ? `${h}h ${m}m` : `${h}h`;
+            };
+
+            document.getElementById('sumDistance').textContent  = totalNm.toFixed(1) + ' nm';
+            document.getElementById('sumDep').textContent       = fmtTime(new Date(depMs));
+            document.getElementById('sumArr').textContent       = fmtTime(new Date(arrMs));
+            document.getElementById('sumDur').textContent       = fmtDur(totalMs);
+            document.getElementById('sumSailPct').textContent   = sailPct.toFixed(0)  + '%';
+            document.getElementById('sumMotorPct').textContent  = motorPct.toFixed(0) + '%';
+            document.getElementById('modeBarSail').style.width  = sailPct  + '%';
+            document.getElementById('modeBarMotor').style.width = motorPct + '%';
+
+            drawSpeedChart(pts, depMs, totalHours);
+            panel.style.display = '';
+        }
+
+        function drawSpeedChart(pts, depMs, totalHours) {
+            const W = 900, H = 130;
+            const PAD = { top: 10, right: 16, bottom: 26, left: 40 };
+            const plotW = W - PAD.left - PAD.right;
+            const plotH = H - PAD.top  - PAD.bottom;
+
+            // Max speed for y-axis ceiling (round up to next even number, min 6)
+            const maxSpd = pts.reduce((m, p) => p.speed_kn != null ? Math.max(m, p.speed_kn) : m, 0);
+            const yMax   = Math.max(Math.ceil(maxSpd / 2) * 2, 6);
+
+            const px = t => PAD.left + (t / totalHours) * plotW;
+            const py = s => PAD.top  + plotH - (s / yMax) * plotH;
+
+            // Segments: each covers pts[i-1]→pts[i], speed stored in pts[i]
+            const segs = [];
+            for (let i = 1; i < pts.length; i++) {
+                const p = pts[i];
+                if (p.speed_kn == null) continue;
+                const t0 = (new Date(pts[i-1].timestamp).getTime() - depMs) / 3600000;
+                const t1 = (new Date(p.timestamp).getTime()         - depMs) / 3600000;
+                segs.push({ t0, t1, spd: p.speed_kn, motor: p.twa_deg === null });
+            }
+
+            let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg"
+                            style="width:100%; display:block; max-height:130px;">`;
+
+            // Horizontal grid lines + y labels
+            const yStep = yMax <= 8 ? 2 : yMax <= 14 ? 3 : 4;
+            for (let v = 0; v <= yMax; v += yStep) {
+                const y = py(v);
+                svg += `<line x1="${PAD.left}" y1="${y}" x2="${W - PAD.right}" y2="${y}"
+                              stroke="var(--border-color)" stroke-width="0.6" opacity="0.5"/>`;
+                svg += `<text x="${PAD.left - 5}" y="${y + 4}" font-size="10"
+                              fill="var(--text-secondary)" text-anchor="end">${v}</text>`;
+            }
+
+            // Vertical grid lines + x labels (UTC time)
+            const xInterval = totalHours <= 12 ? 2 : totalHours <= 30 ? 4 : totalHours <= 60 ? 8 : 12;
+            for (let h = 0; h <= totalHours + 0.01; h += xInterval) {
+                const x = px(Math.min(h, totalHours));
+                const label = new Date(depMs + Math.min(h, totalHours) * 3600000)
+                    .toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', timeZone:'UTC' });
+                svg += `<line x1="${x}" y1="${PAD.top}" x2="${x}" y2="${PAD.top + plotH}"
+                              stroke="var(--border-color)" stroke-width="0.6" opacity="0.4"/>`;
+                svg += `<text x="${x}" y="${H - 4}" font-size="9"
+                              fill="var(--text-secondary)" text-anchor="middle">${label}</text>`;
+            }
+
+            // Coloured area fills (step chart)
+            for (const s of segs) {
+                const x0 = px(s.t0), x1 = px(s.t1);
+                const y0 = py(s.spd), yBase = py(0);
+                const fill = s.motor ? 'rgba(156,163,175,0.22)' : 'rgba(72,187,120,0.18)';
+                svg += `<rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${yBase - y0}" fill="${fill}"/>`;
+            }
+
+            // Step lines (horizontal) + connectors (vertical)
+            for (let i = 0; i < segs.length; i++) {
+                const s = segs[i];
+                const col = s.motor ? '#9ca3af' : '#48bb78';
+                svg += `<line x1="${px(s.t0)}" y1="${py(s.spd)}" x2="${px(s.t1)}" y2="${py(s.spd)}"
+                              stroke="${col}" stroke-width="2" stroke-linecap="round"/>`;
+                if (i + 1 < segs.length && Math.abs(segs[i+1].t0 - s.t1) < 0.02) {
+                    const x = px(s.t1);
+                    svg += `<line x1="${x}" y1="${py(s.spd)}" x2="${x}" y2="${py(segs[i+1].spd)}"
+                                  stroke="var(--border-color)" stroke-width="1"/>`;
+                }
+            }
+
+            // Zero baseline
+            svg += `<line x1="${PAD.left}" y1="${py(0)}" x2="${W - PAD.right}" y2="${py(0)}"
+                          stroke="var(--border-color)" stroke-width="1"/>`;
+
+            svg += '</svg>';
+            document.getElementById('speedChartContainer').innerHTML = svg;
+        }
+
+        // ── Route persistence ─────────────────────────────────────────────────────
+        function saveRouteState() {
+            if (!tripId || !routeMode) return;
+            localStorage.setItem(`plan_route_${tripId}`, JSON.stringify({
+                waypoints: routeWaypoints.map(p => ({ lat: p.lat, lng: p.lng })),
+                done:      routeDone,
+                departure: document.getElementById('depInput').value,
+                overlay:   lastRouteOverlay,
+            }));
+        }
+
+        function restoreRoute() {
+            if (!tripId) return;
+            let state;
+            try {
+                const raw = localStorage.getItem(`plan_route_${tripId}`);
+                if (!raw) return;
+                state = JSON.parse(raw);
+            } catch (_) { return; }
+
+            if (!state.waypoints || state.waypoints.length < 1) return;
+
+            // Enter route mode silently (don't pre-fill departure from scrubber)
+            routeMode = true;
+            document.getElementById('planRouteBtn').textContent = 'Clear Route';
+            document.getElementById('planRouteBtn').style.background = '#e74c3c';
+            document.getElementById('routeBar').style.display = '';
+
+            // Re-create waypoint markers and preview lines
+            state.waypoints.forEach((wp, i) => {
+                const latlng = L.latLng(wp.lat, wp.lng);
+                routeWaypoints.push(latlng);
+
+                if (i > 0) {
+                    const prev = routeWaypoints[i - 1];
+                    previewLines.push(
+                        L.polyline([[prev.lat, prev.lng], [latlng.lat, latlng.lng]], {
+                            color: '#888', weight: 2, dashArray: '6,6', opacity: 0.7
+                        }).addTo(planMap)
+                    );
+                }
+
+                const n = state.waypoints.length;
+                const fillColor = i === 0 ? '#48bb78' : i === n - 1 ? '#fc8181' : '#888';
+                const borderColor = i > 0 && i < n - 1 ? '#888' : '#fff';
+                waypointMarkers.push(
+                    L.circleMarker(latlng, {
+                        color: borderColor, fillColor, fillOpacity: 1, radius: 7, weight: 2
+                    }).addTo(planMap)
+                );
+            });
+
+            if (state.done) {
+                routeDone = true;
+            } else {
+                planMap.getContainer().style.cursor = 'crosshair';
+            }
+
+            if (state.departure) {
+                document.getElementById('depInput').value = state.departure;
+            }
+
+            updateRouteBar();
+
+            if (state.overlay && state.overlay.length >= 2) {
+                lastRouteOverlay = state.overlay;
+                drawRouteLine(state.overlay);
+            }
         }
 
         if (tripId) init();

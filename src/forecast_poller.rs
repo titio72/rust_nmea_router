@@ -2,7 +2,7 @@ use crate::db::VesselDatabase;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::sync::{Arc, Mutex, RwLock};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ForecastPollerStatus {
@@ -32,6 +32,7 @@ pub async fn run_poller(
             db.get_active_trip_id().unwrap_or(None)
         };
         let Some(trip_id) = active_trip else {
+            debug!("Forecast poller: no active trip, sleeping {}s", IDLE_CHECK_SECS);
             tokio::time::sleep(tokio::time::Duration::from_secs(IDLE_CHECK_SECS)).await;
             continue;
         };
@@ -41,6 +42,7 @@ pub async fn run_poller(
             db.list_forecast_areas(trip_id).unwrap_or_default()
         };
         if areas.is_empty() {
+            debug!(trip_id, "Forecast poller: no areas defined, sleeping {}s", IDLE_CHECK_SECS);
             tokio::time::sleep(tokio::time::Duration::from_secs(IDLE_CHECK_SECS)).await;
             continue;
         }
@@ -55,6 +57,13 @@ pub async fn run_poller(
             if elapsed < FETCH_INTERVAL_SECS {
                 let wait_secs = (FETCH_INTERVAL_SECS - elapsed) as u64;
                 let next = last + chrono::Duration::seconds(FETCH_INTERVAL_SECS);
+                info!(
+                    trip_id,
+                    last_fetch = %last.format("%Y-%m-%dT%H:%M:%SZ"),
+                    next_fetch = %next.format("%Y-%m-%dT%H:%M:%SZ"),
+                    wait_secs,
+                    "Forecast poller: not due yet, sleeping"
+                );
                 {
                     let mut s = status.lock().unwrap();
                     s.next_fetch = Some(next);
@@ -64,8 +73,21 @@ pub async fn run_poller(
             }
         }
 
+        info!(
+            trip_id,
+            area_count = areas.len(),
+            "Forecast poller: triggering fetch"
+        );
+
         let mut fetch_error = false;
         'areas: for area in &areas {
+            info!(
+                trip_id,
+                area_id = area.id,
+                lat_min = area.lat_min, lat_max = area.lat_max,
+                lon_min = area.lon_min, lon_max = area.lon_max,
+                "Fetching area forecast"
+            );
             match crate::forecast::fetch_area_forecast(
                 area.lat_min, area.lat_max, area.lon_min, area.lon_max,
             )
@@ -82,16 +104,24 @@ pub async fn run_poller(
                         if let Err(e) = db.insert_forecast(
                             trip_id, area.id, f.lat, f.lon, fetched_at, &f.hourly,
                         ) {
-                            warn!("Failed to store forecast point for trip {}: {}", trip_id, e);
+                            warn!(trip_id, area_id = area.id, error = %e, "Failed to store forecast point");
                         }
                     }
                     info!(
-                        "Forecast fetched for trip {} area {}: {} grid points",
-                        trip_id, area.id, forecasts.len()
+                        trip_id,
+                        area_id = area.id,
+                        grid_points = forecasts.len(),
+                        "Area forecast stored"
                     );
                 }
                 Err(e) => {
-                    warn!("Forecast fetch failed for trip {} area {}: {}", trip_id, area.id, e);
+                    warn!(
+                        trip_id,
+                        area_id = area.id,
+                        error = %e,
+                        retry_secs = RETRY_SECS,
+                        "Area forecast fetch failed"
+                    );
                     {
                         let mut s = status.lock().unwrap();
                         s.online = false;
@@ -114,6 +144,12 @@ pub async fn run_poller(
             s.next_fetch = Some(next);
             s.online = true;
         }
+        info!(
+            trip_id,
+            area_count = areas.len(),
+            next_fetch = %next.format("%Y-%m-%dT%H:%M:%SZ"),
+            "Forecast poller: all areas fetched successfully"
+        );
         tokio::time::sleep(tokio::time::Duration::from_secs(FETCH_INTERVAL_SECS as u64)).await;
     }
 }

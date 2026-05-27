@@ -52,6 +52,19 @@ pub async fn start_web_server(
 
     let poller_status = Arc::new(std::sync::Mutex::new(ForecastPollerStatus::default()));
 
+    let polars = config.polars_file_path.as_deref().and_then(|path| {
+        match crate::polars::PolarTable::from_csv(path) {
+            Ok(t) => {
+                tracing::info!(path, "Polar table loaded");
+                Some(std::sync::Arc::new(t))
+            }
+            Err(e) => {
+                tracing::warn!(path, error = %e, "Failed to load polar table — fixed motoring speed will be used");
+                None
+            }
+        }
+    });
+
     let state = AppState {
         db: db.clone(),
         config,
@@ -60,6 +73,7 @@ pub async fn start_web_server(
         jwt_secret,
         ais_cache,
         poller_status: poller_status.clone(),
+        polars,
     };
 
     tokio::spawn(async {

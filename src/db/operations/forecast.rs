@@ -302,11 +302,21 @@ impl VesselDatabase {
                )",
             params! { "trip_id" => trip_id, "ts" => &ts_db },
         )?;
+        let mut seen = std::collections::HashSet::new();
         rows.iter()
-            .map(|r| {
-                Ok(GridPointForecast {
-                    lat: parse_decimal(r, "lat")?,
-                    lon: parse_decimal(r, "lon")?,
+            .filter_map(|r| {
+                let lat = parse_decimal(r, "lat").ok()?;
+                let lon = parse_decimal(r, "lon").ok()?;
+                let key = (
+                    (lat * 10000.0).round() as i64,
+                    (lon * 10000.0).round() as i64,
+                );
+                if !seen.insert(key) {
+                    return None;
+                }
+                Some(Ok(GridPointForecast {
+                    lat,
+                    lon,
                     wind_speed_kn: parse_decimal_opt(r, "wind_speed_kn"),
                     wind_direction_deg: parse_decimal_opt(r, "wind_direction_deg"),
                     wind_gust_kn: parse_decimal_opt(r, "wind_gust_kn"),
@@ -314,7 +324,7 @@ impl VesselDatabase {
                     wave_period_s: parse_decimal_opt(r, "wave_period_s"),
                     wave_direction_deg: parse_decimal_opt(r, "wave_direction_deg"),
                     cape_j_kg: parse_decimal_opt(r, "cape_j_kg"),
-                })
+                }))
             })
             .collect()
     }

@@ -166,6 +166,22 @@ pub fn haversine_distance_nm(lat1_deg: f64, lon1_deg: f64, lat2_deg: f64, lon2_d
     radius_earth_nm * c
 }
 
+/// Advance a position by `dist_nm` nautical miles along `bearing_deg` (0=N, 90=E).
+/// Returns (new_lat_deg, new_lon_deg).
+pub fn advance_position(lat_deg: f64, lon_deg: f64, bearing_deg: f64, dist_nm: f64) -> (f64, f64) {
+    let r = 3440.065_f64; // Earth radius in nm
+    let lat = lat_deg.to_radians();
+    let lon = lon_deg.to_radians();
+    let bearing = bearing_deg.to_radians();
+    let d = dist_nm / r;
+
+    let new_lat = (lat.sin() * d.cos() + lat.cos() * d.sin() * bearing.cos()).asin();
+    let new_lon = lon
+        + (bearing.sin() * d.sin() * lat.cos()).atan2(d.cos() - lat.sin() * new_lat.sin());
+
+    (new_lat.to_degrees(), new_lon.to_degrees())
+}
+
 /// Engine status with three possible states
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -773,5 +789,21 @@ mod tests {
         // Get average for last 5 seconds (should only include last sample)
         let avg = queue.get_average(Duration::from_secs(5), now).unwrap();
         assert_eq!(avg, 30.0);
+    }
+
+    #[test]
+    fn test_advance_position_north() {
+        // From 43.0°N 8.0°E, head due north 60 nm (≈ 1°)
+        let (lat, lon) = advance_position(43.0, 8.0, 0.0, 60.0);
+        assert!((lat - 44.0).abs() < 0.02, "lat={}", lat);
+        assert!((lon - 8.0).abs() < 0.001, "lon={}", lon);
+    }
+
+    #[test]
+    fn test_advance_position_east() {
+        // From 0.0°N 0.0°E, head due east 60 nm — lon should increase
+        let (lat, lon) = advance_position(0.0, 0.0, 90.0, 60.0);
+        assert!(lat.abs() < 0.01, "lat should stay near 0, got {}", lat);
+        assert!(lon > 0.5, "lon should increase, got {}", lon);
     }
 }

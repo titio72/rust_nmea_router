@@ -6,12 +6,13 @@
     <title>Trip Details - NMEA Router</title>
     <link rel="icon" type="image/png" href="/images/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+    <link rel="stylesheet" href="/libs/leaflet.min.css" />
+    <link rel="stylesheet" href="/libs/leaflet.fullscreen.css"/>
     <script src="/js/shared-theme.js?v=3"></script>
     <script src="/libs/chart.min.js"></script>
     <script src="/libs/chartjs-adapter-date-fns.bundle.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-    <!-- Google Maps API will be loaded dynamically -->
+    <script src="/libs/leaflet.min.js"></script>
+    <script src="/libs/leaflet.fullscreen.js"></script>
     <style>
         #tripDetails {
             width: 100%;
@@ -318,6 +319,11 @@
             <h2 style="font-size:16px; font-weight:bold; color:var(--text-bold); margin:0;">Forecast Areas</h2>
             <div style="display:flex; align-items:center; gap:14px;">
                 <span id="forecastPollerStatus" style="font-size:12px; color:var(--text-secondary);"></span>
+                <button id="forecastRefreshBtn" onclick="refreshForecast()" style="display:none;
+                    padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
+                    border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
+                    ↻ Refresh
+                </button>
                 <a id="forecastPlanningBtn" href="#" style="display:none; padding:5px 14px;
                    background:var(--link-color); color:#fff; border-radius:4px;
                    text-decoration:none; font-size:13px;">Planning →</a>
@@ -346,86 +352,6 @@
     <script>
         document.getElementById('headerContainer').innerHTML = createHeaderBar('trips');
         initializeTheme();
-
-        let googleMapsLoaded = false;
-
-        // Load Google Maps API key dynamically with graceful fallback
-        async function loadGoogleMapsAPI() {
-            try {
-                // Check if Google Maps is already loaded
-                if (window.google?.maps) {
-                    googleMapsLoaded = true;
-                    return true;
-                }
-
-                // fetch() does not support a timeout option — use AbortController
-                const abortController = new AbortController();
-                const fetchTimeout = setTimeout(() => abortController.abort(), 5000);
-                let response;
-                try {
-                    response = await fetch('/api/config/google_maps_key', { signal: abortController.signal });
-                } finally {
-                    clearTimeout(fetchTimeout);
-                }
-
-                if (!response.ok) {
-                    console.warn('Google Maps API key endpoint unreachable');
-                    showMapFallback('Google Maps API key unavailable');
-                    return false;
-                }
-
-                const result = await response.json();
-
-                if (result.status !== 'ok' || !result.data) {
-                    console.warn('Google Maps API key not configured');
-                    showMapFallback('Google Maps not configured');
-                    return false;
-                }
-
-                // Load Google Maps script with timeout.
-                // Guard against a late onload firing after the timeout has already
-                // resolved the promise with false (script still in DOM but map container
-                // was already replaced with the fallback).
-                return new Promise((resolve) => {
-                    let settled = false;
-                    const script = document.createElement('script');
-                    script.src = `https://maps.googleapis.com/maps/api/js?key=${result.data}`;
-                    script.async = true;
-                    script.defer = true;
-
-                    const timeout = setTimeout(() => {
-                        if (settled) return;
-                        settled = true;
-                        console.warn('Google Maps API loading timeout');
-                        showMapFallback('Google Maps loading timeout - map unavailable');
-                        resolve(false);
-                    }, 10000);
-
-                    script.onload = () => {
-                        clearTimeout(timeout);
-                        if (settled) return;
-                        settled = true;
-                        googleMapsLoaded = true;
-                        resolve(true);
-                    };
-
-                    script.onerror = () => {
-                        clearTimeout(timeout);
-                        if (settled) return;
-                        settled = true;
-                        console.warn('Google Maps API failed to load');
-                        showMapFallback('Google Maps failed to load');
-                        resolve(false);
-                    };
-
-                    document.head.appendChild(script);
-                });
-            } catch (error) {
-                console.error('Failed to load Google Maps:', error);
-                showMapFallback('Network error loading Google Maps');
-                return false;
-            }
-        }
 
         function showMapFallback(message) {
             const mapElement = document.getElementById('map');
@@ -641,10 +567,6 @@
 
         async function loadTripAndLegs(tripId) {
             try {
-                // Kick off Google Maps load in the background — do NOT await it here
-                // so the data fetches can proceed in parallel
-                const mapsPromise = loadGoogleMapsAPI().catch(() => false);
-
                 const legsPromise = fetch('/api/trip_legs?id=' + tripId);
 
                 // Load trip summary and full track in parallel; use max_points=600 for
@@ -697,15 +619,6 @@
                 // Display leg selector and initial trip/leg view immediately
                 updateLegSelector(initialLegNumber);
                 await loadTripDetails(tripId, initialLeg);
-
-                // Wait for Google Maps to finish (it may still be loading)
-                const mapsLoaded = await mapsPromise;
-
-                // If Maps finished loading after initializeMap() already ran (and showed
-                // the fallback), render the map now with the track data we already have.
-                if (mapsLoaded && !currentMap && currentTrackData) {
-                    initializeMap(currentTrackData, currentIsFullTrip, currentNavStartTs, currentNavEndTs);
-                }
             } catch (error) {
                 //document.getElementById('tripDetails').innerHTML =
                 //    '<div class="error">Failed to load trip: ' + error.message + '</div>';
@@ -893,7 +806,7 @@
 
                 // Init forecast areas section
                 const tripEndMs = tripData.end_date ? new Date(tripData.end_date).getTime() : 0;
-                const isActive = (Date.now() - tripEndMs) < 7_200_000; // within 2h = active trip
+                const isActive = (Date.now() - tripEndMs) < 86_400_000; // within 24h = active trip
                 initForecastAreasSection(tripId, isActive);
             } catch (error) {
                 console.error('Failed to load trip details:', error);
@@ -1291,52 +1204,40 @@
             });
 
             if (segmentPoints.length > 0) {
-                // Create polyline for the segment in bright orange
-                const segmentPath = segmentPoints
+                const latlngs = segmentPoints
                     .filter(point => point.latitude !== null && point.longitude !== null)
-                    .map(point => ({ lat: point.latitude, lng: point.longitude }));
+                    .map(point => [point.latitude, point.longitude]);
 
-                const segmentLine = new google.maps.Polyline({
-                    path: segmentPath,
-                    geodesic: true,
-                    strokeColor: '#FF8800',
-                    strokeOpacity: 1.0,
-                    strokeWeight: 6,
-                    map: currentMap,
-                    zIndex: 2000
-                });
+                const segmentLine = L.polyline(latlngs, {
+                    color: '#FF8800',
+                    weight: 6,
+                    opacity: 1.0
+                }).addTo(currentMap);
 
                 segmentMarkers.push(segmentLine);
 
-                // Calculate bounds for segment and zoom to fit
                 let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
-                segmentPath.forEach(point => {
-                    minLat = Math.min(minLat, point.lat);
-                    maxLat = Math.max(maxLat, point.lat);
-                    minLng = Math.min(minLng, point.lng);
-                    maxLng = Math.max(maxLng, point.lng);
+                latlngs.forEach(([lat, lng]) => {
+                    minLat = Math.min(minLat, lat);
+                    maxLat = Math.max(maxLat, lat);
+                    minLng = Math.min(minLng, lng);
+                    maxLng = Math.max(maxLng, lng);
                 });
 
-                // Add padding to show segment comfortably
                 const latPadding = (maxLat - minLat) * 0.3 || 0.01;
                 const lngPadding = (maxLng - minLng) * 0.3 || 0.01;
 
-                const segmentBounds = {
-                    north: maxLat + latPadding,
-                    south: minLat - latPadding,
-                    east: maxLng + lngPadding,
-                    west: minLng - lngPadding
-                };
-
-                // Fit map to segment bounds
-                currentMap.fitBounds(segmentBounds);
+                currentMap.fitBounds([
+                    [minLat - latPadding, minLng - lngPadding],
+                    [maxLat + latPadding, maxLng + lngPadding]
+                ]);
             }
         }
 
         function resetSegmentMarkers() {
             // Remove all segment markers/polylines from map
             for (let marker of segmentMarkers) {
-                marker.setMap(null);
+                marker.remove();
             }
             segmentMarkers = [];
 
@@ -2353,170 +2254,30 @@
                     '</svg>'
                 ].join('');
 
-                const marker = new google.maps.Marker({
-                    position: { lat: closest.latitude, lng: closest.longitude },
-                    map: map,
+                L.marker([closest.latitude, closest.longitude], {
+                    icon: L.icon({
+                        iconUrl: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
+                        iconSize: [50, 32],
+                        iconAnchor: [25, 28]
+                    }),
                     title: hourLabel + ' UTC',
-                    icon: {
-                        url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
-                        size: new google.maps.Size(50, 32),
-                        origin: new google.maps.Point(0, 0),
-                        anchor: new google.maps.Point(25, 28),
-                        scaledSize: new google.maps.Size(50, 32)
-                    },
-                    zIndex: 500
-                });
+                    zIndexOffset: 500
+                }).addTo(map);
             }
-        }
-
-        function drawCanvasTrack(trackData, isFullTrip) {
-            const container = document.getElementById('map');
-            if (!container) return;
-
-            const validPoints = trackData.filter(p =>
-                p.latitude != null && p.longitude != null
-            );
-            if (validPoints.length === 0) {
-                showMapFallback('No GPS track data available for this trip');
-                return;
-            }
-
-            const isDark = document.body.classList.contains('dark-theme');
-
-            const canvas = document.createElement('canvas');
-            canvas.style.width = '100%';
-            canvas.style.height = '100%';
-            canvas.style.display = 'block';
-            container.innerHTML = '';
-            container.appendChild(canvas);
-
-            const W = container.clientWidth  || 600;
-            const H = container.clientHeight || 400;
-            canvas.width  = W;
-            canvas.height = H;
-            const ctx = canvas.getContext('2d');
-
-            ctx.fillStyle = isDark ? '#1a1a2e' : '#d0e8f5';
-            ctx.fillRect(0, 0, W, H);
-
-            const PAD = 24;
-            let minLat = Infinity, maxLat = -Infinity;
-            let minLng = Infinity, maxLng = -Infinity;
-            validPoints.forEach(p => {
-                minLat = Math.min(minLat, p.latitude);
-                maxLat = Math.max(maxLat, p.latitude);
-                minLng = Math.min(minLng, p.longitude);
-                maxLng = Math.max(maxLng, p.longitude);
-            });
-
-            const latSpan = maxLat - minLat || 0.01;
-            const lngSpan = maxLng - minLng || 0.01;
-
-            // Preserve aspect ratio using the cosine correction for longitude
-            const midLat   = (minLat + maxLat) / 2;
-            const cosLat   = Math.cos(midLat * Math.PI / 180);
-            const drawW    = W - PAD * 2;
-            const drawH    = H - PAD * 2;
-            const scaleX   = drawW / lngSpan;
-            const scaleY   = drawH / latSpan;
-            const scale    = Math.min(scaleX, scaleY * cosLat);
-
-            const toX = lng => PAD + (lng - minLng) * scale + (drawW - lngSpan * scale) / 2;
-            const toY = lat => H - PAD - (lat - minLat) * (scale / cosLat) - (drawH - latSpan * (scale / cosLat)) / 2;
-
-            // Track segments coloured by speed/engine (same logic as createColoredTrack)
-            ctx.lineWidth = 2.5;
-            ctx.lineJoin  = 'round';
-            for (let i = 1; i < validPoints.length; i++) {
-                const p  = validPoints[i];
-                const p0 = validPoints[i - 1];
-                let color;
-                if (p.engine_on === 1) {
-                    color = '#888888';
-                } else if (p.engine_on === 2) {
-                    color = '#FFD700';
-                } else {
-                    color = getSpeedColor(p.avg_speed_kn || p0.avg_speed_kn || 0);
-                }
-                ctx.strokeStyle = color;
-                ctx.beginPath();
-                ctx.moveTo(toX(p0.longitude), toY(p0.latitude));
-                ctx.lineTo(toX(p.longitude),  toY(p.latitude));
-                ctx.stroke();
-            }
-
-            // Hourly time labels (single-leg view only)
-            if (!isFullTrip && validPoints[0].timestamp) {
-                const firstMs  = new Date(validPoints[0].timestamp).getTime();
-                const lastMs   = new Date(validPoints[validPoints.length - 1].timestamp).getTime();
-                const firstHour = Math.ceil(firstMs / 3600000) * 3600000;
-                ctx.font      = 'bold 10px Arial,sans-serif';
-                ctx.textAlign = 'center';
-                for (let h = firstHour; h < lastMs; h += 3600000) {
-                    let closest = null, bestDelta = Infinity;
-                    for (const p of validPoints) {
-                        const d = Math.abs(new Date(p.timestamp).getTime() - h);
-                        if (d < bestDelta) { bestDelta = d; closest = p; }
-                    }
-                    if (!closest) continue;
-                    const label = new Date(h).toISOString().slice(11, 16);
-                    const x = toX(closest.longitude);
-                    const y = toY(closest.latitude);
-                    ctx.fillStyle = isDark ? 'rgba(0,0,0,0.65)' : 'rgba(255,255,255,0.85)';
-                    ctx.fillRect(x - 16, y - 14, 32, 13);
-                    ctx.fillStyle = isDark ? '#ddd' : '#222';
-                    ctx.fillText(label, x, y - 3);
-                }
-            }
-
-            // Start marker (green) and end marker (red)
-            const first = validPoints[0];
-            const last  = validPoints[validPoints.length - 1];
-            [[first, '#22cc44'], [last, '#ee3333']].forEach(([p, color]) => {
-                const x = toX(p.longitude), y = toY(p.latitude);
-                ctx.beginPath();
-                ctx.arc(x, y, 6, 0, Math.PI * 2);
-                ctx.fillStyle = color;
-                ctx.fill();
-                ctx.strokeStyle = isDark ? '#fff' : '#000';
-                ctx.lineWidth = 1.5;
-                ctx.stroke();
-            });
-
-            // Legend
-            const legendY = H - 8;
-            ctx.font      = '10px Arial,sans-serif';
-            ctx.textAlign = 'left';
-            const items = [
-                { color: getSpeedColor(2),  label: '< 2 kn' },
-                { color: getSpeedColor(5),  label: '5 kn'   },
-                { color: getSpeedColor(10), label: '10 kn'  },
-                { color: '#888888',         label: 'Motor'  },
-            ];
-            let lx = PAD;
-            items.forEach(({ color, label }) => {
-                ctx.fillStyle = color;
-                ctx.fillRect(lx, legendY - 8, 18, 8);
-                ctx.fillStyle = isDark ? '#ccc' : '#333';
-                ctx.fillText(label, lx + 21, legendY);
-                lx += 70;
-            });
         }
 
         function initializeMap(trackData, isFullTrip, navStartTs, navEndTs) {
-            // Reset nav legend items — they are re-shown by addNavWindowMarkers if applicable
             const navStartEl = document.getElementById('navStartLegendItem');
             const navEndEl   = document.getElementById('navEndLegendItem');
             if (navStartEl) navStartEl.style.display = 'none';
             if (navEndEl)   navEndEl.style.display   = 'none';
 
-            // Check if Google Maps API is available
-            if (!googleMapsLoaded || !window.google?.maps) {
-                drawCanvasTrack(trackData, isFullTrip);
-                return;
+            // Destroy existing map before re-initialising (Leaflet throws on double-init)
+            if (currentMap) {
+                currentMap.remove();
+                currentMap = null;
             }
 
-            // Filter out data points without valid coordinates
             const validTrackPoints = trackData.filter(point =>
                 point.latitude !== null && point.latitude !== undefined &&
                 point.longitude !== null && point.longitude !== undefined
@@ -2527,7 +2288,6 @@
                 return;
             }
 
-            // Calculate bounds for the map
             let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
             validTrackPoints.forEach(point => {
                 minLat = Math.min(minLat, point.latitude);
@@ -2536,108 +2296,58 @@
                 maxLng = Math.max(maxLng, point.longitude);
             });
 
-            // Add some padding to the bounds
             const latPadding = (maxLat - minLat) * 0.1 || 0.01;
             const lngPadding = (maxLng - minLng) * 0.1 || 0.01;
 
-            const bounds = {
-                north: maxLat + latPadding,
-                south: minLat - latPadding,
-                east: maxLng + lngPadding,
-                west: minLng - lngPadding
-            };
+            const map = L.map(document.getElementById('map'), {
+                renderer: L.svg({ padding: 0.5 })
+            }).setView(
+                [(minLat + maxLat) / 2, (minLng + maxLng) / 2], 12
+            );
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors',
+                maxZoom: 19
+            }).addTo(map);
 
-            // Create the map centered on the track
-            const map = new google.maps.Map(document.getElementById('map'), {
-                zoom: 12,
-                center: { lat: (minLat + maxLat) / 2, lng: (minLng + maxLng) / 2 },
-                mapTypeId: google.maps.MapTypeId.ROADMAP,
-                mapTypeControl: true,
-                streetViewControl: false,
-                fullscreenControl: true
-            });
-
-            // Save map reference globally
             currentMap = map;
 
-            // Add click listener to reset markers when clicking on the map
-            map.addListener('click', () => {
-                resetSegmentMarkers();
-            });            // Fit the map to show all track points
-            map.fitBounds(bounds);
+            L.control.fullscreen({ position: 'topleft' }).addTo(map);
+            map.on('click', () => resetSegmentMarkers());
 
-            // Create shared hover info window for track tooltips
-            const hoverInfoWindow = new google.maps.InfoWindow();
+            map.fitBounds([
+                [minLat - latPadding, minLng - lngPadding],
+                [maxLat + latPadding, maxLng + lngPadding]
+            ]);
 
-            // Create colored track segments based on speed
-            createColoredTrack(map, validTrackPoints, hoverInfoWindow);
+            const hoverPopup = L.popup({ closeButton: false, autoPan: false });
+            createColoredTrack(map, validTrackPoints, hoverPopup, isFullTrip ? 4.0 : 1.0);
 
-            // Add hourly markers when viewing a single leg
             if (!isFullTrip) {
                 addHourlyMarkers(map, validTrackPoints);
             }
 
-            // Add markers for start and end points
             if (validTrackPoints.length > 0) {
-                // Start marker (green with flag icon)
-                const startMarker = new google.maps.Marker({
-                    position: { lat: validTrackPoints[0].latitude, lng: validTrackPoints[0].longitude },
-                    map: map,
-                    title: 'Trip Start',
-                    icon: {
-                        path: 'M 0,0 C -2,-20 -10,-22 -10,-30 L -10,-50 L 10,-50 L 10,-30 C 10,-22 2,-20 0,0 z',
-                        fillColor: '#00FF00',
-                        fillOpacity: 1,
-                        strokeColor: '#FFFFFF',
-                        strokeWeight: 2,
-                        scale: 0.7,
-                        anchor: new google.maps.Point(0, 0)
-                    },
-                    zIndex: 1000
+                const flagIcon = (color) => L.divIcon({
+                    html: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-10 -50 20 50" width="14" height="35">' +
+                          '<path d="M 0,0 C -2,-20 -10,-22 -10,-30 L -10,-50 L 10,-50 L 10,-30 C 10,-22 2,-20 0,0 z" ' +
+                          'fill="' + color + '" stroke="#FFFFFF" stroke-width="2"/></svg>',
+                    iconSize: [14, 35],
+                    iconAnchor: [7, 35],
+                    className: ''
                 });
 
-                // End marker (red with flag icon)
-                const endMarker = new google.maps.Marker({
-                    position: { lat: validTrackPoints[validTrackPoints.length - 1].latitude, lng: validTrackPoints[validTrackPoints.length - 1].longitude },
-                    map: map,
-                    title: 'Trip End',
-                    icon: {
-                        path: 'M 0,0 C -2,-20 -10,-22 -10,-30 L -10,-50 L 10,-50 L 10,-30 C 10,-22 2,-20 0,0 z',
-                        fillColor: '#FF0000',
-                        fillOpacity: 1,
-                        strokeColor: '#FFFFFF',
-                        strokeWeight: 2,
-                        scale: 0.7,
-                        anchor: new google.maps.Point(0, 0)
-                    },
-                    zIndex: 1000
-                });
+                const startPt = validTrackPoints[0];
+                const endPt   = validTrackPoints[validTrackPoints.length - 1];
 
-                // Add info windows with timestamps
-                const startInfoWindow = new google.maps.InfoWindow({
-                    content: '<div style="font-family: Arial, sans-serif;">' +
-                        '<strong>Trip Start</strong><br>' +
-                        formatDate(validTrackPoints[0].timestamp) +
-                    '</div>'
-                });
+                L.marker([startPt.latitude, startPt.longitude], { icon: flagIcon('#00FF00'), title: 'Trip Start', zIndexOffset: 1000 })
+                    .addTo(map)
+                    .bindPopup('<div style="font-family: Arial, sans-serif;"><strong>Trip Start</strong><br>' + formatDate(startPt.timestamp) + '</div>');
 
-                const endInfoWindow = new google.maps.InfoWindow({
-                    content: '<div style="font-family: Arial, sans-serif;">' +
-                        '<strong>Trip End</strong><br>' +
-                        formatDate(validTrackPoints[validTrackPoints.length - 1].timestamp) +
-                    '</div>'
-                });
-
-                startMarker.addListener('click', () => {
-                    startInfoWindow.open(map, startMarker);
-                });
-
-                endMarker.addListener('click', () => {
-                    endInfoWindow.open(map, endMarker);
-                });
+                L.marker([endPt.latitude, endPt.longitude], { icon: flagIcon('#FF0000'), title: 'Trip End', zIndexOffset: 1000 })
+                    .addTo(map)
+                    .bindPopup('<div style="font-family: Arial, sans-serif;"><strong>Trip End</strong><br>' + formatDate(endPt.timestamp) + '</div>');
             }
 
-            // Add nav window markers when viewing a single leg
             if (!isFullTrip && (navStartTs || navEndTs)) {
                 addNavWindowMarkers(map, validTrackPoints, navStartTs, navEndTs);
             }
@@ -2654,40 +2364,23 @@
                 return best;
             }
 
-            const navStartIcon = {
-                path: google.maps.SymbolPath.CIRCLE,
-                fillColor: '#0099FF',
-                fillOpacity: 1,
-                strokeColor: '#FFFFFF',
-                strokeWeight: 2,
-                scale: 8
-            };
-            const navEndIcon = {
-                path: google.maps.SymbolPath.CIRCLE,
-                fillColor: '#FF6600',
-                fillOpacity: 1,
-                strokeColor: '#FFFFFF',
-                strokeWeight: 2,
-                scale: 8
-            };
-
             if (navStartTs) {
                 const pt = findClosestPoint(navStartTs);
                 if (pt) {
-                    const marker = new google.maps.Marker({
-                        position: { lat: pt.latitude, lng: pt.longitude },
-                        map: map,
-                        title: 'Navigation Start',
-                        icon: navStartIcon,
-                        zIndex: 900
-                    });
-                    const iw = new google.maps.InfoWindow({
-                        content: '<div style="font-family: Arial, sans-serif;">' +
-                            '<strong>Navigation Start</strong><br>' +
-                            formatTime(navStartTs) +
-                            '</div>'
-                    });
-                    marker.addListener('click', () => iw.open(map, marker));
+                    L.circleMarker([pt.latitude, pt.longitude], {
+                        radius: 8,
+                        fillColor: '#0099FF',
+                        fillOpacity: 1,
+                        color: '#FFFFFF',
+                        weight: 2
+                    })
+                    .addTo(map)
+                    .bindPopup(
+                        '<div style="font-family: Arial, sans-serif;">' +
+                        '<strong>Navigation Start</strong><br>' +
+                        formatTime(navStartTs) +
+                        '</div>'
+                    );
                     const el = document.getElementById('navStartLegendItem');
                     if (el) el.style.display = '';
                 }
@@ -2696,95 +2389,93 @@
             if (navEndTs) {
                 const pt = findClosestPoint(navEndTs);
                 if (pt) {
-                    const marker = new google.maps.Marker({
-                        position: { lat: pt.latitude, lng: pt.longitude },
-                        map: map,
-                        title: 'Navigation End',
-                        icon: navEndIcon,
-                        zIndex: 900
-                    });
-                    const iw = new google.maps.InfoWindow({
-                        content: '<div style="font-family: Arial, sans-serif;">' +
-                            '<strong>Navigation End</strong><br>' +
-                            formatTime(navEndTs) +
-                            '</div>'
-                    });
-                    marker.addListener('click', () => iw.open(map, marker));
+                    L.circleMarker([pt.latitude, pt.longitude], {
+                        radius: 8,
+                        fillColor: '#FF6600',
+                        fillOpacity: 1,
+                        color: '#FFFFFF',
+                        weight: 2
+                    })
+                    .addTo(map)
+                    .bindPopup(
+                        '<div style="font-family: Arial, sans-serif;">' +
+                        '<strong>Navigation End</strong><br>' +
+                        formatTime(navEndTs) +
+                        '</div>'
+                    );
                     const el = document.getElementById('navEndLegendItem');
                     if (el) el.style.display = '';
                 }
             }
         }
 
-        function createColoredTrack(map, trackPoints, hoverInfoWindow) {
+        function createColoredTrack(map, trackPoints, hoverPopup, smoothFactor = 1.0) {
             if (trackPoints.length < 2) return;
 
-            // Create segments between consecutive points
-            for (let i = 0; i < trackPoints.length - 1; i++) {
-                const point1 = trackPoints[i];
-                const point2 = trackPoints[i + 1];
+            function segmentColor(p1, p2) {
+                if (p2.engine_on === 1) return '#888888';
+                if (p2.engine_on === 2) return '#FFD700';
+                const speed = p2.avg_speed_kn || p1.avg_speed_kn || 0;
+                return getSpeedColor(Math.round(speed * 2) / 2);
+            }
 
-                // Determine color based on engine status (0=off, 1=on, 2=unknown)
-                let color;
-                if (point2.engine_on === 1) {
-                    // Use dark grey when engine is on (motoring)
-                    color = '#888888';
-                } else if (point2.engine_on === 2) {
-                    // Use gold when engine status is unknown
-                    color = '#FFD700';
-                } else {
-                    // Use speed-based color when sailing (engine off)
-                    const speed = point2.avg_speed_kn || point1.avg_speed_kn || 0;
-                    color = getSpeedColor(speed);
+            function showTooltip(e, pts) {
+                const ll = e.latlng;
+                let nearest = pts[0], minD = Infinity;
+                for (const pt of pts) {
+                    const d = (pt.latitude - ll.lat) ** 2 + (pt.longitude - ll.lng) ** 2;
+                    if (d < minD) { minD = d; nearest = pt; }
                 }
+                const time    = nearest.timestamp ? formatTime(nearest.timestamp) : 'N/A';
+                const speed   = nearest.avg_speed_kn != null ? nearest.avg_speed_kn.toFixed(1) + ' kn' : 'N/A';
+                const heading = nearest.average_heading_deg != null ? nearest.average_heading_deg.toFixed(0) + '°' : 'N/A';
+                const wind    = nearest.average_wind_speed_kn != null ? nearest.average_wind_speed_kn.toFixed(1) + ' kn' : 'N/A';
+                let absWindDir = 'N/A';
+                if (nearest.absolute_wind_direction_deg != null && nearest.average_heading_deg != null) {
+                    let d = (nearest.absolute_wind_direction_deg + nearest.average_heading_deg) % 360;
+                    if (d < 0) d += 360;
+                    absWindDir = d.toFixed(0) + '°';
+                }
+                hoverPopup
+                    .setLatLng(ll)
+                    .setContent(
+                        '<div class="map-track-tooltip">' +
+                        '<div class="tooltip-time">' + time + '</div>' +
+                        '<div><span class="tooltip-label">Speed </span><span class="tooltip-value">' + speed + ' ' + heading + '</span></div>' +
+                        '<div><span class="tooltip-label">Wind </span><span class="tooltip-value">' + wind + ' ' + absWindDir + '</span></div>' +
+                        '</div>'
+                    )
+                    .openOn(map);
+            }
 
-                // Create a polyline segment
-                const segmentPath = [
-                    { lat: point1.latitude, lng: point1.longitude },
-                    { lat: point2.latitude, lng: point2.longitude }
-                ];
-
-                const segmentLine = new google.maps.Polyline({
-                    path: segmentPath,
-                    geodesic: true,
-                    strokeColor: color,
-                    strokeOpacity: 1.0,
-                    strokeWeight: 4
-                });
-
-                segmentLine.setMap(map);
-
-                if (hoverInfoWindow) {
-                    const tooltipPoint = point2;
-                    segmentLine.addListener('mouseover', (event) => {
-                        const time = tooltipPoint.timestamp ? formatTime(tooltipPoint.timestamp) : 'N/A';
-                        const speed = tooltipPoint.avg_speed_kn != null ? tooltipPoint.avg_speed_kn.toFixed(1) + ' kn' : 'N/A';
-                        const heading = tooltipPoint.average_heading_deg != null ? tooltipPoint.average_heading_deg.toFixed(0) + '°' : 'N/A';
-                        const wind = tooltipPoint.average_wind_speed_kn != null ? tooltipPoint.average_wind_speed_kn.toFixed(1) + ' kn' : 'N/A';
-                        const windDir = tooltipPoint.average_wind_angle_deg != null ? tooltipPoint.average_wind_angle_deg.toFixed(0) + '°' : 'N/A';
-                        let absWindDir;
-                        if (tooltipPoint.absolute_wind_direction_deg != null && tooltipPoint.average_heading_deg != null) {
-                            let absWindDir_d = (tooltipPoint.absolute_wind_direction_deg + tooltipPoint.average_heading_deg) % 360;
-                            if (absWindDir_d < 0) absWindDir_d += 360;
-                            absWindDir = absWindDir_d.toFixed(0) + '°';
-                        } else {
-                            absWindDir = 'N/A';
-                        }
-                        hoverInfoWindow.setContent(
-                            '<div class="map-track-tooltip">' +
-                            '<div class="tooltip-time">' + time + '</div>' +
-                            '<div><span class="tooltip-label">Speed </span><span class="tooltip-value">' + speed + ' ' + heading + '</span></div>' +
-                            '<div><span class="tooltip-label">Wind </span><span class="tooltip-value">' + wind + ' ' + absWindDir + '</span></div>' +
-                            '</div>'
-                        );
-                        hoverInfoWindow.setPosition(event.latLng);
-                        hoverInfoWindow.open(map);
-                    });
-                    segmentLine.addListener('mouseout', () => {
-                        hoverInfoWindow.close();
-                    });
+            function flushGroup(color, latlngs, pts) {
+                if (latlngs.length < 2) return;
+                const line = L.polyline(latlngs, { color, weight: 4, opacity: 1.0, smoothFactor }).addTo(map);
+                if (hoverPopup) {
+                    line.on('mousemove', (e) => showTooltip(e, pts));
+                    line.on('mouseout',  () => map.closePopup(hoverPopup));
                 }
             }
+
+            // Group consecutive segments of the same quantized color into single polylines.
+            // Speed is quantized to 0.5 kn to allow adjacent same-speed points to group.
+            let groupColor  = segmentColor(trackPoints[0], trackPoints[1]);
+            let groupLatLngs = [[trackPoints[0].latitude, trackPoints[0].longitude],
+                                [trackPoints[1].latitude, trackPoints[1].longitude]];
+            let groupPts    = [trackPoints[0], trackPoints[1]];
+
+            for (let i = 1; i < trackPoints.length - 1; i++) {
+                const c = segmentColor(trackPoints[i], trackPoints[i + 1]);
+                if (c !== groupColor) {
+                    flushGroup(groupColor, groupLatLngs, groupPts);
+                    groupColor   = c;
+                    groupLatLngs = [[trackPoints[i].latitude, trackPoints[i].longitude]];
+                    groupPts     = [trackPoints[i]];
+                }
+                groupLatLngs.push([trackPoints[i + 1].latitude, trackPoints[i + 1].longitude]);
+                groupPts.push(trackPoints[i + 1]);
+            }
+            flushGroup(groupColor, groupLatLngs, groupPts);
         }
 
         function getSpeedColor(speed) {
@@ -2980,7 +2671,20 @@
                 const resp = await fetch('/api/forecast/status?trip_id=' + tripId);
                 const json = await resp.json();
                 const s = json.data;
+                const planBtn = document.getElementById('forecastPlanningBtn');
+                if (planBtn) planBtn.style.display = (s && s.area_count > 0) ? '' : 'none';
                 if (!s) return;
+                // Only show the online/offline badge for active trips being polled.
+                // For historical trips the poller status is unrelated to the viewed data.
+                const statusEl = document.getElementById('forecastPollerStatus');
+                const refreshBtn = document.getElementById('forecastRefreshBtn');
+                if (refreshBtn) refreshBtn.style.display = isActiveTripForForecast ? '' : 'none';
+                if (!isActiveTripForForecast) {
+                    statusEl.innerHTML = s.point_count > 0
+                        ? `<span style="font-size:11px;color:var(--text-secondary);">${s.point_count} pts</span>`
+                        : '';
+                    return;
+                }
                 const onlineBadge = s.online
                     ? '<span style="background:#14532d;color:#86efac;padding:2px 8px;border-radius:10px;font-size:11px;">● Fetching every 3h</span>'
                     : '<span style="background:#7c2d12;color:#fdba74;padding:2px 8px;border-radius:10px;font-size:11px;">⚠ Offline — retrying</span>';
@@ -2990,10 +2694,32 @@
                 const nextFetch = s.next_fetch
                     ? ' · Next: ' + new Date(s.next_fetch).toLocaleTimeString()
                     : '';
-                document.getElementById('forecastPollerStatus').innerHTML =
+                statusEl.innerHTML =
                     onlineBadge + ' <span style="font-size:11px;color:var(--text-secondary);margin-left:8px;">' +
                     lastFetch + nextFetch + ' · ' + s.point_count + ' pts</span>';
             } catch (_) {}
+        }
+
+        async function refreshForecast() {
+            const btn = document.getElementById('forecastRefreshBtn');
+            const orig = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '↻ Fetching…';
+            try {
+                const resp = await fetch('/api/forecast/refresh?trip_id=' + currentTripId, { method: 'POST' });
+                const json = await resp.json();
+                if (json.status === 'ok') {
+                    btn.textContent = '✓ Done';
+                    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+                } else {
+                    btn.textContent = '✗ Error';
+                    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+                }
+            } catch (_) {
+                btn.textContent = '✗ Error';
+                setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+            }
+            await updateForecastStatus(currentTripId);
         }
 
         function initForecastAreasSection(tripId, isActive) {
@@ -3010,7 +2736,6 @@
 
             const planBtn = document.getElementById('forecastPlanningBtn');
             if (planBtn) {
-                planBtn.style.display = isActive ? '' : 'none';
                 planBtn.href = 'plan.html?id=' + tripId;
             }
 

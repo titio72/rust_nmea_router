@@ -132,3 +132,8 @@ sudo ./install.sh          # Installs to /opt/nmea_router, /etc/nmea_router, /va
 sudo systemctl enable nmea_router.service
 sudo systemctl start nmea_router.service
 ```
+
+## Git Rules
+- Do NOT run `git commit` or `git push` at any point.
+- Do NOT stage or commit files automatically.
+- When you finish writing code, stop. I will review and commit myself.

@@ -43,12 +43,17 @@ pub struct AppState {
     pub jwt_secret: Arc<JwtSecret>,
     pub ais_cache: Arc<std::sync::Mutex<AisTargetCache>>,
     pub poller_status: Arc<std::sync::Mutex<crate::forecast_poller::ForecastPollerStatus>>,
+    pub polars: Option<std::sync::Arc<crate::polars::PolarTable>>,
 }
 
 impl AppState {
     /// Get a read guard for the database. Handles poisoned locks gracefully.
     pub fn db(&self) -> std::sync::RwLockReadGuard<'_, VesselDatabase> {
         self.db.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn polars(&self) -> Option<&crate::polars::PolarTable> {
+        self.polars.as_deref()
     }
 }
 
@@ -252,12 +257,34 @@ pub struct ForecastGridPointsQuery {
 #[derive(Debug, Deserialize)]
 pub struct ForecastRouteQuery {
     pub trip_id: u32,
+    pub waypoints: String,   // "lat1,lon1;lat2,lon2;…" — at least 2 pairs
+    pub departure: String,
+    pub motoring_speed_kn: f64,
+    /// Fraction of raw polar speed to use (0–1). Default 1.0 (full polar speed).
+    #[serde(default = "default_polar_efficiency")]
+    pub polar_efficiency: f64,
+    /// Motor instead of sail when effective polar speed is below this threshold (kn). Default 0.
+    #[serde(default)]
+    pub min_sail_speed_kn: f64,
+}
+
+fn default_polar_efficiency() -> f64 { 1.0 }
+
+#[derive(Debug, Deserialize)]
+pub struct OptimalRouteQuery {
+    pub trip_id: u32,
     pub from_lat: f64,
     pub from_lon: f64,
     pub to_lat: f64,
     pub to_lon: f64,
-    pub departure: String,
-    pub speed_kn: f64,
+    pub departure: String,          // ISO 8601 UTC, e.g. "2026-06-01T06:00:00Z"
+    pub motoring_speed_kn: f64,
+    #[serde(default = "default_polar_efficiency")]
+    pub polar_efficiency: f64,
+    #[serde(default)]
+    pub min_sail_speed_kn: f64,
+    #[serde(default)]
+    pub sail_weight_kn: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -777,14 +804,6 @@ pub async fn list_exports() -> Result<Json<ApiResponse<Vec<ExportFileInfo>>>, St
     }
 }
 
-pub async fn get_google_maps_key(
-    State(state): State<AppState>,
-) -> Result<Json<ApiResponse<Option<String>>>, StatusCode> {
-    match state.config.web.google_maps_api_key.clone() {
-        Some(key) => Ok(Json(ApiResponse::ok(Some(key)))),
-        None => Ok(Json(ApiResponse::ok(None))),
-    }
-}
 
 pub async fn get_heatmap(
     State(state): State<AppState>,
@@ -1569,6 +1588,49 @@ pub async fn get_forecast_status(
     })))
 }
 
+pub async fn refresh_forecast(
+    State(state): State<AppState>,
+    Query(params): Query<ForecastAreaTripQuery>,
+) -> Result<Json<ApiResponse<String>>, StatusCode> {
+    let areas = state.db().list_forecast_areas(params.trip_id).unwrap_or_default();
+    if areas.is_empty() {
+        return Ok(Json(ApiResponse::error("No forecast areas defined for this trip".to_string())));
+    }
+    let mut total_points = 0usize;
+    for area in &areas {
+        match crate::forecast::fetch_area_forecast(
+            area.lat_min, area.lat_max, area.lon_min, area.lon_max,
+        )
+        .await
+        {
+            Ok(forecasts) => {
+                let fetched_at = chrono::Utc::now();
+                let db = state.db();
+                for f in &forecasts {
+                    if let Err(e) = db.insert_forecast(
+                        params.trip_id, area.id, f.lat, f.lon, fetched_at, &f.hourly,
+                    ) {
+                        warn!(trip_id = params.trip_id, area_id = area.id, error = %e,
+                              "refresh_forecast: failed to store point");
+                    }
+                }
+                total_points += forecasts.len();
+                let mut s = state.poller_status.lock().unwrap_or_else(|p| p.into_inner());
+                s.online = true;
+                s.last_fetch = Some(fetched_at);
+                s.next_fetch = Some(fetched_at + chrono::Duration::seconds(3 * 3600));
+            }
+            Err(e) => {
+                warn!(trip_id = params.trip_id, area_id = area.id, error = %e,
+                      "refresh_forecast: fetch failed");
+                state.poller_status.lock().unwrap_or_else(|p| p.into_inner()).online = false;
+                return Ok(Json(ApiResponse::error(format!("Fetch failed for area {}: {}", area.id, e))));
+            }
+        }
+    }
+    Ok(Json(ApiResponse::ok(format!("{} grid points fetched", total_points))))
+}
+
 pub async fn get_forecast_grid_points(
     State(state): State<AppState>,
     Query(params): Query<ForecastGridPointsQuery>,
@@ -1595,6 +1657,13 @@ pub async fn get_forecast_route(
             ))));
         }
     };
+    let waypoints = match crate::forecast::parse_waypoints(&params.waypoints) {
+        Ok(w) => w,
+        Err(e) => return Ok(Json(ApiResponse::error(e))),
+    };
+    if params.motoring_speed_kn <= 0.0 {
+        return Ok(Json(ApiResponse::error("motoring_speed_kn must be positive".to_string())));
+    }
     let fetches = match state.db().fetch_forecast_fetches(params.trip_id) {
         Ok(f) => f,
         Err(e) => {
@@ -1603,12 +1672,96 @@ pub async fn get_forecast_route(
         }
     };
     let track = crate::forecast::generate_route_track(
-        params.from_lat, params.from_lon,
-        params.to_lat, params.to_lon,
+        &waypoints,
         departure,
-        params.speed_kn,
+        params.motoring_speed_kn,
+        params.polar_efficiency,
+        params.min_sail_speed_kn,
+        state.polars(),
+        &fetches,
     );
     let overlay = crate::forecast::compute_route_overlay(&track, &fetches);
+    Ok(Json(ApiResponse::ok(overlay)))
+}
+
+pub async fn get_optimal_route(
+    State(state): State<AppState>,
+    Query(params): Query<OptimalRouteQuery>,
+) -> Result<Json<ApiResponse<Vec<crate::forecast::RouteOverlayPoint>>>, StatusCode> {
+    let polars = match state.polars() {
+        Some(p) => p,
+        None => return Ok(Json(ApiResponse::error(
+            "No polar table configured — cannot run isochrone routing".to_string()
+        ))),
+    };
+
+    let departure = match chrono::DateTime::parse_from_rfc3339(&params.departure) {
+        Ok(dt) => dt.with_timezone(&chrono::Utc),
+        Err(_) => return Ok(Json(ApiResponse::error(
+            format!("Invalid departure timestamp: {}", params.departure)
+        ))),
+    };
+
+    if params.motoring_speed_kn <= 0.0 {
+        return Ok(Json(ApiResponse::error("motoring_speed_kn must be positive".to_string())));
+    }
+
+    if params.sail_weight_kn < 0.0 {
+        return Ok(Json(ApiResponse::error("sail_weight_kn must be non-negative".to_string())));
+    }
+
+    let fetches = match state.db().fetch_forecast_fetches(params.trip_id) {
+        Ok(f) => f,
+        Err(e) => {
+            error!(error = %e, trip_id = params.trip_id, "Failed to load forecast fetches for optimal route");
+            return Ok(Json(ApiResponse::error(e.to_string())));
+        }
+    };
+
+    if fetches.is_empty() {
+        return Ok(Json(ApiResponse::error(
+            "No forecast data available for this trip".to_string()
+        )));
+    }
+
+    let result = crate::routing::run_isochrone(
+        (params.from_lat, params.from_lon),
+        (params.to_lat, params.to_lon),
+        departure,
+        params.motoring_speed_kn,
+        params.polar_efficiency,
+        params.min_sail_speed_kn,
+        params.sail_weight_kn,
+        polars,
+        &fetches,
+    );
+
+    // Derive speed_kn and twa_deg for each step from distance/time and wind forecast.
+    // First point is the departure — no incoming step, so speed/twa are None.
+    // reached_destination is not surfaced — callers receive the best-effort route regardless.
+    let mut route_points: Vec<crate::forecast::RouteTrackPoint> = Vec::with_capacity(result.track.len());
+    for (i, &(lat, lon, time)) in result.track.iter().enumerate() {
+        if i == 0 {
+            route_points.push(crate::forecast::RouteTrackPoint { lat, lon, time, speed_kn: None, twa_deg: None });
+            continue;
+        }
+        let (prev_lat, prev_lon, prev_time) = result.track[i - 1];
+        let step_hours = (time - prev_time).num_seconds() as f64 / 3600.0;
+        let dist_nm = crate::utilities::haversine_distance_nm(prev_lat, prev_lon, lat, lon);
+        let speed_kn = if step_hours > 0.0 { dist_nm / step_hours } else { 0.0 };
+        let bearing = crate::utilities::haversine_heading(prev_lat, prev_lon, lat, lon);
+        let twa_deg = crate::forecast::nearest_forecast_wind(&fetches, prev_lat, prev_lon, prev_time)
+            .filter(|(ws, _)| *ws >= 5.0)
+            .and_then(|(ws, wd)| {
+                let twa = crate::forecast::compute_twa(bearing, wd);
+                polars.boat_speed(twa, ws)
+                    .filter(|&raw| raw * params.polar_efficiency >= params.min_sail_speed_kn)
+                    .map(|_| twa)
+            });
+        route_points.push(crate::forecast::RouteTrackPoint { lat, lon, time, speed_kn: Some(speed_kn), twa_deg });
+    }
+
+    let overlay = crate::forecast::compute_route_overlay(&route_points, &fetches);
     Ok(Json(ApiResponse::ok(overlay)))
 }
 
@@ -1635,7 +1788,7 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/forecast/status", get(get_forecast_status))
         .route("/forecast/grid-points", get(get_forecast_grid_points))
         .route("/forecast/route", get(get_forecast_route))
-        .route("/config/google_maps_key", get(get_google_maps_key))
+        .route("/forecast/optimal-route", get(get_optimal_route))
         .route("/config/read_only", get(get_read_only))
         .route("/sync/status", get(get_sync_status))
         .route("/sync/manifest", post(post_sync_manifest))
@@ -1672,7 +1825,8 @@ pub fn create_api_router(state: AppState) -> Router {
             .route("/system/shutdown", post(system_shutdown))
             .route("/sync/push", post(post_sync_push))
             .route("/forecast/areas", post(create_forecast_area))
-            .route("/forecast/areas", delete(delete_forecast_area));
+            .route("/forecast/areas", delete(delete_forecast_area))
+            .route("/forecast/refresh", post(refresh_forecast));
     }
 
     router
@@ -1728,8 +1882,7 @@ mod tests {
         ais_cache: Arc<std::sync::Mutex<AisTargetCache>>,
     ) -> Router {
         let db = create_test_db();
-        let mut config = crate::config::Config::new_default_instance();
-        config.web.google_maps_api_key = Some("your_google_maps_api_key_here".to_string());
+        let config = crate::config::Config::new_default_instance();
         let signalk_broadcast = Arc::new(SignalKBroadcastChannels::new());
         let state = AppState {
             db: Arc::new(RwLock::new(db)),
@@ -1739,6 +1892,7 @@ mod tests {
             jwt_secret: Arc::new(JwtSecret::generate()),
             ais_cache,
             poller_status: Arc::new(std::sync::Mutex::new(crate::forecast_poller::ForecastPollerStatus::default())),
+            polars: None,
         };
         create_api_router(state)
     }
@@ -2355,32 +2509,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_google_maps_key() {
-        let app = create_test_app();
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/config/google_maps_key")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(json["status"], "ok");
-        assert_eq!(json["data"], "your_google_maps_api_key_here");
-        assert!(json["error"].is_null());
-    }
-
-    #[tokio::test]
     async fn test_get_heatmap() {
         let app = create_test_app();
 
@@ -2736,6 +2864,7 @@ mod tests {
             jwt_secret: Arc::new(JwtSecret::generate()),
             ais_cache: crate::ais_target_cache::new_ais_cache(),
             poller_status: Arc::new(std::sync::Mutex::new(crate::forecast_poller::ForecastPollerStatus::default())),
+            polars: None,
         };
         (create_api_router(state), db)
     }
@@ -3242,6 +3371,7 @@ mod tests {
             jwt_secret: Arc::new(JwtSecret::generate()),
             ais_cache: crate::ais_target_cache::new_ais_cache(),
             poller_status: Arc::new(std::sync::Mutex::new(crate::forecast_poller::ForecastPollerStatus::default())),
+            polars: None,
         };
         create_api_router(state)
     }
@@ -3329,7 +3459,6 @@ mod tests {
             "/metrics/batch?metrics=speed&trip_id=1",
             "/heatmap",
             "/monthly_statistics",
-            "/config/google_maps_key",
             "/config/read_only",
         ];
         for uri in &read_routes {
