@@ -1317,56 +1317,113 @@
             const ctx = document.getElementById('speedChart').getContext('2d');
             const colors = getChartColors();
 
-            // Filter out data points where boat is moored (speed should be 0 or very low)
             const validData = trackData.filter(point => !point.moored && point.avg_speed_kn > 0.1);
 
-            // Convert data to time-scale format with proper Date objects
             const chartData = validData.map(point => ({
                 x: new Date(point.timestamp),
                 y: point.avg_speed_kn
             }));
 
-            return new Chart(ctx, {
-                type: 'line',
-                data: {
-                    datasets: [{
-                        label: 'Average Speed (knots)',
-                        data: chartData,
-                        borderColor: '#3498db',
-                        backgroundColor: 'rgba(52, 152, 219, 0.1)',
-                        fill: true,
-                        tension: 0.1,
-                        pointRadius: 0,
-                        borderWidth: 1,
-                        pointHoverRadius: 5
-                    }]
+            const hasPolar = validData.some(p => p.polar_ratio != null);
+
+            const datasets = [{
+                label: 'Average Speed (knots)',
+                data: chartData,
+                borderColor: '#3498db',
+                backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                fill: true,
+                tension: 0.1,
+                pointRadius: 0,
+                borderWidth: 1,
+                pointHoverRadius: 5,
+                yAxisID: 'y'
+            }];
+
+            if (hasPolar) {
+                datasets.push({
+                    label: '_polar_ref',
+                    data: validData.map(p => ({ x: new Date(p.timestamp), y: 100 })),
+                    borderColor: 'rgba(76, 175, 80, 0.25)',
+                    borderDash: [4, 4],
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    fill: false,
+                    tension: 0,
+                    yAxisID: 'y1'
+                });
+                datasets.push({
+                    label: 'Polar %',
+                    data: validData.map(p => ({ x: new Date(p.timestamp), y: p.polar_ratio })),
+                    borderColor: '#4caf50',
+                    borderDash: [5, 3],
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    fill: false,
+                    tension: 0.4,
+                    yAxisID: 'y1'
+                });
+            }
+
+            const scales = {
+                y: {
+                    beginAtZero: true,
+                    title: { display: true, text: 'Speed (knots)', color: colors.text },
+                    ticks: { color: colors.text },
+                    grid: { color: colors.grid }
                 },
-                options: {
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            title: {
-                                display: true,
-                                text: 'Speed (knots)',
-                                color: colors.text
-                            },
-                            ticks: { color: colors.text },
-                            grid: { color: colors.grid }
-                        },
-                        x: getTimeXScale(colors)
-                    },
-                    plugins: {
-                        legend: {
-                            display: false,
-                            labels: { color: colors.text }
-                        },
-                        title: {
-                            display: true,
-                            text: 'Boat SOG (Knots)',
-                            color: colors.text
+                x: getTimeXScale(colors)
+            };
+
+            if (hasPolar) {
+                scales.y1 = {
+                    type: 'linear',
+                    position: 'right',
+                    min: 0,
+                    max: 150,
+                    title: { display: true, text: 'Polar %', color: colors.text },
+                    ticks: { color: colors.text, callback: function(v) { return v + '%'; } },
+                    grid: { display: false }
+                };
+            }
+
+            const plugins = {
+                legend: {
+                    display: hasPolar,
+                    labels: {
+                        color: colors.text,
+                        filter: item => item.text !== '_polar_ref'
+                    }
+                },
+                title: {
+                    display: true,
+                    text: 'Boat SOG (Knots)',
+                    color: colors.text
+                }
+            };
+
+            if (hasPolar) {
+                plugins.tooltip = {
+                    callbacks: {
+                        afterBody: function(items) {
+                            if (!items.length) return [];
+                            const p = validData[items[0].dataIndex];
+                            if (p && p.polar_ratio != null) {
+                                return ['Polar: ' + p.polar_ratio.toFixed(1) + '%'];
+                            }
+                            return [];
                         }
                     }
+                };
+            }
+
+            return new Chart(ctx, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    scales,
+                    plugins
                 }
             });
         }

@@ -560,6 +560,8 @@ impl VesselDatabase {
                     average_heading_deg: row
                         .get_opt::<f64, _>("average_heading_deg")
                         .and_then(|v| v.ok()),
+                    polar_speed_kn: None,
+                    polar_ratio: None,
                 });
             }
         }

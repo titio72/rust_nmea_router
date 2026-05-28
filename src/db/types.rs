@@ -99,6 +99,8 @@ pub struct TrackPoint {
     pub average_wind_angle_deg: Option<f64>,
     pub cog_deg: Option<f64>,
     pub average_heading_deg: Option<f64>,
+    pub polar_speed_kn: Option<f64>,
+    pub polar_ratio: Option<f64>,
 }
 
 #[derive(Debug, serde::Serialize)]

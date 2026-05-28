@@ -386,7 +386,26 @@ pub async fn get_track(
         end,
         params.max_points.map(|n| n.min(MAX_POINTS_LIMIT)),
     ) {
-        Ok(track) => Ok(Json(ApiResponse::ok(track))),
+        Ok(mut track) => {
+            if let Some(polars) = state.polars() {
+                for point in &mut track {
+                    if let (Some(tws), Some(twa_360), Some(actual)) = (
+                        point.average_wind_speed_kn,
+                        point.average_wind_angle_deg,
+                        point.avg_speed_kn,
+                    ) {
+                        let twa = twa_360.min(360.0 - twa_360);
+                        if let Some(polar_spd) = polars.boat_speed(twa, tws) {
+                            point.polar_speed_kn = Some(polar_spd);
+                            if polar_spd > 0.0 {
+                                point.polar_ratio = Some(actual / polar_spd * 100.0);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Json(ApiResponse::ok(track)))
+        }
         Err(e) => {
             error!(error = %e, "Failed to fetch track");
             {
@@ -2869,6 +2888,28 @@ mod tests {
         (create_api_router(state), db)
     }
 
+    fn create_test_app_with_polars(
+        polars: Option<std::sync::Arc<crate::polars::PolarTable>>,
+    ) -> (Router, Arc<RwLock<crate::db::types::VesselDatabase>>) {
+        use crate::db::test_helpers::setup_db;
+        let db = Arc::new(RwLock::new(setup_db()));
+        let config = Arc::new(crate::config::Config::load_for_context(None).unwrap());
+        let signalk_broadcast = Arc::new(SignalKBroadcastChannels::new());
+        let state = AppState {
+            db: db.clone(),
+            config,
+            signalk_broadcast,
+            backup_in_progress: Arc::new(AtomicBool::new(false)),
+            jwt_secret: Arc::new(JwtSecret::generate()),
+            ais_cache: crate::ais_target_cache::new_ais_cache(),
+            poller_status: Arc::new(std::sync::Mutex::new(
+                crate::forecast_poller::ForecastPollerStatus::default(),
+            )),
+            polars,
+        };
+        (create_api_router(state), db)
+    }
+
     async fn call_api(
         app: Router,
         req: axum::http::Request<Body>,
@@ -3119,6 +3160,206 @@ mod tests {
         assert_eq!(json["data"].as_array().unwrap().len(), 5);
         let lat = json["data"][0]["latitude"].as_f64().unwrap();
         assert!((lat - 51.5).abs() < 0.05, "Expected lat ~51.5, got {}", lat);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_track_polar_fields_populated() {
+        use crate::db::test_helpers::{add_test_trip, add_test_vessel_status};
+        use crate::utilities::EngineStatus;
+        use std::ops::Add;
+        use std::time::{Duration, SystemTime};
+
+        // Build app state with the real polar fixture
+        let polars = crate::polars::PolarTable::from_csv("tests/fixtures/dufour40.csv")
+            .ok()
+            .map(std::sync::Arc::new);
+        let (app, db) = create_test_app_with_polars(polars);
+
+        let now = SystemTime::now();
+        let trip_id = {
+            let db = db.read().unwrap();
+            let tid = add_test_trip(
+                &db,
+                "Polar Test".to_string(),
+                now,
+                now.add(Duration::from_secs(3600)),
+                5.0,
+                0.0,
+                3600000,
+                0,
+                0,
+            )
+            .unwrap();
+            // TWA=90°, TWS=10 kn, actual=6.0 kn → polar at TWA=90,TWS=10 is 7.44 kn → ratio ≈ 80.6%
+            add_test_vessel_status(
+                &db,
+                now.add(Duration::from_secs(60)),
+                51.5,
+                -0.1,
+                6.0,        // average_speed_kn
+                7.0,        // max_speed_kn
+                Some(10.0), // average_wind_speed_kn (TWS)
+                Some(90.0), // average_wind_angle_deg (TWA 0-360)
+                false,
+                EngineStatus::Off,
+                1.0,
+                600000,
+                None,
+                None,
+            )
+            .unwrap();
+            tid
+        };
+
+        let (status, json) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri(format!("/track?trip_id={}", trip_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+        let pt = &json["data"][0];
+        let polar_spd = pt["polar_speed_kn"]
+            .as_f64()
+            .expect("polar_speed_kn should be set");
+        let ratio = pt["polar_ratio"]
+            .as_f64()
+            .expect("polar_ratio should be set");
+        assert!(
+            (polar_spd - 7.44).abs() < 0.1,
+            "expected polar ~7.44, got {polar_spd}"
+        );
+        assert!(
+            (ratio - 80.6).abs() < 1.0,
+            "expected ratio ~80.6%, got {ratio}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_track_polar_fields_null_when_no_polars() {
+        use crate::db::test_helpers::{add_test_trip, add_test_vessel_status};
+        use crate::utilities::EngineStatus;
+        use std::ops::Add;
+        use std::time::{Duration, SystemTime};
+
+        let (app, db) = create_clean_test_app(); // polars: None
+        let now = SystemTime::now();
+        let trip_id = {
+            let db = db.read().unwrap();
+            let tid = add_test_trip(
+                &db,
+                "No Polar".to_string(),
+                now,
+                now.add(Duration::from_secs(3600)),
+                5.0,
+                0.0,
+                3600000,
+                0,
+                0,
+            )
+            .unwrap();
+            add_test_vessel_status(
+                &db,
+                now.add(Duration::from_secs(60)),
+                51.5,
+                -0.1,
+                6.0,
+                7.0,
+                Some(10.0),
+                Some(90.0),
+                false,
+                EngineStatus::Off,
+                1.0,
+                600000,
+                None,
+                None,
+            )
+            .unwrap();
+            tid
+        };
+        let (status, json) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri(format!("/track?trip_id={}", trip_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            json["data"][0]["polar_speed_kn"].is_null(),
+            "should be null with no polar table"
+        );
+        assert!(
+            json["data"][0]["polar_ratio"].is_null(),
+            "should be null with no polar table"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_track_polar_fields_null_when_no_wind_data() {
+        use crate::db::test_helpers::{add_test_trip, add_test_vessel_status};
+        use crate::utilities::EngineStatus;
+        use std::ops::Add;
+        use std::time::{Duration, SystemTime};
+
+        let polars = crate::polars::PolarTable::from_csv("tests/fixtures/dufour40.csv")
+            .ok()
+            .map(std::sync::Arc::new);
+        let (app, db) = create_test_app_with_polars(polars);
+        let now = SystemTime::now();
+        let trip_id = {
+            let db = db.read().unwrap();
+            let tid = add_test_trip(
+                &db,
+                "No Wind".to_string(),
+                now,
+                now.add(Duration::from_secs(3600)),
+                5.0,
+                0.0,
+                3600000,
+                0,
+                0,
+            )
+            .unwrap();
+            // No wind data (None for TWA and TWS)
+            add_test_vessel_status(
+                &db,
+                now.add(Duration::from_secs(60)),
+                51.5,
+                -0.1,
+                6.0,
+                7.0,
+                None,
+                None,
+                false,
+                EngineStatus::Off,
+                1.0,
+                600000,
+                None,
+                None,
+            )
+            .unwrap();
+            tid
+        };
+        let (status, json) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri(format!("/track?trip_id={}", trip_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(json["data"][0]["polar_speed_kn"].is_null());
+        assert!(json["data"][0]["polar_ratio"].is_null());
     }
 
     #[tokio::test]
