@@ -314,41 +314,7 @@
             <div class="chartsContainer" id="chartsContainerTrip"> <!-- full trip charts here --> </div>
         </div>
     </div>
-    <div class="level-1-container" id="forecastAreasContainer" style="display:none; margin-top:20px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-            <h2 style="font-size:16px; font-weight:bold; color:var(--text-bold); margin:0;">Forecast Areas</h2>
-            <div style="display:flex; align-items:center; gap:14px;">
-                <span id="forecastPollerStatus" style="font-size:12px; color:var(--text-secondary);"></span>
-                <button id="forecastRefreshBtn" onclick="refreshForecast()" style="display:none;
-                    padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
-                    border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
-                    ↻ Refresh
-                </button>
-                <a id="forecastPlanningBtn" href="#" style="display:none; padding:5px 14px;
-                   background:var(--link-color); color:#fff; border-radius:4px;
-                   text-decoration:none; font-size:13px;">Planning →</a>
-            </div>
-        </div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
-            <div>
-                <div id="forecastAreaList" style="margin-bottom:12px;"></div>
-                <div id="forecastAreaControls" style="display:none;">
-                    <button id="drawAreaBtn" onclick="startDrawArea()"
-                        style="padding:6px 14px; background:var(--link-color); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:13px;">
-                        Draw Area
-                    </button>
-                    <button id="cancelDrawBtn" onclick="cancelDrawArea()"
-                        style="display:none; padding:6px 14px; background:#e74c3c; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:13px; margin-left:8px;">
-                        Cancel
-                    </button>
-                    <span id="drawAreaHint" style="font-size:12px; color:var(--text-secondary); margin-left:10px; display:none;">
-                        Click and drag on the map to draw a bounding box
-                    </span>
-                </div>
-            </div>
-            <div id="forecastAreaMap" style="height:260px; border-radius:6px; border:1px solid var(--border-color);"></div>
-        </div>
-    </div>
+
     <script>
         document.getElementById('headerContainer').innerHTML = createHeaderBar('trips');
         initializeTheme();
@@ -437,13 +403,6 @@
             addChart(chartsContainer, 'absoluteWindDirectionChart', 'absoluteWindDirectionScaleBtn', toggleAbsoluteWindDirectionScale);
             addChart(chartsContainer, 'cabinTemperatureChart');
             addChart(chartsContainer, 'humidityChart');
-            addChart(chartsContainer, 'waveForecastChart');
-            addChart(chartsContainer, 'capeForecastChart');
-            // Hide wave and CAPE forecast panels until data is available
-            const waveCard = document.getElementById('waveForecastChart').closest('.app-card');
-            if (waveCard) waveCard.style.display = 'none';
-            const capeCard = document.getElementById('capeForecastChart').closest('.app-card');
-            if (capeCard) capeCard.style.display = 'none';
         }
 
         function getChartColors() {
@@ -556,7 +515,6 @@
         let absoluteWindDirectionNormalized = false; // Toggle for absolute wind direction chart scale (0-360 vs -180 to 180)
         let currentAbsoluteWindData = null; // Metric data for absolute wind direction (for scale toggling)
         let currentWindSpeedData = null; // Metric data for wind speed (for chart toggling)
-        let forecastOverlay = []; // Forecast overlay data for the current trip (wind/wave/CAPE)
 
         if (!tripId) {
             //document.getElementById('tripDetails').innerHTML =
@@ -713,20 +671,6 @@
 
         async function loadTripDetails(tripId, selectedLeg) {
             try {
-                // Fetch forecast overlay (best-effort — continue without it on any error)
-                forecastOverlay = [];
-                try {
-                    const overlayResp = await fetch('/api/forecast/trip-overlay?trip_id=' + tripId);
-                    if (overlayResp.ok) {
-                        const overlayJson = await overlayResp.json();
-                        if (overlayJson.status === 'ok' && Array.isArray(overlayJson.data) && overlayJson.data.length > 0) {
-                            forecastOverlay = overlayJson.data;
-                        }
-                    }
-                } catch (e) {
-                    // No forecast data — continue without it
-                }
-
                 // Prepare trip data and time range
                 let tripData;
                 let startTime, endTime;
@@ -804,10 +748,6 @@
                     console.error('Failed to load trip charts:', error);
                 });
 
-                // Init forecast areas section
-                const tripEndMs = tripData.end_date ? new Date(tripData.end_date).getTime() : 0;
-                const isActive = (Date.now() - tripEndMs) < 86_400_000; // within 24h = active trip
-                initForecastAreasSection(tripId, isActive);
             } catch (error) {
                 console.error('Failed to load trip details:', error);
             }
@@ -859,8 +799,8 @@
             // Create time series charts
             allCharts.speed = createSpeedChart(trackData);
             allCharts.heading = createHeadingChart(trackData, headingScaleNormalized);
-            allCharts.windSpeed = createWindSpeedChart(trackData, forecastOverlay);
-            allCharts.windDirection = createWindDirectionChart(trackData, windDirectionNormalized, forecastOverlay);
+            allCharts.windSpeed = createWindSpeedChart(trackData);
+            allCharts.windDirection = createWindDirectionChart(trackData, windDirectionNormalized);
 
             const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
             const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
@@ -968,97 +908,8 @@
                 // Save wind speed data globally for chart toggling
                 currentWindSpeedData = windSpeedData;
 
-                // Render forecast-only panels (wave height/period and CAPE)
-                renderWaveForecastChart(forecastOverlay);
-                renderCapeForecastChart(forecastOverlay);
-
             } catch (error) {
                 console.error('Failed to fetch secondary charts:', error);
-            }
-        }
-
-        function renderWaveForecastChart(forecastOverlay) {
-            const wrapperCanvas = document.getElementById('waveForecastChart');
-            if (!wrapperCanvas) return;
-            const wrapper = wrapperCanvas.closest('.app-card');
-            const waveData = (forecastOverlay || []).filter(p => p.wave_height_m != null);
-            if (waveData.length > 0) {
-                const colors = getChartColors();
-                const waveCtx = wrapperCanvas.getContext('2d');
-                if (allCharts.waveForecast) { allCharts.waveForecast.destroy(); }
-                allCharts.waveForecast = new Chart(waveCtx, {
-                    type: 'line',
-                    data: {
-                        datasets: [
-                            {
-                                label: 'Wave Height (m)',
-                                data: waveData.map(p => ({ x: new Date(p.timestamp), y: p.wave_height_m })),
-                                borderColor: '#2980b9', backgroundColor: 'rgba(41,128,185,0.1)',
-                                fill: true, tension: 0.2, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y'
-                            },
-                            {
-                                label: 'Period (s)',
-                                data: forecastOverlay.filter(p => p.wave_period_s != null).map(p => ({ x: new Date(p.timestamp), y: p.wave_period_s })),
-                                borderColor: '#8e44ad', borderDash: [4, 4],
-                                fill: false, tension: 0.2, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y2'
-                            },
-                        ]
-                    },
-                    options: {
-                        maintainAspectRatio: false,
-                        scales: {
-                            x: getTimeXScale(colors),
-                            y: { beginAtZero: true, title: { display: true, text: 'Height (m)', color: colors.text }, ticks: { color: colors.text }, grid: { color: colors.grid } },
-                            y2: { position: 'right', beginAtZero: true, title: { display: true, text: 'Period (s)', color: colors.text }, ticks: { color: colors.text }, grid: { drawOnChartArea: false } }
-                        },
-                        plugins: { legend: { labels: { color: colors.text } }, title: { display: true, text: 'Wave Forecast', color: colors.text } }
-                    }
-                });
-                if (wrapper) wrapper.style.display = '';
-            } else {
-                if (wrapper) wrapper.style.display = 'none';
-                if (allCharts.waveForecast) { allCharts.waveForecast.destroy(); allCharts.waveForecast = null; }
-            }
-        }
-
-        function renderCapeForecastChart(forecastOverlay) {
-            const wrapperCanvas = document.getElementById('capeForecastChart');
-            if (!wrapperCanvas) return;
-            const wrapper = wrapperCanvas.closest('.app-card');
-            const capeData = (forecastOverlay || []).filter(p => p.cape_j_kg != null);
-            if (capeData.length > 0) {
-                const colors = getChartColors();
-                const capeCtx = wrapperCanvas.getContext('2d');
-                if (allCharts.capeForecast) { allCharts.capeForecast.destroy(); }
-                allCharts.capeForecast = new Chart(capeCtx, {
-                    type: 'bar',
-                    data: {
-                        datasets: [{
-                            label: 'CAPE (J/kg)',
-                            data: capeData.map(p => ({ x: new Date(p.timestamp), y: p.cape_j_kg })),
-                            backgroundColor: capeData.map(p => {
-                                if ((p.cape_j_kg || 0) > 1500) return '#e74c3c';
-                                if ((p.cape_j_kg || 0) >= 500) return '#f39c12';
-                                return '#27ae60';
-                            }),
-                        }]
-                    },
-                    options: {
-                        maintainAspectRatio: false,
-                        scales: {
-                            x: getTimeXScale(colors),
-                            y: { beginAtZero: true, ticks: { color: colors.text }, grid: { color: colors.grid } }
-                        },
-                        plugins: {
-                            legend: { display: false },
-                            title: { display: true, text: 'CAPE — Thunderstorm Risk (J/kg)', color: colors.text }
-                        }
-                    }
-                });
-                if (wrapper) wrapper.style.display = '';
-            } else {
-                if (wrapper) wrapper.style.display = 'none';
-                if (allCharts.capeForecast) { allCharts.capeForecast.destroy(); allCharts.capeForecast = null; }
             }
         }
 
@@ -1287,7 +1138,7 @@
 
             // Recreate the wind direction chart with the new scale
             if (currentTrackData) {
-                allCharts.windDirection = createWindDirectionChart(currentTrackData, windDirectionNormalized, forecastOverlay);
+                allCharts.windDirection = createWindDirectionChart(currentTrackData, windDirectionNormalized);
             }
         }
 
@@ -1509,7 +1360,7 @@
             });
         }
 
-        function createWindSpeedChart(trackData, forecastData = []) {
+        function createWindSpeedChart(trackData) {
             const ctx = document.getElementById('windSpeedChart').getContext('2d');
             const colors = getChartColors();
 
@@ -1534,29 +1385,6 @@
                 pointHoverRadius: 5
             }];
 
-            if (forecastData && forecastData.length > 0) {
-                const fcValid = forecastData.filter(p => p.wind_speed_kn != null);
-                if (fcValid.length > 0) {
-                    datasets.push({
-                        label: 'Forecast Wind (kn)',
-                        data: fcValid.map(p => ({ x: new Date(p.timestamp), y: p.wind_speed_kn })),
-                        borderColor: '#27ae60', borderDash: [5, 5], fill: false,
-                        tension: 0.2, pointRadius: 0, borderWidth: 1.5
-                    });
-                }
-                const gustValid = forecastData.filter(p => p.wind_gust_kn != null);
-                if (gustValid.length > 0) {
-                    datasets.push({
-                        label: 'Forecast Gust (kn)',
-                        data: gustValid.map(p => ({ x: new Date(p.timestamp), y: p.wind_gust_kn })),
-                        borderColor: '#e67e22', borderDash: [3, 3], fill: false,
-                        tension: 0.2, pointRadius: 0, borderWidth: 1.5
-                    });
-                }
-            }
-
-            const showLegend = (forecastData && forecastData.length > 0);
-
             return new Chart(ctx, {
                 type: 'line',
                 data: { datasets },
@@ -1577,7 +1405,7 @@
                     },
                     plugins: {
                         legend: {
-                            display: showLegend,
+                            display: false,
                             labels: { color: colors.text }
                         },
                         title: {
@@ -1590,7 +1418,7 @@
             });
         }
 
-        function createWindDirectionChart(trackData, normalized = false, forecastData = []) {
+        function createWindDirectionChart(trackData, normalized = false) {
             const ctx = document.getElementById('windDirectionChart').getContext('2d');
             const colors = getChartColors();
 
@@ -1621,23 +1449,7 @@
                 borderWidth: 1
             }];
 
-            if (forecastData && forecastData.length > 0) {
-                const fcValid = forecastData.filter(p => p.wind_direction_deg != null);
-                if (fcValid.length > 0) {
-                    datasets.push({
-                        label: 'Forecast Dir (°)',
-                        data: fcValid.map(p => {
-                            let d = p.wind_direction_deg;
-                            if (normalized && d > 180) d -= 360;
-                            return { x: new Date(p.timestamp), y: d };
-                        }),
-                        borderColor: '#2980b9', borderDash: [5, 5], fill: false,
-                        tension: 0.2, pointRadius: 0, borderWidth: 1.5
-                    });
-                }
-            }
-
-            const showLegend = (forecastData && forecastData.length > 0);
+            const showLegend = false;
 
             return new Chart(ctx, {
                 type: 'line',
@@ -2550,263 +2362,6 @@
 
             // Convert HSL to RGB (with full saturation and lightness)
             return hslToRgb(hue, 100, 50);
-        }
-
-        // ── Forecast Areas ────────────────────────────────────────────────────────────
-
-        let forecastAreaMap = null;
-        let forecastAreaRectangles = [];
-        let forecastDrawOverlay = null;
-        let drawStart = null;
-        let drawRect = null;
-        let isDrawing = false;
-        let currentTripId = null;
-        let isActiveTripForForecast = false;
-        let forecastStatusInterval = null;
-
-        function initForecastAreaMap() {
-            if (forecastAreaMap) { forecastAreaMap.remove(); }
-            forecastAreaMap = L.map('forecastAreaMap').setView([43.0, 9.0], 5);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap', maxZoom: 16
-            }).addTo(forecastAreaMap);
-
-            // Transparent overlay above Leaflet's entire pane stack (z-index 400 is
-            // the highest Leaflet pane). When draw mode is active this overlay is
-            // shown; it intercepts every mouse event before Leaflet sees it, so
-            // Leaflet never pans and we get a reliable crosshair cursor.
-            forecastDrawOverlay = document.createElement('div');
-            forecastDrawOverlay.style.cssText =
-                'position:absolute;inset:0;z-index:10000;display:none;cursor:crosshair;';
-            forecastAreaMap.getContainer().appendChild(forecastDrawOverlay);
-            forecastDrawOverlay.addEventListener('mousedown', onMapMouseDown);
-        }
-
-        function startDrawArea() {
-            isDrawing = true;
-            document.getElementById('cancelDrawBtn').style.display = '';
-            document.getElementById('drawAreaBtn').style.display = 'none';
-            document.getElementById('drawAreaHint').style.display = '';
-            forecastDrawOverlay.style.display = 'block';
-        }
-
-        function cancelDrawArea() {
-            isDrawing = false;
-            drawStart = null;
-            if (drawRect) { forecastAreaMap.removeLayer(drawRect); drawRect = null; }
-            document.getElementById('cancelDrawBtn').style.display = 'none';
-            document.getElementById('drawAreaBtn').style.display = '';
-            document.getElementById('drawAreaHint').style.display = 'none';
-            forecastDrawOverlay.style.display = 'none';
-        }
-
-        function overlayLatLng(e) {
-            const r = forecastDrawOverlay.getBoundingClientRect();
-            return forecastAreaMap.containerPointToLatLng(
-                L.point(e.clientX - r.left, e.clientY - r.top)
-            );
-        }
-
-        function onMapMouseDown(e) {
-            e.preventDefault();
-            e.stopPropagation(); // prevent Leaflet's container-level drag handler
-            drawStart = overlayLatLng(e);
-            if (drawRect) { forecastAreaMap.removeLayer(drawRect); }
-            drawRect = L.rectangle([drawStart, drawStart], {
-                color: '#3b82f6', weight: 2, fillOpacity: 0.15, interactive: false
-            }).addTo(forecastAreaMap);
-            // Track move/up on document so the rect follows even if the cursor
-            // leaves the overlay during a fast drag.
-            document.addEventListener('mousemove', onMapMouseMove);
-            document.addEventListener('mouseup',   onMapMouseUp);
-        }
-
-        function onMapMouseMove(e) {
-            if (!drawStart || !drawRect) return;
-            drawRect.setBounds(L.latLngBounds(drawStart, overlayLatLng(e)));
-        }
-
-        async function onMapMouseUp(e) {
-            document.removeEventListener('mousemove', onMapMouseMove);
-            document.removeEventListener('mouseup',   onMapMouseUp);
-            if (!drawStart) return;
-            const end = overlayLatLng(e);
-            const start = drawStart;
-            cancelDrawArea();
-
-            const lat_min = Math.min(start.lat, end.lat);
-            const lat_max = Math.max(start.lat, end.lat);
-            const lon_min = Math.min(start.lng, end.lng);
-            const lon_max = Math.max(start.lng, end.lng);
-
-            if (Math.abs(lat_max - lat_min) < 0.05 || Math.abs(lon_max - lon_min) < 0.05) {
-                return; // too small
-            }
-
-            try {
-                await fetch('/api/forecast/areas', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ trip_id: Number(currentTripId), lat_min, lat_max, lon_min, lon_max }),
-                });
-                await loadForecastAreas(currentTripId);
-            } catch (err) {
-                console.error('Failed to save forecast area', err);
-            }
-        }
-
-        async function deleteForecastArea(id) {
-            try {
-                await fetch('/api/forecast/areas?id=' + id, { method: 'DELETE' });
-                await loadForecastAreas(currentTripId);
-            } catch (err) {
-                console.error('Failed to delete forecast area', err);
-            }
-        }
-
-        function renderForecastAreaList(areas) {
-            const container = document.getElementById('forecastAreaList');
-            if (!areas.length) {
-                container.innerHTML = '<div style="font-size:13px; color:var(--text-secondary);">No areas defined. Draw a bounding box on the map.</div>';
-                return;
-            }
-            container.innerHTML = areas.map(a => `
-                <div style="display:flex; justify-content:space-between; align-items:center;
-                            background:var(--bg-secondary); padding:6px 10px; border-radius:5px;
-                            margin-bottom:5px; font-size:13px;">
-                    <span>
-                        <strong>Area ${a.id}</strong>
-                        <span style="color:var(--text-secondary); font-size:11px; margin-left:8px;">
-                            ${a.lat_min.toFixed(2)}–${a.lat_max.toFixed(2)}°N &nbsp;
-                            ${a.lon_min.toFixed(2)}–${a.lon_max.toFixed(2)}°E
-                        </span>
-                    </span>
-                    ${isActiveTripForForecast
-                        ? `<button onclick="deleteForecastArea(${Number(a.id)})"
-                               style="background:transparent; border:1px solid #e74c3c; color:#e74c3c;
-                                      border-radius:3px; padding:1px 8px; font-size:11px; cursor:pointer;">
-                               Delete
-                           </button>`
-                        : ''}
-                </div>`).join('');
-        }
-
-        function renderForecastAreasOnMap(areas) {
-            forecastAreaRectangles.forEach(r => forecastAreaMap.removeLayer(r));
-            forecastAreaRectangles = [];
-            areas.forEach(a => {
-                const r = L.rectangle(
-                    [[a.lat_min, a.lon_min], [a.lat_max, a.lon_max]],
-                    { color: '#3b82f6', weight: 2, fillOpacity: 0.1 }
-                ).addTo(forecastAreaMap);
-                forecastAreaRectangles.push(r);
-            });
-            if (areas.length) {
-                const bounds = L.latLngBounds(areas.map(a => [
-                    [a.lat_min, a.lon_min], [a.lat_max, a.lon_max]
-                ]).flat());
-                forecastAreaMap.fitBounds(bounds, { padding: [20, 20] });
-            }
-        }
-
-        async function loadForecastAreas(tripId) {
-            try {
-                const resp = await fetch('/api/forecast/areas?trip_id=' + tripId);
-                const json = await resp.json();
-                const areas = json.data || [];
-                renderForecastAreaList(areas);
-                renderForecastAreasOnMap(areas);
-            } catch (err) {
-                console.error('Failed to load forecast areas', err);
-                renderForecastAreaList([]);
-                renderForecastAreasOnMap([]);
-            }
-        }
-
-        async function updateForecastStatus(tripId) {
-            try {
-                const resp = await fetch('/api/forecast/status?trip_id=' + tripId);
-                const json = await resp.json();
-                const s = json.data;
-                const planBtn = document.getElementById('forecastPlanningBtn');
-                if (planBtn) planBtn.style.display = (s && s.area_count > 0) ? '' : 'none';
-                if (!s) return;
-                // Only show the online/offline badge for active trips being polled.
-                // For historical trips the poller status is unrelated to the viewed data.
-                const statusEl = document.getElementById('forecastPollerStatus');
-                const refreshBtn = document.getElementById('forecastRefreshBtn');
-                if (refreshBtn) refreshBtn.style.display = isActiveTripForForecast ? '' : 'none';
-                if (!isActiveTripForForecast) {
-                    statusEl.innerHTML = s.point_count > 0
-                        ? `<span style="font-size:11px;color:var(--text-secondary);">${s.point_count} pts</span>`
-                        : '';
-                    return;
-                }
-                const onlineBadge = s.online
-                    ? '<span style="background:#14532d;color:#86efac;padding:2px 8px;border-radius:10px;font-size:11px;">● Fetching every 3h</span>'
-                    : '<span style="background:#7c2d12;color:#fdba74;padding:2px 8px;border-radius:10px;font-size:11px;">⚠ Offline — retrying</span>';
-                const lastFetch = s.last_fetch
-                    ? 'Last fetch: ' + new Date(s.last_fetch).toLocaleTimeString() + ' UTC'
-                    : 'No fetch yet';
-                const nextFetch = s.next_fetch
-                    ? ' · Next: ' + new Date(s.next_fetch).toLocaleTimeString()
-                    : '';
-                statusEl.innerHTML =
-                    onlineBadge + ' <span style="font-size:11px;color:var(--text-secondary);margin-left:8px;">' +
-                    lastFetch + nextFetch + ' · ' + s.point_count + ' pts</span>';
-            } catch (_) {}
-        }
-
-        async function refreshForecast() {
-            const btn = document.getElementById('forecastRefreshBtn');
-            const orig = btn.textContent;
-            btn.disabled = true;
-            btn.textContent = '↻ Fetching…';
-            try {
-                const resp = await fetch('/api/forecast/refresh?trip_id=' + currentTripId, { method: 'POST' });
-                const json = await resp.json();
-                if (json.status === 'ok') {
-                    btn.textContent = '✓ Done';
-                    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
-                } else {
-                    btn.textContent = '✗ Error';
-                    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
-                }
-            } catch (_) {
-                btn.textContent = '✗ Error';
-                setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
-            }
-            await updateForecastStatus(currentTripId);
-        }
-
-        function initForecastAreasSection(tripId, isActive) {
-            // Reset draw state from any previous session
-            isDrawing = false;
-            drawStart = null;
-            drawRect = null;
-
-            currentTripId = tripId;
-            isActiveTripForForecast = isActive;
-
-            document.getElementById('forecastAreasContainer').style.display = '';
-            document.getElementById('forecastAreaControls').style.display = isActive ? '' : 'none';
-
-            const planBtn = document.getElementById('forecastPlanningBtn');
-            if (planBtn) {
-                planBtn.href = 'plan.html?id=' + tripId;
-            }
-
-            // Defer map init so the browser reflows the now-visible container first;
-            // without this the map gets 0×0 dimensions and mouseEventToLatLng is wrong.
-            requestAnimationFrame(() => {
-                initForecastAreaMap();
-                forecastAreaMap.invalidateSize();
-                loadForecastAreas(tripId);
-            });
-            updateForecastStatus(tripId);
-
-            if (forecastStatusInterval) clearInterval(forecastStatusInterval);
-            forecastStatusInterval = setInterval(() => updateForecastStatus(tripId), 60000);
         }
 
     </script>

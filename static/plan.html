@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Trip Planning - NMEA Router</title>
+    <title>Forecast & Planning - NMEA Router</title>
     <link rel="stylesheet" href="/shared.css">
     <link rel="stylesheet" href="/libs/leaflet.min.css" />
     <script src="/js/shared-theme.js?v=3"></script>
@@ -21,6 +21,46 @@
     <div id="headerContainer"></div>
 
     <div style="max-width:1500px; margin:0 auto; padding:20px;">
+
+        <!-- Forecast Areas management -->
+        <div class="level-1-container" style="margin-bottom:10px; padding:14px 20px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                <h2 onclick="toggleForecastAreas()"
+                    style="font-size:16px; font-weight:bold; color:var(--text-bold); margin:0;
+                           cursor:pointer; user-select:none; display:flex; align-items:center; gap:8px;">
+                    <span id="forecastAreasChevron" style="font-size:12px;">▾</span>Forecast Areas
+                </h2>
+                <div style="display:flex; align-items:center; gap:14px;">
+                    <span id="forecastPollerStatus" style="font-size:12px; color:var(--text-secondary);"></span>
+                    <button id="forecastRefreshBtn" onclick="refreshForecast()"
+                        style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
+                               border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
+                        ↻ Refresh
+                    </button>
+                </div>
+            </div>
+            <div id="forecastAreasBody" style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+                <div>
+                    <div id="forecastAreaList" style="margin-bottom:12px;"></div>
+                    <button id="drawAreaBtn" onclick="startDrawArea()"
+                        style="padding:6px 14px; background:var(--link-color); color:#fff; border:none;
+                               border-radius:4px; cursor:pointer; font-size:13px;">
+                        Draw Area
+                    </button>
+                    <button id="cancelDrawBtn" onclick="cancelDrawArea()"
+                        style="display:none; padding:6px 14px; background:#e74c3c; color:#fff; border:none;
+                               border-radius:4px; cursor:pointer; font-size:13px; margin-left:8px;">
+                        Cancel
+                    </button>
+                    <span id="drawAreaHint"
+                        style="font-size:12px; color:var(--text-secondary); margin-left:10px; display:none;">
+                        Click and drag on the map to draw a bounding box
+                    </span>
+                </div>
+                <div id="forecastAreaMapEl"
+                     style="height:200px; border-radius:6px; border:1px solid var(--border-color);"></div>
+            </div>
+        </div>
 
         <!-- Time scrubber -->
         <div class="level-1-container" style="padding:14px 20px; margin-bottom:10px;">
@@ -177,16 +217,8 @@
     </div>
 
     <script>
-        document.getElementById('headerContainer').innerHTML = createHeaderBar('trips');
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('forecast');
         initializeTheme();
-
-        const urlParams = new URLSearchParams(window.location.search);
-        const tripId = Number(urlParams.get('id'));
-
-        if (!tripId) {
-            document.getElementById('dayTabsContainer').innerHTML =
-                '<span style="color:var(--text-secondary); font-size:13px;">No trip specified. Open this page from a trip.</span>';
-        }
 
         // ── State ─────────────────────────────────────────────────────────────────
         let planMap = null;
@@ -203,11 +235,6 @@
         let previewLines = [];      // L.Polyline[] dashed segments between consecutive waypoints
         let routeSegments = [];     // coloured segments from drawRouteLine
 
-        let tripInfo = null;      // raw TripSummary from /api/trip
-        let tripStart = null;     // Date object — parsed from start_date (full timestamp)
-        let tripEnd = null;       // Date object — trip end_date parsed as Date
-        let tripTrack = [];       // [{latitude, longitude, timestamp}, ...] sorted by time
-        let boatMarker = null;    // single L.circleMarker reused across slider moves
         let lastGridPts = [];     // raw GridPointForecast[] from last API call
         let showGust = false;     // when true, color arrows by gust speed instead of wind speed
         let lastRouteOverlay = []; // last computed overlay — persisted across reloads
@@ -260,138 +287,40 @@
             if (savedSailWeight) document.getElementById('sailWeightInput').value = savedSailWeight;
 
             await loadAvailableDays();
-            await loadTripTrack();
-            updateBoatMarker();
             restoreRoute();
-        }
-
-        async function loadTripInfo() {
-            const resp = await fetch('/api/trip?id=' + tripId);
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const json = await resp.json();
-            if (!json.data) return null;
-            return json.data;   // { start_date, end_date, description, ... }
-        }
-
-        async function loadTripTrack() {
-            if (!tripId) return;
-            try {
-                const resp = await fetch('/api/track?trip_id=' + tripId + '&max_points=2000');
-                const json = await resp.json();
-                tripTrack = (json.data || [])
-                    .filter(p => p.latitude != null && p.longitude != null)
-                    .map(p => ({ ...p, ts: new Date(p.timestamp).getTime() }));
-            } catch (err) {
-                console.error('Failed to load trip track', err);
-                tripTrack = [];
-            }
-        }
-
-        // Returns the track point nearest to the selected time, or null if outside trip span.
-        function currentBoatPos() {
-            const ts = getSelectedISO();
-            if (!ts || !tripTrack.length || !tripStart || !tripEnd) return null;
-            const t = new Date(ts).getTime();
-            if (t < tripStart.getTime() || t > tripEnd.getTime()) return null;
-            let lo = 0, hi = tripTrack.length - 1, best = 0;
-            while (lo <= hi) {
-                const mid = (lo + hi) >> 1;
-                if (Math.abs(tripTrack[mid].ts - t) < Math.abs(tripTrack[best].ts - t)) best = mid;
-                if (tripTrack[mid].ts < t) lo = mid + 1; else hi = mid - 1;
-            }
-            return tripTrack[best];
-        }
-
-        function updateBoatMarker() {
-            const pos = currentBoatPos();
-            if (!pos) {
-                if (boatMarker) { planMap.removeLayer(boatMarker); boatMarker = null; }
-                return;
-            }
-            if (!boatMarker) {
-                boatMarker = L.circleMarker([pos.latitude, pos.longitude], {
-                    color: '#fff', fillColor: '#3b82f6', fillOpacity: 1, radius: 8, weight: 2
-                }).addTo(planMap);
-            } else {
-                boatMarker.setLatLng([pos.latitude, pos.longitude]);
-                if (!planMap.hasLayer(boatMarker)) boatMarker.addTo(planMap);
-            }
-            boatMarker.bindTooltip(
-                new Date(pos.timestamp).toLocaleTimeString('en-GB', {
-                    hour: '2-digit', minute: '2-digit', timeZone: 'UTC'
-                }) + ' UTC',
-                { permanent: false, direction: 'right' }
-            );
         }
 
         async function loadAvailableDays() {
             try {
-                // Check forecast data exists
-                const statusResp = await fetch('/api/forecast/status?trip_id=' + tripId);
+                const statusResp = await fetch('/api/forecast/status');
                 const statusJson = await statusResp.json();
                 if (!statusJson.data || statusJson.data.point_count === 0) {
                     document.getElementById('dayTabsContainer').innerHTML =
                         '<span style="font-size:13px; color:var(--text-secondary);">' +
-                        'No forecast data. Add areas on the trip page first.</span>';
+                        'No forecast data. Draw a bounding box in the Forecast Areas section below.</span>';
                     return;
                 }
 
-                // Fetch trip date range
-                tripInfo = await loadTripInfo();
-                if (!tripInfo) {
-                    document.getElementById('dayTabsContainer').innerHTML =
-                        '<span style="font-size:13px; color:var(--text-secondary);">Trip not found.</span>';
-                    return;
-                }
-
-                // Parse trip bounds
-                tripStart = new Date(tripInfo.start_date);
-                tripEnd = new Date(tripInfo.end_date);
-
-                // Build day tabs: UTC midnight of start_date through UTC midnight of (end_date + 7 days)
-                const firstDay = new Date(tripStart);
-                firstDay.setUTCHours(0, 0, 0, 0);
-
-                const lastDay = new Date(tripEnd);
-                lastDay.setUTCHours(0, 0, 0, 0);
-                lastDay.setUTCDate(lastDay.getUTCDate() + 7);
-
+                // Build day tabs: today UTC through today + 7 days
+                const today = new Date();
+                today.setUTCHours(0, 0, 0, 0);
                 availableDays = [];
-                const cur = new Date(firstDay);
-                while (cur <= lastDay) {
+                for (let i = 0; i < 8; i++) {
+                    const d = new Date(today);
+                    d.setUTCDate(today.getUTCDate() + i);
                     availableDays.push({
-                        date: new Date(cur),
-                        label: cur.toLocaleDateString('en-GB', {
+                        date: d,
+                        label: d.toLocaleDateString('en-GB', {
                             weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC'
                         })
                     });
-                    cur.setUTCDate(cur.getUTCDate() + 1);
                 }
-
                 renderDayTabs();
-
-                // Active trip: end within 2 hours of now → jump to current time
-                const isActive = (Date.now() - tripEnd.getTime()) < 7_200_000;
-                if (isActive) {
-                    const nowMs = Date.UTC(
-                        new Date().getUTCFullYear(),
-                        new Date().getUTCMonth(),
-                        new Date().getUTCDate()
-                    );
-                    if (availableDays.some(d => d.date.getTime() === nowMs)) {
-                        jumpToNow();
-                    } else {
-                        selectDay(0, true);
-                    }
-                } else {
-                    selectDay(0, true);
-                }
-
-
+                jumpToNow();
             } catch (err) {
                 console.error('Failed to load available days', err);
                 document.getElementById('dayTabsContainer').innerHTML =
-                    '<span style="font-size:13px; color:var(--text-secondary);">Failed to load trip data. Please refresh.</span>';
+                    '<span style="font-size:13px; color:var(--text-secondary);">Failed to load forecast data. Please refresh.</span>';
             }
         }
 
@@ -411,7 +340,6 @@
             renderDayTabs();
             updateSelectedTime();
             if (doLoad) loadGridPoints();
-            updateBoatMarker();
         }
 
         function updateSelectedTime() {
@@ -435,7 +363,7 @@
             selectedHour = parseInt(this.value);
             updateSelectedTime();
             clearTimeout(hourDebounceTimer);
-            hourDebounceTimer = setTimeout(() => { loadGridPoints(); updateBoatMarker(); }, 150);
+            hourDebounceTimer = setTimeout(() => { loadGridPoints(); }, 150);
         });
 
         function jumpToNow() {
@@ -449,7 +377,6 @@
                 renderDayTabs();
                 updateSelectedTime();
                 loadGridPoints();
-                updateBoatMarker();
             }
         }
 
@@ -585,7 +512,7 @@
             if (!ts) return;
             try {
                 const resp = await fetch(
-                    `/api/forecast/grid-points?trip_id=${tripId}&timestamp=${encodeURIComponent(ts)}`
+                    `/api/forecast/grid-points?timestamp=${encodeURIComponent(ts)}`
                 );
                 const json = await resp.json();
                 lastGridPts = json.data || [];
@@ -668,30 +595,11 @@
         }
 
         function renderStats() {
-            const clear = () => {
-                document.getElementById('statWind').textContent   = '—';
-                document.getElementById('statGust').textContent   = '—';
-                document.getElementById('statWave').textContent   = '—';
-                document.getElementById('statPeriod').textContent = '—';
-                document.getElementById('statCape').textContent   = '—';
-            };
-            const pos = currentBoatPos();
-            if (!pos || !lastGridPts.length) { clear(); return; }
-            const pt = idwInterpolate(pos.latitude, pos.longitude, lastGridPts);
-            if (!pt) { clear(); return; }
-            let dirStr = '';
-            if (pt.wind_direction_deg != null) {
-                const names = ['N','NNE','NE','ENE','E','ESE','SE','SSE',
-                                'S','SSW','SW','WSW','W','WNW','NW','NNW'];
-                dirStr = ' ' + names[Math.round(pt.wind_direction_deg / 22.5) % 16];
-            }
-            const fmt = (v, dec, unit) => v != null ? `${v.toFixed(dec)} ${unit}` : '—';
-            document.getElementById('statWind').textContent =
-                pt.wind_speed_kn != null ? `${pt.wind_speed_kn.toFixed(1)} kn${dirStr}` : '—';
-            document.getElementById('statGust').textContent   = fmt(pt.wind_gust_kn, 1, 'kn');
-            document.getElementById('statWave').textContent   = fmt(pt.wave_height_m, 1, 'm');
-            document.getElementById('statPeriod').textContent = fmt(pt.wave_period_s, 0, 's');
-            document.getElementById('statCape').textContent   = fmt(pt.cape_j_kg, 0, 'J/kg');
+            document.getElementById('statWind').textContent   = '—';
+            document.getElementById('statGust').textContent   = '—';
+            document.getElementById('statWave').textContent   = '—';
+            document.getElementById('statPeriod').textContent = '—';
+            document.getElementById('statCape').textContent   = '—';
         }
 
         function totalRouteNm() {
@@ -784,7 +692,7 @@
             document.getElementById('routeSummary').style.display = 'none';
             document.getElementById('routeWptCount').textContent = 'click map to add waypoints';
             lastRouteOverlay = [];
-            localStorage.removeItem(`plan_route_${tripId}`);
+            localStorage.removeItem('plan_route');
             document.getElementById('planRouteBtn').textContent = 'Plan Route';
             document.getElementById('planRouteBtn').style.background = '';
             planMap.getContainer().style.cursor = '';
@@ -843,8 +751,7 @@
             const waypointsParam = routeWaypoints
                 .map(p => `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`)
                 .join(';');
-            const url = `/api/forecast/route?trip_id=${tripId}` +
-                `&waypoints=${encodeURIComponent(waypointsParam)}` +
+            const url = `/api/forecast/route?waypoints=${encodeURIComponent(waypointsParam)}` +
                 `&departure=${encodeURIComponent(departure)}` +
                 `&motoring_speed_kn=${speed}` +
                 `&polar_efficiency=${efficiency.toFixed(3)}` +
@@ -890,8 +797,7 @@
             const sailWeight = parseFloat(document.getElementById('sailWeightInput').value) || 0;
 
             try {
-                const url = `/api/forecast/optimal-route?trip_id=${tripId}`
-                    + `&from_lat=${from.lat.toFixed(6)}&from_lon=${from.lng.toFixed(6)}`
+                const url = `/api/forecast/optimal-route?from_lat=${from.lat.toFixed(6)}&from_lon=${from.lng.toFixed(6)}`
                     + `&to_lat=${to.lat.toFixed(6)}&to_lon=${to.lng.toFixed(6)}`
                     + `&departure=${encodeURIComponent(departure)}`
                     + `&motoring_speed_kn=${speed}`
@@ -1099,8 +1005,8 @@
 
         // ── Route persistence ─────────────────────────────────────────────────────
         function saveRouteState() {
-            if (!tripId || !routeMode) return;
-            localStorage.setItem(`plan_route_${tripId}`, JSON.stringify({
+            if (!routeMode) return;
+            localStorage.setItem('plan_route', JSON.stringify({
                 waypoints: routeWaypoints.map(p => ({ lat: p.lat, lng: p.lng })),
                 done:      routeDone,
                 departure: document.getElementById('depInput').value,
@@ -1109,10 +1015,9 @@
         }
 
         function restoreRoute() {
-            if (!tripId) return;
             let state;
             try {
-                const raw = localStorage.getItem(`plan_route_${tripId}`);
+                const raw = localStorage.getItem('plan_route');
                 if (!raw) return;
                 state = JSON.parse(raw);
             } catch (_) { return; }
@@ -1167,7 +1072,230 @@
             }
         }
 
-        if (tripId) init();
+        init();
+
+        // ── Forecast Areas collapse ───────────────────────────────────────────────────
+        function toggleForecastAreas() {
+            const body = document.getElementById('forecastAreasBody');
+            const chevron = document.getElementById('forecastAreasChevron');
+            const collapsed = body.style.display === 'none';
+            body.style.display = collapsed ? 'grid' : 'none';
+            chevron.textContent = collapsed ? '▾' : '▸';
+            localStorage.setItem('forecast_areas_collapsed', collapsed ? '0' : '1');
+            if (collapsed && forecastAreaMap) forecastAreaMap.invalidateSize();
+        }
+
+        (function restoreForecastAreasCollapse() {
+            if (localStorage.getItem('forecast_areas_collapsed') === '1') {
+                document.getElementById('forecastAreasBody').style.display = 'none';
+                document.getElementById('forecastAreasChevron').textContent = '▸';
+            }
+        })();
+
+        // ── Forecast Area Management ──────────────────────────────────────────────────
+
+        let forecastAreaMap = null;
+        let forecastAreaRectangles = [];
+        let forecastDrawOverlay = null;
+        let drawStart = null;
+        let drawRect = null;
+        let isDrawing = false;
+        let forecastStatusInterval = null;
+
+        function initForecastAreaMap() {
+            if (forecastAreaMap) { forecastAreaMap.remove(); }
+            forecastAreaMap = L.map('forecastAreaMapEl').setView([43.0, 9.0], 5);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap', maxZoom: 16
+            }).addTo(forecastAreaMap);
+            forecastDrawOverlay = document.createElement('div');
+            forecastDrawOverlay.style.cssText =
+                'position:absolute;inset:0;z-index:10000;display:none;cursor:crosshair;';
+            forecastAreaMap.getContainer().appendChild(forecastDrawOverlay);
+            forecastDrawOverlay.addEventListener('mousedown', onAreaMapMouseDown);
+        }
+
+        function startDrawArea() {
+            isDrawing = true;
+            document.getElementById('cancelDrawBtn').style.display = '';
+            document.getElementById('drawAreaBtn').style.display = 'none';
+            document.getElementById('drawAreaHint').style.display = '';
+            forecastDrawOverlay.style.display = 'block';
+        }
+
+        function cancelDrawArea() {
+            isDrawing = false;
+            drawStart = null;
+            if (drawRect) { forecastAreaMap.removeLayer(drawRect); drawRect = null; }
+            document.getElementById('cancelDrawBtn').style.display = 'none';
+            document.getElementById('drawAreaBtn').style.display = '';
+            document.getElementById('drawAreaHint').style.display = 'none';
+            forecastDrawOverlay.style.display = 'none';
+        }
+
+        function overlayLatLng(e) {
+            const r = forecastDrawOverlay.getBoundingClientRect();
+            return forecastAreaMap.containerPointToLatLng(L.point(e.clientX - r.left, e.clientY - r.top));
+        }
+
+        function onAreaMapMouseDown(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            drawStart = overlayLatLng(e);
+            if (drawRect) { forecastAreaMap.removeLayer(drawRect); }
+            drawRect = L.rectangle([drawStart, drawStart], {
+                color: '#3b82f6', weight: 2, fillOpacity: 0.15, interactive: false
+            }).addTo(forecastAreaMap);
+            document.addEventListener('mousemove', onAreaMapMouseMove);
+            document.addEventListener('mouseup', onAreaMapMouseUp);
+        }
+
+        function onAreaMapMouseMove(e) {
+            if (!drawStart || !drawRect) return;
+            drawRect.setBounds(L.latLngBounds(drawStart, overlayLatLng(e)));
+        }
+
+        async function onAreaMapMouseUp(e) {
+            document.removeEventListener('mousemove', onAreaMapMouseMove);
+            document.removeEventListener('mouseup', onAreaMapMouseUp);
+            if (!drawStart || !drawRect) return;
+            const bounds = drawRect.getBounds();
+            const lat_min = Math.min(bounds.getSouthWest().lat, bounds.getNorthEast().lat);
+            const lat_max = Math.max(bounds.getSouthWest().lat, bounds.getNorthEast().lat);
+            const lon_min = Math.min(bounds.getSouthWest().lng, bounds.getNorthEast().lng);
+            const lon_max = Math.max(bounds.getSouthWest().lng, bounds.getNorthEast().lng);
+            cancelDrawArea();
+            if (Math.abs(lat_max - lat_min) < 0.01 || Math.abs(lon_max - lon_min) < 0.01) return;
+            try {
+                await fetch('/api/forecast/areas', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lat_min, lat_max, lon_min, lon_max }),
+                });
+                await loadForecastAreas();
+                await updateForecastStatus();
+            } catch (err) {
+                console.error('Failed to save forecast area', err);
+            }
+        }
+
+        async function deleteForecastArea(id) {
+            try {
+                await fetch('/api/forecast/areas?id=' + id, { method: 'DELETE' });
+                await loadForecastAreas();
+                await updateForecastStatus();
+            } catch (err) {
+                console.error('Failed to delete forecast area', err);
+            }
+        }
+
+        function renderForecastAreaList(areas) {
+            const container = document.getElementById('forecastAreaList');
+            if (!areas.length) {
+                container.innerHTML =
+                    '<div style="font-size:13px; color:var(--text-secondary);">No areas defined. Draw a bounding box on the map.</div>';
+                return;
+            }
+            container.innerHTML = areas.map(a => `
+                <div style="display:flex; justify-content:space-between; align-items:center;
+                            background:var(--bg-secondary); padding:6px 10px; border-radius:5px;
+                            margin-bottom:5px; font-size:13px;">
+                    <span>
+                        <strong>Area ${a.id}</strong>
+                        <span style="color:var(--text-secondary); font-size:11px; margin-left:8px;">
+                            ${a.lat_min.toFixed(2)}–${a.lat_max.toFixed(2)}°N &nbsp;
+                            ${a.lon_min.toFixed(2)}–${a.lon_max.toFixed(2)}°E
+                        </span>
+                    </span>
+                    <button onclick="deleteForecastArea(${Number(a.id)})"
+                        style="background:transparent; border:1px solid #e74c3c; color:#e74c3c;
+                               border-radius:3px; padding:1px 8px; font-size:11px; cursor:pointer;">
+                        Delete
+                    </button>
+                </div>`).join('');
+        }
+
+        function renderForecastAreasOnMap(areas) {
+            forecastAreaRectangles.forEach(r => forecastAreaMap.removeLayer(r));
+            forecastAreaRectangles = [];
+            areas.forEach(a => {
+                const r = L.rectangle(
+                    [[a.lat_min, a.lon_min], [a.lat_max, a.lon_max]],
+                    { color: '#3b82f6', weight: 2, fillOpacity: 0.1 }
+                ).addTo(forecastAreaMap);
+                forecastAreaRectangles.push(r);
+            });
+            if (areas.length) {
+                const bounds = L.latLngBounds(
+                    areas.map(a => [[a.lat_min, a.lon_min], [a.lat_max, a.lon_max]]).flat()
+                );
+                forecastAreaMap.fitBounds(bounds, { padding: [20, 20] });
+            }
+        }
+
+        async function loadForecastAreas() {
+            try {
+                const resp = await fetch('/api/forecast/areas');
+                const json = await resp.json();
+                const areas = json.data || [];
+                renderForecastAreaList(areas);
+                renderForecastAreasOnMap(areas);
+            } catch (err) {
+                console.error('Failed to load forecast areas', err);
+                renderForecastAreaList([]);
+            }
+        }
+
+        async function updateForecastStatus() {
+            try {
+                const resp = await fetch('/api/forecast/status');
+                const json = await resp.json();
+                const s = json.data;
+                if (!s) return;
+                const statusEl = document.getElementById('forecastPollerStatus');
+                const onlineBadge = s.online
+                    ? '<span style="background:#14532d;color:#86efac;padding:2px 8px;border-radius:10px;font-size:11px;">● Fetching every 3h</span>'
+                    : '<span style="background:#7c2d12;color:#fdba74;padding:2px 8px;border-radius:10px;font-size:11px;">⚠ Offline — retrying</span>';
+                const lastFetch = s.last_fetch
+                    ? 'Last fetch: ' + new Date(s.last_fetch).toLocaleTimeString() + ' UTC'
+                    : 'No fetch yet';
+                const nextFetch = s.next_fetch
+                    ? ' · Next: ' + new Date(s.next_fetch).toLocaleTimeString()
+                    : '';
+                statusEl.innerHTML =
+                    onlineBadge + ' <span style="font-size:11px;color:var(--text-secondary);margin-left:8px;">' +
+                    lastFetch + nextFetch + ' · ' + s.point_count + ' pts</span>';
+            } catch (_) {}
+        }
+
+        async function refreshForecast() {
+            const btn = document.getElementById('forecastRefreshBtn');
+            const orig = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '↻ Fetching…';
+            try {
+                const resp = await fetch('/api/forecast/refresh', { method: 'POST' });
+                const json = await resp.json();
+                btn.textContent = json.status === 'ok' ? '✓ Done' : '✗ Error';
+                setTimeout(() => { btn.textContent = orig; btn.disabled = false; },
+                           json.status === 'ok' ? 2000 : 3000);
+            } catch (_) {
+                btn.textContent = '✗ Error';
+                setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+            }
+            await updateForecastStatus();
+            await loadAvailableDays();
+        }
+
+        window.addEventListener('load', () => {
+            requestAnimationFrame(() => {
+                initForecastAreaMap();
+                loadForecastAreas();
+                updateForecastStatus();
+                if (forecastStatusInterval) clearInterval(forecastStatusInterval);
+                forecastStatusInterval = setInterval(updateForecastStatus, 60000);
+            });
+        });
     </script>
 </body>
 </html>

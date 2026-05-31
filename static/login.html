@@ -110,6 +110,21 @@
     <script>
         initializeTheme();
 
+        (async function checkAuthRequired() {
+            try {
+                const resp = await fetch('/api/auth/status');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (!data.auth_required) {
+                        const raw = new URLSearchParams(location.search).get('next') || '/';
+                        const dest = raw.startsWith('/') && !raw.startsWith('//') && !raw.includes(':') ? raw : '/';
+                        location.replace(dest);
+                        return;
+                    }
+                }
+            } catch (_) {}
+        })();
+
         async function handleLogin(e) {
             e.preventDefault();
             const pw = document.getElementById('password').value;

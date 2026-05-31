@@ -1,4 +1,4 @@
-use crate::db::operations::forecast::{FetchWithHourly, ForecastHourlyPoint, TripForecastInputs};
+use crate::db::operations::forecast::{FetchWithHourly, ForecastHourlyPoint};
 use crate::error::AppError;
 use crate::utilities::haversine_distance_nm;
 use chrono::{DateTime, Duration, Utc};
@@ -13,18 +13,6 @@ pub struct FetchedForecast {
     pub lon: f64,
     pub fetched_at: DateTime<Utc>,
     pub hourly: Vec<ForecastHourlyPoint>,
-}
-
-#[derive(Debug, serde::Serialize, Clone)]
-pub struct TripOverlayPoint {
-    pub timestamp: String,
-    pub wind_speed_kn: Option<f64>,
-    pub wind_direction_deg: Option<f64>,
-    pub wind_gust_kn: Option<f64>,
-    pub wave_height_m: Option<f64>,
-    pub wave_period_s: Option<f64>,
-    pub wave_direction_deg: Option<f64>,
-    pub cape_j_kg: Option<f64>,
 }
 
 #[derive(Debug, serde::Serialize, Clone)]
@@ -252,42 +240,6 @@ pub async fn fetch_area_forecast(
     Ok(results)
 }
 
-pub fn compute_trip_overlay(inputs: &TripForecastInputs) -> Vec<TripOverlayPoint> {
-    let mut result = Vec::new();
-    let mut hour = inputs.trip_start;
-
-    while hour <= inputs.trip_end {
-        let boat_pos = nearest_track_pos(&inputs.track, hour);
-
-        if let Some((boat_lat, boat_lon)) = boat_pos {
-            let samples: Vec<(f64, f64, ForecastHourlyPoint)> = inputs
-                .fetches
-                .iter()
-                .filter_map(|fetch| {
-                    nearest_hourly(&fetch.hourly, hour)
-                        .map(|pt| (fetch.lat, fetch.lon, pt))
-                })
-                .collect();
-
-            let interp = interpolate_idw(boat_lat, boat_lon, &samples);
-            result.push(TripOverlayPoint {
-                timestamp: hour.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-                wind_speed_kn: interp.as_ref().and_then(|p| p.wind_speed_kn),
-                wind_direction_deg: interp.as_ref().and_then(|p| p.wind_direction_deg),
-                wind_gust_kn: interp.as_ref().and_then(|p| p.wind_gust_kn),
-                wave_height_m: interp.as_ref().and_then(|p| p.wave_height_m),
-                wave_period_s: interp.as_ref().and_then(|p| p.wave_period_s),
-                wave_direction_deg: interp.as_ref().and_then(|p| p.wave_direction_deg),
-                cape_j_kg: interp.as_ref().and_then(|p| p.cape_j_kg),
-            });
-        }
-
-        hour += Duration::hours(1);
-    }
-
-    result
-}
-
 /// Parses "lat1,lon1;lat2,lon2;…" into a Vec of (lat, lon) pairs.
 /// Returns Err if fewer than 2 pairs or any pair is malformed.
 pub fn parse_waypoints(s: &str) -> Result<Vec<(f64, f64)>, String> {
@@ -440,17 +392,6 @@ pub fn compute_route_overlay(
             })
         })
         .collect()
-}
-
-fn nearest_track_pos(
-    track: &[(f64, f64, DateTime<Utc>)],
-    ts: DateTime<Utc>,
-) -> Option<(f64, f64)> {
-    track
-        .iter()
-        .min_by_key(|(_, _, t)| (*t - ts).num_seconds().unsigned_abs())
-        .filter(|(_, _, t)| (*t - ts).num_seconds().abs() < 7200)
-        .map(|(lat, lon, _)| (*lat, *lon))
 }
 
 fn nearest_hourly(hourly: &[ForecastHourlyPoint], ts: DateTime<Utc>) -> Option<ForecastHourlyPoint> {

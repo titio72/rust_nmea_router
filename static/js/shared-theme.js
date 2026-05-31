@@ -136,6 +136,7 @@ function createHeaderBar(currentPage, showConnectionStatus = false) {
         { href: '/realtime.html', label: 'Monitor', page: 'monitor', roHidden: true },
         { href: '/ais.html', label: 'AIS', page: 'ais', roHidden: true },
         { href: '/yearly-stats.html', label: 'Stats', page: 'stats', roHidden: false },
+        { href: '/plan.html', label: 'Forecast', page: 'forecast', roHidden: false },
         { href: '/signalk-browser.html', label: 'SignalK Browser', page: 'signalk-browser', roHidden: true },
         { href: '/backup.html', label: 'Backup', page: 'backup', roHidden: true }
     ];

@@ -27,29 +27,19 @@ pub async fn run_poller(
 ) {
     info!("Forecast poller started");
     loop {
-        let active_trip = {
-            let db = db.read().unwrap_or_else(|e| e.into_inner());
-            db.get_active_trip_id().unwrap_or(None)
-        };
-        let Some(trip_id) = active_trip else {
-            debug!("Forecast poller: no active trip, sleeping {}s", IDLE_CHECK_SECS);
-            tokio::time::sleep(tokio::time::Duration::from_secs(IDLE_CHECK_SECS)).await;
-            continue;
-        };
-
         let areas = {
             let db = db.read().unwrap_or_else(|e| e.into_inner());
-            db.list_forecast_areas(trip_id).unwrap_or_default()
+            db.list_forecast_areas().unwrap_or_default()
         };
         if areas.is_empty() {
-            debug!(trip_id, "Forecast poller: no areas defined, sleeping {}s", IDLE_CHECK_SECS);
+            debug!("Forecast poller: no areas defined, sleeping {}s", IDLE_CHECK_SECS);
             tokio::time::sleep(tokio::time::Duration::from_secs(IDLE_CHECK_SECS)).await;
             continue;
         }
 
         let last_fetch = {
             let db = db.read().unwrap_or_else(|e| e.into_inner());
-            db.get_last_fetch_time(trip_id).unwrap_or(None)
+            db.get_last_fetch_time().unwrap_or(None)
         };
         let now = Utc::now();
         if let Some(last) = last_fetch {
@@ -58,7 +48,6 @@ pub async fn run_poller(
                 let wait_secs = (FETCH_INTERVAL_SECS - elapsed) as u64;
                 let next = last + chrono::Duration::seconds(FETCH_INTERVAL_SECS);
                 info!(
-                    trip_id,
                     last_fetch = %last.format("%Y-%m-%dT%H:%M:%SZ"),
                     next_fetch = %next.format("%Y-%m-%dT%H:%M:%SZ"),
                     wait_secs,
@@ -74,7 +63,6 @@ pub async fn run_poller(
         }
 
         info!(
-            trip_id,
             area_count = areas.len(),
             "Forecast poller: triggering fetch"
         );
@@ -82,7 +70,6 @@ pub async fn run_poller(
         let mut fetch_error = false;
         'areas: for area in &areas {
             info!(
-                trip_id,
                 area_id = area.id,
                 lat_min = area.lat_min, lat_max = area.lat_max,
                 lon_min = area.lon_min, lon_max = area.lon_max,
@@ -102,13 +89,12 @@ pub async fn run_poller(
                     let db = db.read().unwrap_or_else(|e| e.into_inner());
                     for f in &forecasts {
                         if let Err(e) = db.insert_forecast(
-                            trip_id, area.id, f.lat, f.lon, fetched_at, &f.hourly,
+                            area.id, f.lat, f.lon, fetched_at, &f.hourly,
                         ) {
-                            warn!(trip_id, area_id = area.id, error = %e, "Failed to store forecast point");
+                            warn!(area_id = area.id, error = %e, "Failed to store forecast point");
                         }
                     }
                     info!(
-                        trip_id,
                         area_id = area.id,
                         grid_points = forecasts.len(),
                         "Area forecast stored"
@@ -116,7 +102,6 @@ pub async fn run_poller(
                 }
                 Err(e) => {
                     warn!(
-                        trip_id,
                         area_id = area.id,
                         error = %e,
                         retry_secs = RETRY_SECS,
@@ -145,7 +130,6 @@ pub async fn run_poller(
             s.online = true;
         }
         info!(
-            trip_id,
             area_count = areas.len(),
             next_fetch = %next.format("%Y-%m-%dT%H:%M:%SZ"),
             "Forecast poller: all areas fetched successfully"

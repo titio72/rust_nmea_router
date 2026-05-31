@@ -234,29 +234,17 @@ pub struct DownloadBackupQuery {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ForecastTripOverlayQuery {
-    pub trip_id: u32,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct ForecastAreaIdQuery {
     pub id: u32,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ForecastAreaTripQuery {
-    pub trip_id: u32,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct ForecastGridPointsQuery {
-    pub trip_id: u32,
     pub timestamp: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ForecastRouteQuery {
-    pub trip_id: u32,
     pub waypoints: String,   // "lat1,lon1;lat2,lon2;…" — at least 2 pairs
     pub departure: String,
     pub motoring_speed_kn: f64,
@@ -272,7 +260,6 @@ fn default_polar_efficiency() -> f64 { 1.0 }
 
 #[derive(Debug, Deserialize)]
 pub struct OptimalRouteQuery {
-    pub trip_id: u32,
     pub from_lat: f64,
     pub from_lon: f64,
     pub to_lat: f64,
@@ -1534,30 +1521,13 @@ pub async fn get_ais_targets(
     }
 }
 
-pub async fn get_forecast_trip_overlay(
-    State(state): State<AppState>,
-    Query(params): Query<ForecastTripOverlayQuery>,
-) -> Result<Json<ApiResponse<Vec<crate::forecast::TripOverlayPoint>>>, StatusCode> {
-    let inputs = match state.db().fetch_trip_forecast_inputs(params.trip_id) {
-        Ok(Some(i)) => i,
-        Ok(None) => return Ok(Json(ApiResponse::ok(vec![]))),
-        Err(e) => {
-            error!(error = %e, trip_id = params.trip_id, "Failed to fetch trip forecast inputs");
-            return Ok(Json(ApiResponse::error(e.to_string())));
-        }
-    };
-    let overlay = crate::forecast::compute_trip_overlay(&inputs);
-    Ok(Json(ApiResponse::ok(overlay)))
-}
-
 pub async fn get_forecast_areas(
     State(state): State<AppState>,
-    Query(params): Query<ForecastAreaTripQuery>,
-) -> Result<Json<ApiResponse<Vec<crate::db::operations::forecast::TripForecastArea>>>, StatusCode> {
-    match state.db().list_forecast_areas(params.trip_id) {
+) -> Result<Json<ApiResponse<Vec<crate::db::operations::forecast::ForecastArea>>>, StatusCode> {
+    match state.db().list_forecast_areas() {
         Ok(areas) => Ok(Json(ApiResponse::ok(areas))),
         Err(e) => {
-            error!(error = %e, trip_id = params.trip_id, "Failed to list forecast areas");
+            error!(error = %e, "Failed to list forecast areas");
             Ok(Json(ApiResponse::error(e.to_string())))
         }
     }
@@ -1565,9 +1535,9 @@ pub async fn get_forecast_areas(
 
 pub async fn create_forecast_area(
     State(state): State<AppState>,
-    Json(body): Json<crate::db::operations::forecast::NewTripForecastArea>,
+    Json(body): Json<crate::db::operations::forecast::NewForecastArea>,
 ) -> Result<Json<ApiResponse<u32>>, StatusCode> {
-    match state.db().create_forecast_area(&body) {
+    match state.db().create_forecast_area(&body, Utc::now()) {
         Ok(id) => Ok(Json(ApiResponse::ok(id))),
         Err(e) => {
             error!(error = %e, "Failed to create forecast area");
@@ -1592,12 +1562,11 @@ pub async fn delete_forecast_area(
 
 pub async fn get_forecast_status(
     State(state): State<AppState>,
-    Query(params): Query<ForecastAreaTripQuery>,
 ) -> Result<Json<ApiResponse<ForecastStatusResponse>>, StatusCode> {
     let poller = state.poller_status.lock()
         .unwrap_or_else(|p| p.into_inner())
         .clone();
-    let (area_count, point_count) = state.db().get_forecast_counts(params.trip_id).unwrap_or((0, 0));
+    let (area_count, point_count) = state.db().get_forecast_counts().unwrap_or((0, 0));
     Ok(Json(ApiResponse::ok(ForecastStatusResponse {
         online: poller.online,
         last_fetch: poller.last_fetch.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
@@ -1609,11 +1578,10 @@ pub async fn get_forecast_status(
 
 pub async fn refresh_forecast(
     State(state): State<AppState>,
-    Query(params): Query<ForecastAreaTripQuery>,
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
-    let areas = state.db().list_forecast_areas(params.trip_id).unwrap_or_default();
+    let areas = state.db().list_forecast_areas().unwrap_or_default();
     if areas.is_empty() {
-        return Ok(Json(ApiResponse::error("No forecast areas defined for this trip".to_string())));
+        return Ok(Json(ApiResponse::error("No forecast areas defined".to_string())));
     }
     let mut total_points = 0usize;
     for area in &areas {
@@ -1627,9 +1595,9 @@ pub async fn refresh_forecast(
                 let db = state.db();
                 for f in &forecasts {
                     if let Err(e) = db.insert_forecast(
-                        params.trip_id, area.id, f.lat, f.lon, fetched_at, &f.hourly,
+                        area.id, f.lat, f.lon, fetched_at, &f.hourly,
                     ) {
-                        warn!(trip_id = params.trip_id, area_id = area.id, error = %e,
+                        warn!(area_id = area.id, error = %e,
                               "refresh_forecast: failed to store point");
                     }
                 }
@@ -1640,7 +1608,7 @@ pub async fn refresh_forecast(
                 s.next_fetch = Some(fetched_at + chrono::Duration::seconds(3 * 3600));
             }
             Err(e) => {
-                warn!(trip_id = params.trip_id, area_id = area.id, error = %e,
+                warn!(area_id = area.id, error = %e,
                       "refresh_forecast: fetch failed");
                 state.poller_status.lock().unwrap_or_else(|p| p.into_inner()).online = false;
                 return Ok(Json(ApiResponse::error(format!("Fetch failed for area {}: {}", area.id, e))));
@@ -1654,10 +1622,10 @@ pub async fn get_forecast_grid_points(
     State(state): State<AppState>,
     Query(params): Query<ForecastGridPointsQuery>,
 ) -> Result<Json<ApiResponse<Vec<crate::db::operations::forecast::GridPointForecast>>>, StatusCode> {
-    match state.db().get_grid_points_at(params.trip_id, &params.timestamp) {
+    match state.db().get_grid_points_at(&params.timestamp) {
         Ok(pts) => Ok(Json(ApiResponse::ok(pts))),
         Err(e) => {
-            error!(error = %e, trip_id = params.trip_id, "Failed to get grid points");
+            error!(error = %e, "Failed to get grid points");
             Ok(Json(ApiResponse::error(e.to_string())))
         }
     }
@@ -1683,10 +1651,10 @@ pub async fn get_forecast_route(
     if params.motoring_speed_kn <= 0.0 {
         return Ok(Json(ApiResponse::error("motoring_speed_kn must be positive".to_string())));
     }
-    let fetches = match state.db().fetch_forecast_fetches(params.trip_id) {
+    let fetches = match state.db().fetch_forecast_fetches() {
         Ok(f) => f,
         Err(e) => {
-            error!(error = %e, trip_id = params.trip_id, "Failed to load forecast fetches for route");
+            error!(error = %e, "Failed to load forecast fetches for route");
             return Ok(Json(ApiResponse::error(e.to_string())));
         }
     };
@@ -1729,17 +1697,17 @@ pub async fn get_optimal_route(
         return Ok(Json(ApiResponse::error("sail_weight_kn must be non-negative".to_string())));
     }
 
-    let fetches = match state.db().fetch_forecast_fetches(params.trip_id) {
+    let fetches = match state.db().fetch_forecast_fetches() {
         Ok(f) => f,
         Err(e) => {
-            error!(error = %e, trip_id = params.trip_id, "Failed to load forecast fetches for optimal route");
+            error!(error = %e, "Failed to load forecast fetches for optimal route");
             return Ok(Json(ApiResponse::error(e.to_string())));
         }
     };
 
     if fetches.is_empty() {
         return Ok(Json(ApiResponse::error(
-            "No forecast data available for this trip".to_string()
+            "No forecast data available".to_string()
         )));
     }
 
@@ -1802,7 +1770,6 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/heatmap", get(get_heatmap))
         .route("/nav_analysis", get(get_nav_analysis))
         .route("/ais_targets", get(get_ais_targets))
-        .route("/forecast/trip-overlay", get(get_forecast_trip_overlay))
         .route("/forecast/areas", get(get_forecast_areas))
         .route("/forecast/status", get(get_forecast_status))
         .route("/forecast/grid-points", get(get_forecast_grid_points))

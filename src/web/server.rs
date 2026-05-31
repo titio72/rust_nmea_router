@@ -21,7 +21,7 @@ use crate::db::VesselDatabase;
 use crate::config::Config;
 use crate::utilities::cleanup_old_exports;
 use super::api::{AppState, create_api_router};
-use super::auth::{JwtSecret, auth_middleware, login_handler, logout_handler};
+use super::auth::{JwtSecret, auth_middleware, auth_status_handler, login_handler, logout_handler};
 use super::broadcast_manager::get_signalk_channels;
 
 const MIN_PASSWORD_LEN: usize = 12;
@@ -91,6 +91,7 @@ pub async fn start_web_server(
     let auth_routes = Router::new()
         .route("/api/auth/login", post(login_handler))
         .route("/api/auth/logout", post(logout_handler))
+        .route("/api/auth/status", get(auth_status_handler))
         .with_state(state.clone());
 
     let app = Router::new()

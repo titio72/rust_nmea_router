@@ -76,6 +76,7 @@ const PUBLIC_PATHS: &[&str] = &[
     "/login.html",
     "/api/auth/login",
     "/api/auth/logout",
+    "/api/auth/status",
     "/api/sync/manifest",
     "/api/sync/trip",
 ];
@@ -181,4 +182,12 @@ pub async fn logout_handler(State(state): State<AppState>) -> Response {
         Json(serde_json::json!({"status": "ok"})),
     )
         .into_response()
+}
+
+pub async fn auth_status_handler(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    let auth_required = state.config.web.auth_password
+        .as_deref()
+        .map(|p| !p.is_empty())
+        .unwrap_or(false);
+    Json(serde_json::json!({ "auth_required": auth_required }))
 }

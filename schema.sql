@@ -222,38 +222,34 @@ COMMENT='User corrections for nav windows; auto_nav_* preserved for calibration 
 -- ORDER BY timestamp DESC;
 
 -- ============================================================================
--- TRIP FORECAST AREA TABLE
+-- FORECAST AREA TABLE
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS trip_forecast_area (
+CREATE TABLE IF NOT EXISTS forecast_area (
     id         INT AUTO_INCREMENT PRIMARY KEY,
-    trip_id    INT NOT NULL,
     lat_min    DECIMAL(9,6) NOT NULL,
     lat_max    DECIMAL(9,6) NOT NULL,
     lon_min    DECIMAL(9,6) NOT NULL,
     lon_max    DECIMAL(9,6) NOT NULL,
-    created_at DATETIME NOT NULL,
-    INDEX idx_trip_id (trip_id)
+    created_at DATETIME NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-COMMENT='Bounding boxes defining the forecast area for a trip';
+COMMENT='Bounding boxes defining global forecast areas';
 
 -- ============================================================================
 -- FORECAST FETCH TABLE
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS forecast_fetch (
     id              INT AUTO_INCREMENT PRIMARY KEY,
-    trip_id         INT NOT NULL,
     area_id         INT NOT NULL,
     lat             DECIMAL(9,6) NOT NULL,
     lon             DECIMAL(9,6) NOT NULL,
     fetched_at      DATETIME NOT NULL,
     forecast_from   DATETIME NOT NULL,
     forecast_to     DATETIME NOT NULL,
-    INDEX idx_trip_id (trip_id),
     INDEX idx_area_id (area_id),
     INDEX idx_fetched_at (fetched_at),
-    CONSTRAINT fk_forecast_fetch_area FOREIGN KEY (area_id) REFERENCES trip_forecast_area(id) ON DELETE CASCADE
+    CONSTRAINT fk_forecast_fetch_area FOREIGN KEY (area_id) REFERENCES forecast_area(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-COMMENT='One record per grid point per fetch operation, tagged with trip and area';
+COMMENT='One record per grid point per fetch operation, tagged with area';
 
 -- ============================================================================
 -- FORECAST HOURLY TABLE
