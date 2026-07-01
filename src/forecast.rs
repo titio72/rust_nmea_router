@@ -11,6 +11,7 @@ use tracing::{debug, info, warn};
 pub struct FetchedForecast {
     pub lat: f64,
     pub lon: f64,
+    pub model: String,
     pub fetched_at: DateTime<Utc>,
     pub hourly: Vec<ForecastHourlyPoint>,
 }
@@ -29,6 +30,7 @@ pub struct RouteOverlayPoint {
     pub cape_j_kg: Option<f64>,
     pub speed_kn: Option<f64>,
     pub twa_deg: Option<f64>,
+    pub wind_model: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +128,58 @@ pub(crate) fn build_marine_bbox_url(lat_min: f64, lat_max: f64, lon_min: f64, lo
     )
 }
 
+pub(crate) fn build_arome_bbox_url(lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) -> String {
+    // AROME France HD (~1.5 km via Open-Meteo) — short-term, wind only, no waves.
+    format!(
+        "https://api.open-meteo.com/v1/forecast\
+         ?bounding_box={lat_min},{lon_min},{lat_max},{lon_max}\
+         &models=meteofrance_arome_france_hd\
+         &hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,cape\
+         &wind_speed_unit=kn&forecast_days=2&timezone=UTC",
+    )
+}
+
+async fn fetch_wind_responses(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<Vec<MeteoResponse>, AppError> {
+    let resp = client.get(url).send().await
+        .map_err(|e| AppError::Io(format!("Open-Meteo wind request failed: {}", e)))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(AppError::Io(format!("Open-Meteo wind returned HTTP {}", status)));
+    }
+    let body = resp.text().await
+        .map_err(|e| AppError::Io(format!("Open-Meteo wind body read failed: {}", e)))?;
+    let raw: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+        let preview = body.chars().take(300).collect::<String>();
+        AppError::Parse(format!("Open-Meteo wind parse failed: {} — body: {}", e, preview))
+    })?;
+    Ok(serde_json::from_value::<OneOrMany<MeteoResponse>>(raw)
+        .map_err(|e| AppError::Parse(e.to_string()))?
+        .into_vec())
+}
+
+fn build_hourly(meteo: &MeteoResponse, marine: Option<&MarineResponse>) -> Vec<ForecastHourlyPoint> {
+    let n = meteo.hourly.time.len();
+    let mut hourly = Vec::with_capacity(n);
+    for j in 0..n {
+        let raw = &meteo.hourly.time[j];
+        let timestamp = if raw.len() == 16 { format!("{}:00Z", raw) } else { raw.clone() };
+        hourly.push(ForecastHourlyPoint {
+            timestamp,
+            wind_speed_kn: meteo.hourly.wind_speed_10m.as_ref().and_then(|v| v.get(j).copied().flatten()),
+            wind_direction_deg: meteo.hourly.wind_direction_10m.as_ref().and_then(|v| v.get(j).copied().flatten()),
+            wind_gust_kn: meteo.hourly.wind_gusts_10m.as_ref().and_then(|v| v.get(j).copied().flatten()),
+            wave_height_m: marine.and_then(|m| m.hourly.wave_height.as_ref()?.get(j).copied().flatten()),
+            wave_period_s: marine.and_then(|m| m.hourly.wave_period.as_ref()?.get(j).copied().flatten()),
+            wave_direction_deg: marine.and_then(|m| m.hourly.wave_direction.as_ref()?.get(j).copied().flatten()),
+            cape_j_kg: meteo.hourly.cape.as_ref().and_then(|v| v.get(j).copied().flatten()),
+        });
+    }
+    hourly
+}
+
 pub async fn fetch_area_forecast(
     lat_min: f64,
     lat_max: f64,
@@ -136,45 +190,20 @@ pub async fn fetch_area_forecast(
     let period_end = (Utc::now() + chrono::Duration::days(7)).format("%Y-%m-%dT%H:00Z").to_string();
     info!(
         lat_min, lat_max, lon_min, lon_max,
-        period_start = %period_start,
-        period_end = %period_end,
+        period_start = %period_start, period_end = %period_end,
         "Forecast fetch: starting area request"
     );
 
     let client = reqwest::Client::new();
     let fetched_at = Utc::now();
 
-    // Wind forecast
-    let meteo_url = build_meteo_bbox_url(lat_min, lat_max, lon_min, lon_max);
-    debug!(url = %meteo_url, "Open-Meteo wind: sending request");
-    let meteo_resp = client
-        .get(&meteo_url)
-        .send()
-        .await
-        .map_err(|e| AppError::Io(format!("Open-Meteo wind request failed: {}", e)))?;
-    let meteo_status = meteo_resp.status();
-    if !meteo_status.is_success() {
-        info!(status = meteo_status.as_u16(), url = %meteo_url, "Open-Meteo wind: request failed");
-        return Err(AppError::Io(format!("Open-Meteo wind returned HTTP {}", meteo_status)));
-    }
-    let meteo_body = meteo_resp.text().await
-        .map_err(|e| AppError::Io(format!("Open-Meteo wind body read failed: {}", e)))?;
-    let meteo_raw: serde_json::Value = serde_json::from_str(&meteo_body)
-        .map_err(|e| {
-            let preview = meteo_body.chars().take(300).collect::<String>();
-            AppError::Parse(format!("Open-Meteo wind parse failed: {} — body: {}", e, preview))
-        })?;
-    let meteo_responses: Vec<MeteoResponse> =
-        serde_json::from_value::<OneOrMany<MeteoResponse>>(meteo_raw)
-            .map_err(|e| AppError::Parse(e.to_string()))?
-            .into_vec();
-    info!(
-        status = meteo_status.as_u16(),
-        grid_points = meteo_responses.len(),
-        "Open-Meteo wind: response OK"
-    );
+    // ── ECMWF wind (fatal on failure) ──
+    let ecmwf_url = build_meteo_bbox_url(lat_min, lat_max, lon_min, lon_max);
+    debug!(url = %ecmwf_url, "Open-Meteo ECMWF wind: sending request");
+    let ecmwf_responses = fetch_wind_responses(&client, &ecmwf_url).await?;
+    info!(grid_points = ecmwf_responses.len(), "Open-Meteo ECMWF wind: response OK");
 
-    // Marine forecast — optional; non-oceanic areas return non-2xx, wave fields are omitted
+    // ── ECMWF marine (non-fatal) ──
     let marine_url = build_marine_bbox_url(lat_min, lat_max, lon_min, lon_max);
     debug!(url = %marine_url, "Open-Meteo marine: sending request");
     let marine_responses: Vec<MarineResponse> = {
@@ -188,55 +217,53 @@ pub async fn fetch_area_forecast(
             serde_json::from_value::<OneOrMany<MarineResponse>>(raw)
                 .map(|v| v.into_vec())
                 .map_err(|e| e.to_string())
-        }
-        .await;
+        }.await;
         match fetch {
-            Ok(v) => {
-                info!(grid_points = v.len(), "Open-Meteo marine: response OK");
-                v
-            }
-            Err(e) => {
-                warn!(error = %e, "Open-Meteo marine: unavailable for this area (wave data omitted)");
-                vec![]
-            }
+            Ok(v) => { info!(grid_points = v.len(), "Open-Meteo marine: response OK"); v }
+            Err(e) => { warn!(error = %e, "Open-Meteo marine: unavailable (wave data omitted)"); vec![] }
         }
     };
 
+    // ── AROME wind (non-fatal) ──
+    let arome_url = build_arome_bbox_url(lat_min, lat_max, lon_min, lon_max);
+    debug!(url = %arome_url, "Open-Meteo AROME wind: sending request");
+    let arome_responses: Vec<MeteoResponse> = match fetch_wind_responses(&client, &arome_url).await {
+        Ok(v) => { info!(grid_points = v.len(), "Open-Meteo AROME wind: response OK"); v }
+        Err(e) => { warn!(error = %e, "Open-Meteo AROME wind: unavailable (using ECMWF only)"); vec![] }
+    };
+
     let mut results = Vec::new();
-    for (i, meteo) in meteo_responses.iter().enumerate() {
+
+    // ECMWF results: merge marine waves by grid-point index, as before.
+    for (i, meteo) in ecmwf_responses.iter().enumerate() {
         let marine = marine_responses.get(i);
-        let n = meteo.hourly.time.len();
-        let mut hourly = Vec::with_capacity(n);
-
-        for j in 0..n {
-            let raw = &meteo.hourly.time[j];
-            let timestamp = if raw.len() == 16 {
-                // "YYYY-MM-DDTHH:MM" → append :00Z
-                format!("{}:00Z", raw)
-            } else {
-                raw.clone()
-            };
-            hourly.push(ForecastHourlyPoint {
-                timestamp,
-                wind_speed_kn: meteo.hourly.wind_speed_10m.as_ref().and_then(|v| v.get(j).copied().flatten()),
-                wind_direction_deg: meteo.hourly.wind_direction_10m.as_ref().and_then(|v| v.get(j).copied().flatten()),
-                wind_gust_kn: meteo.hourly.wind_gusts_10m.as_ref().and_then(|v| v.get(j).copied().flatten()),
-                wave_height_m: marine.and_then(|m| m.hourly.wave_height.as_ref()?.get(j).copied().flatten()),
-                wave_period_s: marine.and_then(|m| m.hourly.wave_period.as_ref()?.get(j).copied().flatten()),
-                wave_direction_deg: marine.and_then(|m| m.hourly.wave_direction.as_ref()?.get(j).copied().flatten()),
-                cape_j_kg: meteo.hourly.cape.as_ref().and_then(|v| v.get(j).copied().flatten()),
-            });
-        }
-
         results.push(FetchedForecast {
             lat: meteo.latitude,
             lon: meteo.longitude,
+            model: "ecmwf".to_string(),
             fetched_at,
-            hourly,
+            hourly: build_hourly(meteo, marine),
         });
     }
 
-    info!(lat_min, lat_max, lon_min, lon_max, total_grid_points = results.len(), "Forecast fetch: area complete");
+    // AROME results: wind only, no waves.
+    for meteo in &arome_responses {
+        results.push(FetchedForecast {
+            lat: meteo.latitude,
+            lon: meteo.longitude,
+            model: "arome".to_string(),
+            fetched_at,
+            hourly: build_hourly(meteo, None),
+        });
+    }
+
+    info!(
+        lat_min, lat_max, lon_min, lon_max,
+        ecmwf_points = ecmwf_responses.len(),
+        arome_points = arome_responses.len(),
+        total_grid_points = results.len(),
+        "Forecast fetch: area complete"
+    );
     Ok(results)
 }
 
@@ -269,11 +296,16 @@ pub(crate) fn nearest_forecast_wind(
     lon: f64,
     time: DateTime<Utc>,
 ) -> Option<(f64, f64)> {
-    let samples: Vec<(f64, f64, ForecastHourlyPoint)> = fetches
-        .iter()
-        .filter_map(|f| nearest_hourly(&f.hourly, time).map(|pt| (f.lat, f.lon, pt)))
-        .collect();
-    let interp = interpolate_idw(lat, lon, &samples)?;
+    let collect = |model: &str| -> Vec<(f64, f64, ForecastHourlyPoint)> {
+        fetches
+            .iter()
+            .filter(|f| f.model == model)
+            .filter_map(|f| nearest_hourly(&f.hourly, time).map(|pt| (f.lat, f.lon, pt)))
+            .collect()
+    };
+    let arome = collect("arome");
+    let ecmwf = collect("ecmwf");
+    let interp = interpolate_blended(lat, lon, &arome, &ecmwf)?;
     Some((interp.wind_speed_kn?, interp.wind_direction_deg?))
 }
 
@@ -362,6 +394,7 @@ pub fn generate_route_track(
 /// IDW-interpolates forecast values at each synthetic track point.
 /// Points for which no forecast data is available within range are omitted
 /// from the output — callers should not assume output.len() == track.len().
+/// Wind family is sourced from AROME when available, wave family always from ECMWF.
 pub fn compute_route_overlay(
     track: &[RouteTrackPoint],
     fetches: &[FetchWithHourly],
@@ -369,13 +402,16 @@ pub fn compute_route_overlay(
     track
         .iter()
         .filter_map(|pt| {
-            let samples: Vec<(f64, f64, ForecastHourlyPoint)> = fetches
-                .iter()
-                .filter_map(|f| {
-                    nearest_hourly(&f.hourly, pt.time).map(|p| (f.lat, f.lon, p))
-                })
-                .collect();
-            let interp = interpolate_idw(pt.lat, pt.lon, &samples)?;
+            let collect = |model: &str| -> Vec<(f64, f64, ForecastHourlyPoint)> {
+                fetches
+                    .iter()
+                    .filter(|f| f.model == model)
+                    .filter_map(|f| nearest_hourly(&f.hourly, pt.time).map(|p| (f.lat, f.lon, p)))
+                    .collect()
+            };
+            let arome = collect("arome");
+            let ecmwf = collect("ecmwf");
+            let interp = interpolate_blended(pt.lat, pt.lon, &arome, &ecmwf)?;
             Some(RouteOverlayPoint {
                 lat: pt.lat,
                 lon: pt.lon,
@@ -389,6 +425,7 @@ pub fn compute_route_overlay(
                 cape_j_kg: interp.cape_j_kg,
                 speed_kn: pt.speed_kn,
                 twa_deg: pt.twa_deg,
+                wind_model: interp.wind_model,
             })
         })
         .collect()
@@ -470,11 +507,73 @@ fn interpolate_idw(
     })
 }
 
+pub(crate) struct BlendedForecast {
+    pub wind_speed_kn: Option<f64>,
+    pub wind_direction_deg: Option<f64>,
+    pub wind_gust_kn: Option<f64>,
+    pub wave_height_m: Option<f64>,
+    pub wave_period_s: Option<f64>,
+    pub wave_direction_deg: Option<f64>,
+    pub cape_j_kg: Option<f64>,
+    pub wind_model: Option<String>,
+}
+
+/// Interpolates a point by blending two model grids: wind family is taken from
+/// AROME when AROME produces a wind speed in range, otherwise from ECMWF; the
+/// wave family always comes from ECMWF (AROME has no wave output).
+pub(crate) fn interpolate_blended(
+    target_lat: f64,
+    target_lon: f64,
+    arome_samples: &[(f64, f64, ForecastHourlyPoint)],
+    ecmwf_samples: &[(f64, f64, ForecastHourlyPoint)],
+) -> Option<BlendedForecast> {
+    let arome = interpolate_idw(target_lat, target_lon, arome_samples);
+    let ecmwf = interpolate_idw(target_lat, target_lon, ecmwf_samples);
+
+    // Wind source: AROME if it yielded a wind speed, else ECMWF.
+    let arome_has_wind = arome.as_ref().is_some_and(|p| p.wind_speed_kn.is_some());
+    let (wind_src, wind_model): (Option<&ForecastHourlyPoint>, Option<&str>) = if arome_has_wind {
+        (arome.as_ref(), Some("arome"))
+    } else if ecmwf.is_some() {
+        (ecmwf.as_ref(), Some("ecmwf"))
+    } else {
+        (None, None)
+    };
+
+    // If neither model produced anything at all, there is no data here.
+    // (wind_src is None only when both AROME has no wind and ECMWF is None.)
+    let wind_src = wind_src?;
+
+    Some(BlendedForecast {
+        wind_speed_kn: wind_src.wind_speed_kn,
+        wind_direction_deg: wind_src.wind_direction_deg,
+        wind_gust_kn: wind_src.wind_gust_kn,
+        cape_j_kg: wind_src.cape_j_kg,
+        wave_height_m: ecmwf.as_ref().and_then(|p| p.wave_height_m),
+        wave_period_s: ecmwf.as_ref().and_then(|p| p.wave_period_s),
+        wave_direction_deg: ecmwf.as_ref().and_then(|p| p.wave_direction_deg),
+        wind_model: wind_model.map(|s| s.to_string()),
+    })
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pt_wind_only(wind_speed: f64, wind_dir: f64) -> ForecastHourlyPoint {
+        ForecastHourlyPoint {
+            timestamp: "2026-06-13T06:00:00Z".to_string(),
+            wind_speed_kn: Some(wind_speed),
+            wind_direction_deg: Some(wind_dir),
+            wind_gust_kn: None,
+            wave_height_m: None,
+            wave_period_s: None,
+            wave_direction_deg: None,
+            cape_j_kg: None,
+        }
+    }
 
     fn pt(wind_speed: f64, wind_dir: f64, gust: f64, wave_h: f64, wave_p: f64, wave_dir: f64, cape: f64) -> ForecastHourlyPoint {
         ForecastHourlyPoint {
@@ -490,10 +589,54 @@ mod tests {
     }
 
     #[test]
+    fn test_blended_prefers_arome_wind() {
+        // ECMWF ~5NM away with wind 10kn; AROME ~5NM away with wind 18kn.
+        let arome = vec![(43.0 + 0.08, 9.0, pt_wind_only(18.0, 200.0))];
+        let ecmwf = vec![(43.0 + 0.08, 9.0, pt(10.0, 180.0, 14.0, 1.5, 7.0, 190.0, 100.0))];
+        let r = interpolate_blended(43.0, 9.0, &arome, &ecmwf).unwrap();
+        assert!((r.wind_speed_kn.unwrap() - 18.0).abs() < 0.5, "got {:?}", r.wind_speed_kn);
+        assert_eq!(r.wind_model.as_deref(), Some("arome"));
+        // Waves always from ECMWF, even though AROME drove the wind.
+        assert!((r.wave_height_m.unwrap() - 1.5).abs() < 0.1, "got {:?}", r.wave_height_m);
+    }
+
+    #[test]
+    fn test_blended_falls_back_to_ecmwf_when_no_arome() {
+        let ecmwf = vec![(43.0 + 0.08, 9.0, pt(10.0, 180.0, 14.0, 1.5, 7.0, 190.0, 100.0))];
+        let r = interpolate_blended(43.0, 9.0, &[], &ecmwf).unwrap();
+        assert!((r.wind_speed_kn.unwrap() - 10.0).abs() < 0.5);
+        assert_eq!(r.wind_model.as_deref(), Some("ecmwf"));
+    }
+
+    #[test]
+    fn test_blended_arome_out_of_range_uses_ecmwf() {
+        // AROME sample ~50NM away (beyond MAX_DISTANCE_NM) → ignored; ECMWF used.
+        let arome = vec![(43.0 + 0.9, 9.0, pt_wind_only(18.0, 200.0))];
+        let ecmwf = vec![(43.0 + 0.08, 9.0, pt(10.0, 180.0, 14.0, 1.5, 7.0, 190.0, 100.0))];
+        let r = interpolate_blended(43.0, 9.0, &arome, &ecmwf).unwrap();
+        assert!((r.wind_speed_kn.unwrap() - 10.0).abs() < 0.5);
+        assert_eq!(r.wind_model.as_deref(), Some("ecmwf"));
+    }
+
+    #[test]
+    fn test_blended_no_data_returns_none() {
+        assert!(interpolate_blended(43.0, 9.0, &[], &[]).is_none());
+    }
+
+    #[test]
     fn test_bbox_url_contains_expected_params() {
         let url = build_meteo_bbox_url(43.0, 43.5, 8.0, 8.5);
         assert!(url.contains("bounding_box=43,8,43.5,8.5"), "url: {}", url);
         assert!(url.contains("models=ecmwf_ifs"), "url: {}", url);
+        assert!(url.contains("wind_speed_unit=kn"), "url: {}", url);
+    }
+
+    #[test]
+    fn test_arome_bbox_url_contains_expected_params() {
+        let url = build_arome_bbox_url(43.0, 43.5, 8.0, 8.5);
+        assert!(url.contains("bounding_box=43,8,43.5,8.5"), "url: {}", url);
+        assert!(url.contains("models=meteofrance_arome_france_hd"), "url: {}", url);
+        assert!(url.contains("forecast_days=2"), "url: {}", url);
         assert!(url.contains("wind_speed_unit=kn"), "url: {}", url);
     }
 
@@ -591,6 +734,7 @@ mod tests {
         // Single grid point near the route
         let fetches = vec![FetchWithHourly {
             lat: 43.5, lon: 9.25,
+            model: "ecmwf".to_string(),
             hourly,
         }];
         let overlay = compute_route_overlay(&track, &fetches);
@@ -705,7 +849,7 @@ mod tests {
             wave_direction_deg: None, cape_j_kg: None,
         }];
         let fetches = vec![crate::db::operations::forecast::FetchWithHourly {
-            lat: 43.0, lon: 8.0, hourly,
+            lat: 43.0, lon: 8.0, model: "ecmwf".to_string(), hourly,
         }];
 
         let dep = chrono::DateTime::parse_from_rfc3339(ts_str).unwrap().with_timezone(&chrono::Utc);

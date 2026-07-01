@@ -257,7 +257,7 @@
                         `<div style="background:rgba(30,30,30,0.82); padding:6px 9px; border-radius:5px;
                                      font-size:11px; color:#ddd; min-width:130px;
                                      border:1px solid rgba(255,255,255,0.12); pointer-events:none;">
-                            <div id="legendTitle" style="font-weight:600; margin-bottom:4px; letter-spacing:0.3px;">Wind (kn)</div>
+                            <div id="legendTitle" style="font-weight:600; margin-bottom:4px; letter-spacing:0.3px;"><span id="legendLabel">Wind (kn)</span> <span id="modelBadge" style="font-weight:500; font-size:0.8em; opacity:0.75; margin-left:4px;">—</span></div>
                             <div style="height:10px; width:120px; border-radius:2px;
                                         border:1px solid rgba(0,0,0,0.3);
                                         background:linear-gradient(to right,
@@ -516,6 +516,14 @@
                 );
                 const json = await resp.json();
                 lastGridPts = json.data || [];
+                const activeModel = lastGridPts.length ? (lastGridPts[0].model || 'ecmwf') : null;
+                const badge = document.getElementById('modelBadge');
+                if (badge) {
+                    badge.textContent = activeModel ? activeModel.toUpperCase() : '—';
+                    badge.title = activeModel === 'arome'
+                        ? 'AROME ~1.5 km (short-term)'
+                        : 'ECMWF ~9 km';
+                }
                 renderArrows(interpolateDisplayGrid(lastGridPts));
                 renderStats();
             } catch (err) {
@@ -570,7 +578,8 @@
                     `<b>Gust:</b> ${gust.toFixed(1)} kn<br>` +
                     `<b>Wave:</b> ${(pt.wave_height_m || 0).toFixed(1)} m ` +
                     `${(pt.wave_period_s || 0).toFixed(0)} s<br>` +
-                    `<b>CAPE:</b> ${(pt.cape_j_kg || 0).toFixed(0)} J/kg`
+                    `<b>CAPE:</b> ${(pt.cape_j_kg || 0).toFixed(0)} J/kg<br>` +
+                    `<b>Model:</b> ${(document.getElementById('modelBadge')?.textContent) || '—'}`
                 );
                 arrowMarkers.push(m);
             });
@@ -590,7 +599,7 @@
                 btn.style.color = 'var(--text-secondary)';
                 btn.style.borderColor = 'var(--border-color)';
             }
-            document.getElementById('legendTitle').textContent = showGust ? 'Gust (kn)' : 'Wind (kn)';
+            document.getElementById('legendLabel').textContent = showGust ? 'Gust (kn)' : 'Wind (kn)';
             if (lastGridPts.length) renderArrows(interpolateDisplayGrid(lastGridPts));
         }
 

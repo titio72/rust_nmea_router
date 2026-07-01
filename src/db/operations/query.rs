@@ -373,6 +373,17 @@ impl VesselDatabase {
     pub fn fetch_monthly_statistics(&self) -> Result<MonthlyStatistics, AppError> {
         let mut conn = self.pool.get_conn()?;
 
+        let results: Vec<mysql::Row> = conn.query(
+            r"SELECT YEAR(`date`) as year,
+                     MONTH(`date`) as month,
+                     SUM(sailing_distance_nm) as sailing_distance,
+                     SUM(motoring_distance_nm) as motoring_distance
+              FROM heatmap_cache
+              GROUP BY YEAR(`date`), MONTH(`date`)
+              ORDER BY year ASC, month ASC",
+        )?;
+
+        /*
         // Get all trip data grouped by year and month
         let results: Vec<mysql::Row> = conn.query(
             r"SELECT YEAR(start_timestamp) as year,
@@ -384,6 +395,7 @@ impl VesselDatabase {
               GROUP BY YEAR(start_timestamp), MONTH(start_timestamp)
               ORDER BY year ASC, month ASC",
         )?;
+        */
 
         // Build a map of (year, month) -> (sailing_distance, motoring_distance)
         let mut month_data: std::collections::HashMap<(i32, u32), (f64, f64)> =
@@ -1656,18 +1668,29 @@ impl VesselDatabase {
 
         let mut conn = self.pool.get_conn()?;
 
-        // Ensure the cache table exists so existing deployments work without a manual migration
+        // Ensure the cache table exists; add new columns for existing deployments
         conn.query_drop(
             r"CREATE TABLE IF NOT EXISTS heatmap_cache (
                 date DATE NOT NULL COMMENT 'UTC date of the aggregated sailing distance',
-                distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Total sailing distance in nautical miles',
+                distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Total distance in nautical miles',
+                sailing_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Distance with engine off in nautical miles',
+                motoring_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Distance with engine on in nautical miles',
                 PRIMARY KEY (date)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         )?;
+        conn.query_drop(
+            "ALTER TABLE heatmap_cache \
+             ADD COLUMN IF NOT EXISTS sailing_distance_nm DOUBLE NOT NULL DEFAULT 0, \
+             ADD COLUMN IF NOT EXISTS motoring_distance_nm DOUBLE NOT NULL DEFAULT 0",
+        )?;
+
+        // Tuple layout: (total_nm, sailing_nm, motoring_nm)
+        type DayEntry = (f64, f64, f64);
 
         // Step 1: Load already-cached days for [start_dt, cache_end]
         let cached_rows: Vec<mysql::Row> = conn.exec(
-            "SELECT DATE_FORMAT(date, '%Y-%m-%d') as day, distance_nm \
+            "SELECT DATE_FORMAT(date, '%Y-%m-%d') as day, distance_nm, \
+                    sailing_distance_nm, motoring_distance_nm \
              FROM heatmap_cache WHERE date BETWEEN :start AND :end",
             mysql::params! {
                 "start" => start_dt.to_string(),
@@ -1675,15 +1698,23 @@ impl VesselDatabase {
             },
         )?;
 
-        let mut day_distances: std::collections::HashMap<String, f64> =
+        let mut day_map: std::collections::HashMap<String, DayEntry> =
             std::collections::HashMap::new();
         for row in cached_rows {
             let date: String = row.get_opt("day").and_then(|v| v.ok()).unwrap_or_default();
-            let dist: f64 = row
+            let total: f64 = row
                 .get_opt("distance_nm")
                 .and_then(|v| v.ok())
                 .unwrap_or(0.0);
-            day_distances.insert(date, dist);
+            let sail: f64 = row
+                .get_opt("sailing_distance_nm")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let motor: f64 = row
+                .get_opt("motoring_distance_nm")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            day_map.insert(date, (total, sail, motor));
         }
 
         // Step 2: Find the earliest missing date in [start_dt, cache_end].
@@ -1692,7 +1723,7 @@ impl VesselDatabase {
         let mut recompute_from: Option<NaiveDate> = None;
         let mut d = start_dt;
         while d <= cache_end {
-            if !day_distances.contains_key(&d.format("%Y-%m-%d").to_string()) {
+            if !day_map.contains_key(&d.format("%Y-%m-%d").to_string()) {
                 recompute_from = Some(d);
                 break;
             }
@@ -1703,7 +1734,9 @@ impl VesselDatabase {
         if let Some(from_dt) = recompute_from {
             let results: Vec<mysql::Row> = conn.exec(
                 "SELECT DATE_FORMAT(DATE(timestamp), '%Y-%m-%d') as day, \
-                        COALESCE(SUM(COALESCE(total_distance_nm, 0)), 0) as total_distance \
+                        COALESCE(SUM(COALESCE(total_distance_nm, 0)), 0) as total_distance, \
+                        COALESCE(SUM(CASE WHEN engine_on = 0 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as sailing_distance, \
+                        COALESCE(SUM(CASE WHEN engine_on = 1 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as motoring_distance \
                  FROM vessel_status \
                  WHERE timestamp >= :from_dt AND DATE(timestamp) <= :cache_end AND is_moored = 0 \
                  GROUP BY DATE(timestamp)",
@@ -1713,36 +1746,49 @@ impl VesselDatabase {
                 },
             )?;
 
-            let mut computed: std::collections::HashMap<String, f64> =
+            let mut computed: std::collections::HashMap<String, DayEntry> =
                 std::collections::HashMap::new();
             for row in results {
                 let date: String = row.get_opt("day").and_then(|v| v.ok()).unwrap_or_default();
-                let dist: f64 = row
+                let total: f64 = row
                     .get_opt("total_distance")
                     .and_then(|v| v.ok())
                     .unwrap_or(0.0);
-                computed.insert(date, dist);
+                let sail: f64 = row
+                    .get_opt("sailing_distance")
+                    .and_then(|v| v.ok())
+                    .unwrap_or(0.0);
+                let motor: f64 = row
+                    .get_opt("motoring_distance")
+                    .and_then(|v| v.ok())
+                    .unwrap_or(0.0);
+                computed.insert(date, (total, sail, motor));
             }
 
             // Batch INSERT IGNORE all dates in [from_dt, cache_end] — including 0-distance days
             // so they won't be considered missing on the next call.
-            let mut rows: Vec<(String, f64)> = Vec::new();
+            let mut rows: Vec<(String, f64, f64, f64)> = Vec::new();
             let mut d = from_dt;
             while d <= cache_end {
                 let s = d.format("%Y-%m-%d").to_string();
-                let dist = computed.get(&s).copied().unwrap_or(0.0);
-                let dist = if dist.is_finite() { dist } else { 0.0 };
-                rows.push((s.clone(), dist));
+                let (total, sail, motor) = computed.get(&s).copied().unwrap_or((0.0, 0.0, 0.0));
+                let total = if total.is_finite() { total } else { 0.0 };
+                let sail = if sail.is_finite() { sail } else { 0.0 };
+                let motor = if motor.is_finite() { motor } else { 0.0 };
+                rows.push((s.clone(), total, sail, motor));
                 // Don't overwrite dates already loaded from cache — INSERT IGNORE
                 // preserves them in the DB, and entry() preserves them in memory.
-                day_distances.entry(s).or_insert(dist);
+                day_map.entry(s).or_insert((total, sail, motor));
                 d += chrono::Duration::days(1);
             }
 
             if !rows.is_empty() {
                 conn.exec_batch(
-                    "INSERT IGNORE INTO heatmap_cache (date, distance_nm) VALUES (?, ?)",
-                    rows.iter().map(|(date, dist)| (date.as_str(), *dist)),
+                    "INSERT IGNORE INTO heatmap_cache \
+                     (date, distance_nm, sailing_distance_nm, motoring_distance_nm) \
+                     VALUES (?, ?, ?, ?)",
+                    rows.iter()
+                        .map(|(date, total, sail, motor)| (date.as_str(), *total, *sail, *motor)),
                 )?;
             }
         }
@@ -1751,15 +1797,32 @@ impl VesselDatabase {
         if end_dt >= today {
             let today_str = today.format("%Y-%m-%d").to_string();
             let row: Option<mysql::Row> = conn.exec_first(
-                "SELECT COALESCE(SUM(COALESCE(total_distance_nm, 0)), 0) as total_distance \
+                "SELECT \
+                    COALESCE(SUM(COALESCE(total_distance_nm, 0)), 0) as total_distance, \
+                    COALESCE(SUM(CASE WHEN engine_on = 0 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as sailing_distance, \
+                    COALESCE(SUM(CASE WHEN engine_on = 1 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as motoring_distance \
                  FROM vessel_status \
                  WHERE DATE(timestamp) = :today AND is_moored = 0",
                 mysql::params! { "today" => &today_str },
             )?;
-            let dist: f64 = row
-                .and_then(|r| r.get_opt("total_distance").and_then(|v| v.ok()))
-                .unwrap_or(0.0);
-            day_distances.insert(today_str, dist);
+            let (total, sail, motor) = row
+                .map(|r| {
+                    let t: f64 = r
+                        .get_opt("total_distance")
+                        .and_then(|v| v.ok())
+                        .unwrap_or(0.0);
+                    let s: f64 = r
+                        .get_opt("sailing_distance")
+                        .and_then(|v| v.ok())
+                        .unwrap_or(0.0);
+                    let m: f64 = r
+                        .get_opt("motoring_distance")
+                        .and_then(|v| v.ok())
+                        .unwrap_or(0.0);
+                    (t, s, m)
+                })
+                .unwrap_or((0.0, 0.0, 0.0));
+            day_map.insert(today_str, (total, sail, motor));
         }
 
         // Step 5: Assemble sorted result over [start_dt, end_dt]; skip zero-distance days
@@ -1767,11 +1830,13 @@ impl VesselDatabase {
         let mut d = start_dt;
         while d <= end_dt {
             let s = d.format("%Y-%m-%d").to_string();
-            if let Some(&dist) = day_distances.get(&s) {
-                if dist > 0.0 {
+            if let Some(&(total, sail, motor)) = day_map.get(&s) {
+                if total > 0.0 {
                     days.push(HeatmapDay {
                         date: s,
-                        distance_nm: dist,
+                        distance_nm: total,
+                        sailing_distance_nm: sail,
+                        motoring_distance_nm: motor,
                     });
                 }
             }
@@ -1782,8 +1847,12 @@ impl VesselDatabase {
         let mut min_distance: f64 = f64::MAX;
         let mut max_distance: f64 = 0.0;
         let mut total_distance: f64 = 0.0;
+        let mut total_sailing_distance: f64 = 0.0;
+        let mut total_motoring_distance: f64 = 0.0;
         for day in &days {
             total_distance += day.distance_nm;
+            total_sailing_distance += day.sailing_distance_nm;
+            total_motoring_distance += day.motoring_distance_nm;
             min_distance = min_distance.min(day.distance_nm);
             max_distance = max_distance.max(day.distance_nm);
         }
@@ -1796,6 +1865,8 @@ impl VesselDatabase {
             min_distance,
             max_distance,
             total_distance,
+            total_sailing_distance,
+            total_motoring_distance,
         })
     }
 
@@ -1811,6 +1882,8 @@ impl VesselDatabase {
             r"CREATE TABLE IF NOT EXISTS heatmap_cache (
                 date DATE NOT NULL,
                 distance_nm DOUBLE NOT NULL DEFAULT 0,
+                sailing_distance_nm DOUBLE NOT NULL DEFAULT 0,
+                motoring_distance_nm DOUBLE NOT NULL DEFAULT 0,
                 PRIMARY KEY (date)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         )?;
@@ -2325,6 +2398,15 @@ mod tests {
     /// Insert a vessel_status row with a specific UTC timestamp and distance.
     /// Sets is_moored = 0 so the heatmap query picks the row up.
     fn add_heatmap_status(db: &VesselDatabase, ts: SystemTime, distance_nm: f64) {
+        add_heatmap_status_engine(db, ts, distance_nm, EngineStatus::Off);
+    }
+
+    fn add_heatmap_status_engine(
+        db: &VesselDatabase,
+        ts: SystemTime,
+        distance_nm: f64,
+        engine: EngineStatus,
+    ) {
         add_test_vessel_status(
             db,
             ts,
@@ -2335,7 +2417,7 @@ mod tests {
             None,
             None,
             false,
-            EngineStatus::Off,
+            engine,
             distance_nm,
             600_000,
             None,
@@ -2502,6 +2584,43 @@ mod tests {
 
     #[test]
     #[ignore]
+    fn test_heatmap_sailing_motoring_split() {
+        let db = setup_db();
+        clear_heatmap_cache(&db);
+
+        // 2020-06-15: 10 nm sailing (engine off) + 6 nm motoring (engine on)
+        let ts = SystemTime::UNIX_EPOCH + Duration::from_secs(1592179200); // 2020-06-15 00:00:00 UTC
+        add_heatmap_status_engine(&db, ts, 10.0, EngineStatus::Off);
+        add_heatmap_status_engine(&db, ts + Duration::from_secs(3600), 6.0, EngineStatus::On);
+
+        let end = chrono::NaiveDate::from_ymd_opt(2020, 6, 30).unwrap();
+        let result = db.fetch_heatmap(end).expect("fetch_heatmap");
+
+        let day = result
+            .days
+            .iter()
+            .find(|d| d.date == "2020-06-15")
+            .expect("2020-06-15 should appear");
+
+        assert_approx_equal(day.distance_nm, 16.0, 0.001, "total distance");
+        assert_approx_equal(day.sailing_distance_nm, 10.0, 0.001, "sailing distance");
+        assert_approx_equal(day.motoring_distance_nm, 6.0, 0.001, "motoring distance");
+        assert_approx_equal(
+            result.total_sailing_distance,
+            10.0,
+            0.001,
+            "aggregate sailing",
+        );
+        assert_approx_equal(
+            result.total_motoring_distance,
+            6.0,
+            0.001,
+            "aggregate motoring",
+        );
+    }
+
+    #[test]
+    #[ignore]
     fn test_heatmap_gap_triggers_partial_recompute() {
         let db = setup_db();
         clear_heatmap_cache(&db);
@@ -2512,6 +2631,8 @@ mod tests {
             r"CREATE TABLE IF NOT EXISTS heatmap_cache (
                 date DATE NOT NULL,
                 distance_nm DOUBLE NOT NULL DEFAULT 0,
+                sailing_distance_nm DOUBLE NOT NULL DEFAULT 0,
+                motoring_distance_nm DOUBLE NOT NULL DEFAULT 0,
                 PRIMARY KEY (date)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         )

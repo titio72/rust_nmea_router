@@ -5,8 +5,11 @@
 -- CREATE USER 'nmea'@'localhost' IDENTIFIED BY 'nmea';
 -- GRANT ALL PRIVILEGES ON nmea_router.* TO 'nmea'@'localhost';
 -- FLUSH PRIVILEGES;
-
-USE nmea_router;
+--
+-- Apply this file against the target database, e.g.:
+--   mysql -u nmea -pnmea nmea_router < schema.sql
+-- Do NOT hardcode a `USE <db>;` here: it would override the database selected on
+-- the command line and silently apply the schema to the wrong database.
 
 -- ============================================================================
 -- SYSTEM STATUS TABLE
@@ -15,15 +18,15 @@ USE nmea_router;
 -- Uses key-value pairs to track system toggles and settings
 CREATE TABLE IF NOT EXISTS system_status (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    key VARCHAR(255) UNIQUE NOT NULL COMMENT 'Status key (e.g., "tracking_enabled", "metrics_enabled")',
-    value VARCHAR(255) NOT NULL COMMENT 'Status value (e.g., "1", "0", or other values)',
+    status_key VARCHAR(255) UNIQUE NOT NULL COMMENT 'Status key (e.g., "tracking_enabled", "metrics_enabled")',
+    status_value VARCHAR(255) NOT NULL COMMENT 'Status value (e.g., "1", "0", or other values)',
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'Last update time',
-    INDEX idx_key (key)
+    INDEX idx_key (status_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Stores persistent system status and runtime configuration';
 
 -- Initialize default status values:
-INSERT IGNORE INTO system_status (key, value) VALUES 
+INSERT IGNORE INTO system_status (status_key, status_value) VALUES
 ('tracking_enabled', '1'),
 ('metrics_enabled', '1');
 
@@ -106,13 +109,17 @@ COMMENT='Stores vessel trips with sailing vs motoring breakdown';
 -- Today is never cached (still being written); all past days are cached after first computation.
 CREATE TABLE IF NOT EXISTS heatmap_cache (
     date DATE NOT NULL COMMENT 'UTC date of the aggregated sailing distance',
-    distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Total sailing distance for this day in nautical miles (0 if no sailing)',
+    distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Total distance (sailing + motoring) in nautical miles',
+    sailing_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Distance with engine off (engine_on=0) in nautical miles',
+    motoring_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Distance with engine on (engine_on=1) in nautical miles',
     PRIMARY KEY (date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Per-day heatmap distance cache; recomputed only for missing past days and today';
 
 -- For existing databases, run:
--- CREATE TABLE IF NOT EXISTS heatmap_cache (date DATE NOT NULL, distance_nm DOUBLE NOT NULL DEFAULT 0, PRIMARY KEY (date)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- ALTER TABLE heatmap_cache
+--     ADD COLUMN IF NOT EXISTS sailing_distance_nm DOUBLE NOT NULL DEFAULT 0,
+--     ADD COLUMN IF NOT EXISTS motoring_distance_nm DOUBLE NOT NULL DEFAULT 0;
 
 -- Pre-computed leg breakdown per trip. Invalidated on trip mutation (trim/delete) and repopulated
 -- on the next fetch. Only closed trips (end_timestamp > 24h ago) are cached.
@@ -240,6 +247,7 @@ COMMENT='Bounding boxes defining global forecast areas';
 CREATE TABLE IF NOT EXISTS forecast_fetch (
     id              INT AUTO_INCREMENT PRIMARY KEY,
     area_id         INT NOT NULL,
+    model           VARCHAR(16) NOT NULL DEFAULT 'ecmwf',
     lat             DECIMAL(9,6) NOT NULL,
     lon             DECIMAL(9,6) NOT NULL,
     fetched_at      DATETIME NOT NULL,
@@ -249,7 +257,7 @@ CREATE TABLE IF NOT EXISTS forecast_fetch (
     INDEX idx_fetched_at (fetched_at),
     CONSTRAINT fk_forecast_fetch_area FOREIGN KEY (area_id) REFERENCES forecast_area(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-COMMENT='One record per grid point per fetch operation, tagged with area';
+COMMENT='One record per grid point per fetch operation, tagged with area and model';
 
 -- ============================================================================
 -- FORECAST HOURLY TABLE

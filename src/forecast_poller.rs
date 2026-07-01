@@ -87,16 +87,26 @@ pub async fn run_poller(
                     }
                     let fetched_at = Utc::now();
                     let db = db.read().unwrap_or_else(|e| e.into_inner());
+                    let mut stored = 0usize;
                     for f in &forecasts {
-                        if let Err(e) = db.insert_forecast(
-                            area.id, f.lat, f.lon, fetched_at, &f.hourly,
+                        match db.insert_forecast(
+                            area.id, &f.model, f.lat, f.lon, fetched_at, &f.hourly,
                         ) {
-                            warn!(area_id = area.id, error = %e, "Failed to store forecast point");
+                            Ok(()) => stored += 1,
+                            Err(e) => warn!(area_id = area.id, error = %e, "Failed to store forecast point"),
+                        }
+                    }
+                    // Retain only this latest fetch per grid point (no history on the RPi).
+                    if stored > 0 {
+                        match db.prune_old_forecasts(area.id, fetched_at) {
+                            Ok(removed) => info!(area_id = area.id, removed, "Pruned old forecast fetches"),
+                            Err(e) => warn!(area_id = area.id, error = %e, "Failed to prune old forecasts"),
                         }
                     }
                     info!(
                         area_id = area.id,
                         grid_points = forecasts.len(),
+                        stored,
                         "Area forecast stored"
                     );
                 }

@@ -183,6 +183,8 @@ pub struct NavAnalysisRow {
 pub struct HeatmapDay {
     pub date: String,
     pub distance_nm: f64,
+    pub sailing_distance_nm: f64,
+    pub motoring_distance_nm: f64,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -191,6 +193,8 @@ pub struct HeatmapData {
     pub min_distance: f64,
     pub max_distance: f64,
     pub total_distance: f64,
+    pub total_sailing_distance: f64,
+    pub total_motoring_distance: f64,
 }
 
 #[derive(Debug, serde::Serialize)]

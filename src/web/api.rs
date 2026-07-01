@@ -1593,12 +1593,21 @@ pub async fn refresh_forecast(
             Ok(forecasts) => {
                 let fetched_at = chrono::Utc::now();
                 let db = state.db();
+                let mut stored = 0usize;
                 for f in &forecasts {
-                    if let Err(e) = db.insert_forecast(
-                        area.id, f.lat, f.lon, fetched_at, &f.hourly,
+                    match db.insert_forecast(
+                        area.id, &f.model, f.lat, f.lon, fetched_at, &f.hourly,
                     ) {
+                        Ok(()) => stored += 1,
+                        Err(e) => warn!(area_id = area.id, error = %e,
+                              "refresh_forecast: failed to store point"),
+                    }
+                }
+                // Retain only this latest fetch per grid point (no history on the RPi).
+                if stored > 0 {
+                    if let Err(e) = db.prune_old_forecasts(area.id, fetched_at) {
                         warn!(area_id = area.id, error = %e,
-                              "refresh_forecast: failed to store point");
+                              "refresh_forecast: failed to prune old forecasts");
                     }
                 }
                 total_points += forecasts.len();

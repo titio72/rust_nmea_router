@@ -29,6 +29,13 @@ class TripCard extends HTMLElement {
             ? (trip_data.sailing_distance_nm / trip_data.total_distance_nm * 100)
             : 0;
 
+        const rating_emoji = trip_data.total_distance_nm === 0 ? ''
+            : sailing_percent >= 90 ? '🥳'
+            : sailing_percent >= 75 ? '😊'
+            : sailing_percent >= 50 ? '😐'
+            : sailing_percent >= 30 ? '😢'
+            : '😠';
+
         const motoring_percent = trip_data.total_distance_nm > 0
             ? (trip_data.motoring_distance_nm / trip_data.total_distance_nm * 100)
             : 0;
@@ -133,8 +140,9 @@ class TripCard extends HTMLElement {
                     </div>
                 </div>
 
-                <div class="trip-line">
-                    <div style="width: 100%">
+                <div class="trip-line" style="align-items:center;gap:10px;">
+                    ${rating_emoji ? `<span style="font-size:28px;line-height:1;flex-shrink:0;" title="Sailing: ${sailing_percent.toFixed(1)}%">${rating_emoji}</span>` : ''}
+                    <div style="flex:1;">
                         <voyage-bar
                             sailing-distance="${trip_data.sailing_distance_nm.toFixed(1)}"
                             motoring-distance="${trip_data.motoring_distance_nm.toFixed(1)}"
