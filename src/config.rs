@@ -618,13 +618,17 @@ impl Config {
     }
 
     /// Apply environment variable overrides after JSON loading.
-    /// Supports: DATABASE_URL, PORT, AUTH_PASSWORD, SECURE_COOKIES, LOG_LEVEL
+    /// Supports: DATABASE_URL, MYSQL_URL, MYSQL_PUBLIC_URL, PORT, AUTH_PASSWORD, SECURE_COOKIES, LOG_LEVEL
     pub fn apply_env_overrides(&mut self) {
-        if let Ok(url) = std::env::var("DATABASE_URL") {
+        let db_url = std::env::var("DATABASE_URL")
+            .or_else(|_| std::env::var("MYSQL_URL"))
+            .or_else(|_| std::env::var("MYSQL_PUBLIC_URL"))
+            .ok();
+        if let Some(url) = db_url {
             if let Some(conn) = Self::parse_database_url(&url) {
                 self.database.connection = conn;
             } else {
-                warn!("DATABASE_URL is set but could not be parsed, ignoring");
+                warn!(raw_url = %url, "DATABASE_URL/MYSQL_URL is set but could not be parsed, ignoring");
             }
         }
         if let Ok(port_str) = std::env::var("PORT") {
@@ -646,20 +650,26 @@ impl Config {
         }
     }
 
-    /// Parse a mysql://user:pass@host:port/dbname URL into a DatabaseConnectionConfig.
+    /// Parse a mysql://user:pass@host:port/dbname[?params] URL into a DatabaseConnectionConfig.
+    /// Accepts mysql://, mysql2://, and mysqls:// prefixes. Query parameters are ignored.
     fn parse_database_url(url: &str) -> Option<DatabaseConnectionConfig> {
-        let url = url.strip_prefix("mysql://")?;
-        let (userinfo, hostinfo) = url.split_once('@')?;
+        let rest = url
+            .strip_prefix("mysql2://")
+            .or_else(|| url.strip_prefix("mysqls://"))
+            .or_else(|| url.strip_prefix("mysql://"))?;
+        let (userinfo, hostinfo) = rest.split_once('@')?;
         let (username, password) = userinfo.split_once(':')?;
-        let (hostport, database_name) = hostinfo.split_once('/')?;
+        let (hostport, rest) = hostinfo.split_once('/')?;
         let (host, port_str) = hostport.split_once(':')?;
         let port = port_str.parse::<u16>().ok()?;
+        // Strip query parameters (e.g. ?sslaccept=strict appended by Railway)
+        let database_name = rest.split('?').next().unwrap_or(rest).to_string();
         Some(DatabaseConnectionConfig {
             host: host.to_string(),
             port,
             username: username.to_string(),
             password: password.to_string(),
-            database_name: database_name.to_string(),
+            database_name,
             pool_min: DatabaseConnectionConfig::default_pool_min(),
             pool_max: DatabaseConnectionConfig::default_pool_max(),
         })
