@@ -1113,17 +1113,17 @@ impl VesselDatabase {
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         )?;
         // Best-effort migrations for columns added in later versions.
-        // Silently ignored on read-only DB users (trips_viewer).
+        // Silently ignored if already present (MySQL 1060) or on read-only DB users.
         for sql in &[
-            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS start_lat DOUBLE NULL",
-            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS start_lon DOUBLE NULL",
-            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS end_lat DOUBLE NULL",
-            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS end_lon DOUBLE NULL",
-            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_start_timestamp VARCHAR(30) NULL",
-            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_end_timestamp VARCHAR(30) NULL",
-            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_distance_nm DOUBLE NOT NULL DEFAULT 0",
-            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0",
-            "ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_detection_method VARCHAR(20) NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN start_lat DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN start_lon DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN end_lat DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN end_lon DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN nav_start_timestamp VARCHAR(30) NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN nav_end_timestamp VARCHAR(30) NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN nav_distance_nm DOUBLE NOT NULL DEFAULT 0",
+            "ALTER TABLE trip_legs_cache ADD COLUMN nav_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0",
+            "ALTER TABLE trip_legs_cache ADD COLUMN nav_detection_method VARCHAR(20) NULL",
         ] {
             let _ = conn.query_drop(sql);
         }
@@ -1678,11 +1678,12 @@ impl VesselDatabase {
                 PRIMARY KEY (date)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         )?;
-        conn.query_drop(
+        // Best-effort migration for columns added in later versions; ignored if already present.
+        let _ = conn.query_drop(
             "ALTER TABLE heatmap_cache \
-             ADD COLUMN IF NOT EXISTS sailing_distance_nm DOUBLE NOT NULL DEFAULT 0, \
-             ADD COLUMN IF NOT EXISTS motoring_distance_nm DOUBLE NOT NULL DEFAULT 0",
-        )?;
+             ADD COLUMN sailing_distance_nm DOUBLE NOT NULL DEFAULT 0, \
+             ADD COLUMN motoring_distance_nm DOUBLE NOT NULL DEFAULT 0",
+        );
 
         // Tuple layout: (total_nm, sailing_nm, motoring_nm)
         type DayEntry = (f64, f64, f64);
