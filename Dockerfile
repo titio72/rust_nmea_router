@@ -1,7 +1,7 @@
 # Stage 1: builder
 FROM rust:1.88-slim AS builder
 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y pkg-config libssl-dev perl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY . .
@@ -11,7 +11,7 @@ RUN cargo build --release --bin nmea_router
 # Stage 2: runtime
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y perl libssl3 ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y libssl3 ca-certificates && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/trips_viewer
 
