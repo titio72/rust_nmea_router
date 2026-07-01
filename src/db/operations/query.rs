@@ -1734,13 +1734,13 @@ impl VesselDatabase {
         // Step 3: Recompute from the first missing date to cache_end using a simple range query
         if let Some(from_dt) = recompute_from {
             let results: Vec<mysql::Row> = conn.exec(
-                "SELECT DATE_FORMAT(DATE(timestamp), '%Y-%m-%d') as day, \
+                "SELECT DATE_FORMAT(timestamp, '%Y-%m-%d') as day, \
                         COALESCE(SUM(COALESCE(total_distance_nm, 0)), 0) as total_distance, \
                         COALESCE(SUM(CASE WHEN engine_on = 0 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as sailing_distance, \
                         COALESCE(SUM(CASE WHEN engine_on = 1 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as motoring_distance \
                  FROM vessel_status \
                  WHERE timestamp >= :from_dt AND DATE(timestamp) <= :cache_end AND is_moored = 0 \
-                 GROUP BY DATE(timestamp)",
+                 GROUP BY DATE_FORMAT(timestamp, '%Y-%m-%d')",
                 mysql::params! {
                     "from_dt" => from_dt.to_string(),
                     "cache_end" => cache_end.to_string(),
