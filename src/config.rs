@@ -618,7 +618,8 @@ impl Config {
     }
 
     /// Apply environment variable overrides after JSON loading.
-    /// Supports: DATABASE_URL, MYSQL_URL, MYSQL_PUBLIC_URL, PORT, AUTH_PASSWORD, SECURE_COOKIES, LOG_LEVEL
+    /// Supports: DATABASE_URL, MYSQL_URL, MYSQL_PUBLIC_URL, MYSQLHOST/PORT/USER/PASSWORD/DATABASE,
+    ///           PORT, AUTH_PASSWORD, SECURE_COOKIES, LOG_LEVEL
     pub fn apply_env_overrides(&mut self) {
         let db_url = std::env::var("DATABASE_URL")
             .or_else(|_| std::env::var("MYSQL_URL"))
@@ -626,10 +627,31 @@ impl Config {
             .ok();
         if let Some(url) = db_url {
             if let Some(conn) = Self::parse_database_url(&url) {
+                eprintln!("[config] DB host from URL env var: {}:{}", conn.host, conn.port);
                 self.database.connection = conn;
             } else {
-                warn!(raw_url = %url, "DATABASE_URL/MYSQL_URL is set but could not be parsed, ignoring");
+                eprintln!("[config] WARNING: DB URL env var set but could not be parsed: {}", url);
             }
+        } else if let (Ok(host), Ok(port_str), Ok(user), Ok(pass), Ok(db)) = (
+            std::env::var("MYSQLHOST"),
+            std::env::var("MYSQLPORT"),
+            std::env::var("MYSQLUSER"),
+            std::env::var("MYSQLPASSWORD"),
+            std::env::var("MYSQLDATABASE"),
+        ) {
+            match port_str.parse::<u16>() {
+                Ok(port) => {
+                    eprintln!("[config] DB host from MYSQL* env vars: {}:{}", host, port);
+                    self.database.connection.host = host;
+                    self.database.connection.port = port;
+                    self.database.connection.username = user;
+                    self.database.connection.password = pass;
+                    self.database.connection.database_name = db;
+                }
+                Err(_) => eprintln!("[config] WARNING: MYSQLPORT '{}' is not a valid port, ignoring MYSQL* vars", port_str),
+            }
+        } else {
+            eprintln!("[config] WARNING: no DB env vars found (DATABASE_URL / MYSQL_URL / MYSQLHOST); using config file values ({}:{})", self.database.connection.host, self.database.connection.port);
         }
         if let Ok(port_str) = std::env::var("PORT") {
             match port_str.parse::<u16>() {
