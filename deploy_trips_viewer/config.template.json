@@ -38,7 +38,7 @@
   "sync": {
     "enabled": false,
     "target_url": "",
-    "api_key": "SYNC_API_KEY",
+    "api_key": null,
     "timeout_secs": 120
   }
 }

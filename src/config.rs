@@ -670,6 +670,17 @@ impl Config {
                 self.logging.level = level;
             }
         }
+        if let Ok(key) = std::env::var("SYNC_API_KEY") {
+            self.sync.api_key = if key.is_empty() { None } else { Some(key) };
+        }
+        if let Ok(val) = std::env::var("SYNC_ENABLED") {
+            self.sync.enabled = matches!(val.to_lowercase().as_str(), "true" | "1" | "yes");
+        }
+        if let Ok(url) = std::env::var("SYNC_TARGET_URL") {
+            if !url.is_empty() {
+                self.sync.target_url = url;
+            }
+        }
     }
 
     /// Parse a mysql://user:pass@host:port/dbname[?params] URL into a DatabaseConnectionConfig.

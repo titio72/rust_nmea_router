@@ -191,6 +191,47 @@ The application automatically validates the configuration on startup and applies
 
 All validation errors are logged with warnings but do not prevent startup (except for invalid CAN interface names).
 
+### Environment Variable Overrides
+
+Any config file value can be overridden at runtime via environment variables. This is the recommended approach for cloud deployments (e.g. Railway) where editing files after deployment is impractical.
+
+Environment variables are applied **after** the config file is loaded, so the file acts as the baseline and env vars take precedence.
+
+#### Database
+
+| Variable | Config equivalent | Notes |
+|---|---|---|
+| `DATABASE_URL` | `database.connection.*` | Full URL: `mysql://user:pass@host:port/db` — also accepted: `mysql2://`, `mysqls://` |
+| `MYSQL_URL` | `database.connection.*` | Alias for `DATABASE_URL` (tried second) |
+| `MYSQL_PUBLIC_URL` | `database.connection.*` | Alias for `DATABASE_URL` (tried third) |
+| `MYSQLHOST` | `database.connection.host` | Used only when no URL variable is set |
+| `MYSQLPORT` | `database.connection.port` | Used only when no URL variable is set |
+| `MYSQLUSER` | `database.connection.username` | Used only when no URL variable is set |
+| `MYSQLPASSWORD` | `database.connection.password` | Used only when no URL variable is set |
+| `MYSQLDATABASE` | `database.connection.database_name` | Used only when no URL variable is set |
+
+#### Web Server
+
+| Variable | Config equivalent | Notes |
+|---|---|---|
+| `PORT` | `web.port` | Listening port (Railway injects this automatically) |
+| `AUTH_PASSWORD` | `web.auth_password` | Empty string disables authentication |
+| `SECURE_COOKIES` | `web.secure_cookies` | Accepts `true`, `1`, `yes` |
+
+#### Sync
+
+| Variable | Config equivalent | Notes |
+|---|---|---|
+| `SYNC_API_KEY` | `sync.api_key` | Shared secret for push sync authentication |
+| `SYNC_ENABLED` | `sync.enabled` | Accepts `true`, `1`, `yes` |
+| `SYNC_TARGET_URL` | `sync.target_url` | URL of the remote trips-viewer instance |
+
+#### Logging
+
+| Variable | Config equivalent | Notes |
+|---|---|---|
+| `LOG_LEVEL` | `logging.level` | e.g. `info`, `debug`, `warn` |
+
 ## Usage
 
 ### Command Line Options

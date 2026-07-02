@@ -6,13 +6,7 @@ RUN apt-get update && apt-get install -y pkg-config libssl-dev perl make curl &&
 WORKDIR /app
 COPY . .
 
-RUN mkdir -p static/libs && \
-    curl -fsSL "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css"                                          -o static/libs/leaflet.min.css && \
-    curl -fsSL "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"                                           -o static/libs/leaflet.min.js && \
-    curl -fsSL "https://cdn.jsdelivr.net/npm/leaflet.fullscreen@4.0.0/Control.FullScreen.css"                              -o static/libs/leaflet.fullscreen.css && \
-    curl -fsSL "https://cdn.jsdelivr.net/npm/leaflet.fullscreen@4.0.0/Control.FullScreen.js"                               -o static/libs/leaflet.fullscreen.js && \
-    curl -fsSL "https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"                                            -o static/libs/chart.min.js && \
-    curl -fsSL "https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"  -o static/libs/chartjs-adapter-date-fns.bundle.min.js
+RUN bash download_libs.sh static/libs
 
 RUN cargo build --release --bin nmea_router
 

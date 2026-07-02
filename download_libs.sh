@@ -44,3 +44,6 @@ download "leaflet.fullscreen.js" \
 
 download "leaflet.fullscreen.css" \
     "https://cdn.jsdelivr.net/npm/leaflet.fullscreen@3.0.2/Control.FullScreen.css"
+
+download "icon-fullscreen.svg" \
+    "https://cdn.jsdelivr.net/npm/leaflet.fullscreen@3.0.2/icon-fullscreen.svg"
