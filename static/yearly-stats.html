@@ -169,6 +169,10 @@
             </div>
 
             <div class="chart-wrapper">
+                <canvas id="monthlyChart"></canvas>
+            </div>
+
+            <div class="chart-wrapper">
                 <canvas id="accumulatedChart"></canvas>
             </div>
 
@@ -210,6 +214,7 @@
         };
 
         let yearlyChart = null;
+        let monthlyChart = null;
         let accumulatedChart = null;
 
         // Override toggleTheme to update charts when theme changes
@@ -219,6 +224,9 @@
             // Recreate chart with new theme
             if (yearlyChart) {
                 updateChart();
+            }
+            if (monthlyChart) {
+                updateMonthlyChart();
             }
             if (accumulatedChart) {
                 updateAccumulatedChart();
@@ -288,7 +296,10 @@
 
             // Create chart
             createChart(yearlyData);
-            
+
+            // Create monthly bar chart (last 24 months)
+            createMonthlyChart(data.months);
+
             // Create accumulated chart
             createAccumulatedChart(data.months);
 
@@ -339,6 +350,121 @@
                     <td class="${ytdClass}">${ytdDisplay}</td>`;
                 tbody.appendChild(tr);
             });
+        }
+
+        function createMonthlyChart(monthlyData) {
+            const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+            const now = new Date();
+            const cutoff = new Date(now.getFullYear(), now.getMonth() - 35, 1);
+
+            const recent = monthlyData
+                .filter(m => {
+                    const d = new Date(m.year, m.month - 1, 1);
+                    return d >= cutoff && d <= now;
+                })
+                .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month);
+
+            const labels = recent.map(m => `${monthNames[m.month - 1]} ${m.year}`);
+            const sailingData = recent.map(m => m.sailing_distance_nm);
+            const motoringData = recent.map(m => m.motoring_distance_nm);
+
+            const colors = getChartColors();
+            const ctx = document.getElementById('monthlyChart').getContext('2d');
+
+            if (monthlyChart) {
+                monthlyChart.destroy();
+            }
+
+            monthlyChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Sailing',
+                            data: sailingData,
+                            backgroundColor: colors.sailing,
+                            borderColor: colors.sailing,
+                            borderWidth: 1
+                        },
+                        {
+                            label: 'Motoring',
+                            data: motoringData,
+                            backgroundColor: colors.motoring,
+                            borderColor: colors.motoring,
+                            borderWidth: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            labels: { color: colors.text }
+                        },
+                        tooltip: {
+                            backgroundColor: colors.bg === '#0a1628' ? 'rgba(15, 31, 60, 0.9)' : 'rgba(255, 255, 255, 0.9)',
+                            titleColor: colors.text,
+                            bodyColor: colors.text,
+                            borderColor: colors.border,
+                            borderWidth: 1,
+                            callbacks: {
+                                label: function(context) {
+                                    return context.dataset.label + ': ' + Math.round(context.parsed.y) + ' nm';
+                                },
+                                afterLabel: function(context) {
+                                    if (context.datasetIndex === 1) {
+                                        const total = context.chart.data.datasets[0].data[context.dataIndex] +
+                                                      context.chart.data.datasets[1].data[context.dataIndex];
+                                        return 'Total: ' + Math.round(total) + ' nm';
+                                    }
+                                }
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Monthly Distance – Last 36 Months',
+                            color: colors.text
+                        }
+                    },
+                    scales: {
+                        x: {
+                            stacked: true,
+                            ticks: { color: colors.text, maxRotation: 45, minRotation: 45 },
+                            grid: { color: colors.border }
+                        },
+                        y: {
+                            stacked: true,
+                            beginAtZero: true,
+                            ticks: {
+                                color: colors.text,
+                                callback: function(value) { return value + ' nm'; }
+                            },
+                            grid: { color: colors.border }
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateMonthlyChart() {
+            if (monthlyChart) {
+                const colors = getChartColors();
+                monthlyChart.options.scales.x.ticks.color = colors.text;
+                monthlyChart.options.scales.x.grid.color = colors.border;
+                monthlyChart.options.scales.y.ticks.color = colors.text;
+                monthlyChart.options.scales.y.grid.color = colors.border;
+                monthlyChart.options.plugins.legend.labels.color = colors.text;
+                monthlyChart.options.plugins.title.color = colors.text;
+                monthlyChart.data.datasets[0].backgroundColor = colors.sailing;
+                monthlyChart.data.datasets[0].borderColor = colors.sailing;
+                monthlyChart.data.datasets[1].backgroundColor = colors.motoring;
+                monthlyChart.data.datasets[1].borderColor = colors.motoring;
+                monthlyChart.update();
+            }
         }
 
         function createAccumulatedChart(monthlyData) {
