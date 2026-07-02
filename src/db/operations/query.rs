@@ -194,6 +194,7 @@ impl VesselDatabase {
                      DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
                      total_distance_sailed, total_distance_motoring,
                      (total_distance_sailed + total_distance_motoring) as total_distance,
+                     (total_time_sailing + total_time_motoring + total_time_moored) as total_time,
                      total_time_sailing, total_time_motoring, total_time_moored, uuid
               FROM trips
               WHERE id = :trip_id",
@@ -321,6 +322,7 @@ impl VesselDatabase {
                      DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
                      total_distance_sailed, total_distance_motoring,
                      (total_distance_sailed + total_distance_motoring) as total_distance,
+                     (total_time_sailing + total_time_motoring + total_time_moored) as total_time,
                      total_time_sailing, total_time_motoring, total_time_moored, uuid
               FROM trips
               WHERE uuid = :uuid",
