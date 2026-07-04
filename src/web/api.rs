@@ -44,6 +44,7 @@ pub struct AppState {
     pub ais_cache: Arc<std::sync::Mutex<AisTargetCache>>,
     pub poller_status: Arc<std::sync::Mutex<crate::forecast_poller::ForecastPollerStatus>>,
     pub polars: Option<std::sync::Arc<crate::polars::PolarTable>>,
+    pub land_mask: Option<std::sync::Arc<crate::land_mask::LandMask>>,
 }
 
 impl AppState {
@@ -54,6 +55,10 @@ impl AppState {
 
     pub fn polars(&self) -> Option<&crate::polars::PolarTable> {
         self.polars.as_deref()
+    }
+
+    pub fn land_mask(&self) -> Option<&crate::land_mask::LandMask> {
+        self.land_mask.as_deref()
     }
 }
 
@@ -1730,11 +1735,13 @@ pub async fn get_optimal_route(
         params.sail_weight_kn,
         polars,
         &fetches,
+        state.land_mask(),
     );
 
     // Derive speed_kn and twa_deg for each step from distance/time and wind forecast.
     // First point is the departure — no incoming step, so speed/twa are None.
     // reached_destination is not surfaced — callers receive the best-effort route regardless.
+    let parsed_fetches = crate::forecast::parse_fetches(&fetches);
     let mut route_points: Vec<crate::forecast::RouteTrackPoint> = Vec::with_capacity(result.track.len());
     for (i, &(lat, lon, time)) in result.track.iter().enumerate() {
         if i == 0 {
@@ -1746,8 +1753,8 @@ pub async fn get_optimal_route(
         let dist_nm = crate::utilities::haversine_distance_nm(prev_lat, prev_lon, lat, lon);
         let speed_kn = if step_hours > 0.0 { dist_nm / step_hours } else { 0.0 };
         let bearing = crate::utilities::haversine_heading(prev_lat, prev_lon, lat, lon);
-        let twa_deg = crate::forecast::nearest_forecast_wind(&fetches, prev_lat, prev_lon, prev_time)
-            .filter(|(ws, _)| *ws >= 5.0)
+        let twa_deg = crate::forecast::nearest_forecast_wind(&parsed_fetches, prev_lat, prev_lon, prev_time)
+            .filter(|(ws, _)| *ws > 0.0)
             .and_then(|(ws, wd)| {
                 let twa = crate::forecast::compute_twa(bearing, wd);
                 polars.boat_speed(twa, ws)
@@ -1888,6 +1895,7 @@ mod tests {
             ais_cache,
             poller_status: Arc::new(std::sync::Mutex::new(crate::forecast_poller::ForecastPollerStatus::default())),
             polars: None,
+            land_mask: None,
         };
         create_api_router(state)
     }
@@ -2860,6 +2868,7 @@ mod tests {
             ais_cache: crate::ais_target_cache::new_ais_cache(),
             poller_status: Arc::new(std::sync::Mutex::new(crate::forecast_poller::ForecastPollerStatus::default())),
             polars: None,
+            land_mask: None,
         };
         (create_api_router(state), db)
     }
@@ -2882,6 +2891,7 @@ mod tests {
                 crate::forecast_poller::ForecastPollerStatus::default(),
             )),
             polars,
+            land_mask: None,
         };
         (create_api_router(state), db)
     }
@@ -3589,6 +3599,7 @@ mod tests {
             ais_cache: crate::ais_target_cache::new_ais_cache(),
             poller_status: Arc::new(std::sync::Mutex::new(crate::forecast_poller::ForecastPollerStatus::default())),
             polars: None,
+            land_mask: None,
         };
         create_api_router(state)
     }

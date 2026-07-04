@@ -756,6 +756,9 @@
             const minSail    = parseFloat(document.getElementById('minSailInput').value);
             if (!routeDone || routeWaypoints.length < 2 || !dep || !(speed > 0)) return;
 
+            drawRouteLine([]);
+            lastRouteOverlay = [];
+
             const departure      = dep.slice(0, 16) + ':00Z';
             const waypointsParam = routeWaypoints
                 .map(p => `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`)
@@ -794,6 +797,9 @@
             const dep   = document.getElementById('depInput').value;
             const speed = parseFloat(document.getElementById('speedInput').value);
             if (!routeDone || routeWaypoints.length < 2 || !dep || !(speed > 0)) return;
+
+            drawRouteLine([]);
+            lastRouteOverlay = [];
 
             btn.disabled = true;
             btn.textContent = '⚡ Optimizing…';
@@ -867,8 +873,22 @@
                         dashArray: isMotoring ? '8 7' : null
                     }
                 ).addTo(planMap);
-                seg.bindPopup(buildSegmentPopup(p));
+                seg.bindPopup(buildSegmentPopup(pNext));
                 routeSegments.push(seg);
+            }
+
+            // Mark each discrete step point (30 min apart — the routing/forecast granularity)
+            // where one segment gives way to the next.
+            for (const p of pts) {
+                const dot = L.circleMarker([p.lat, p.lon], {
+                    radius: 3,
+                    weight: 1,
+                    color: '#fff',
+                    fillColor: windColor(p.wind_speed_kn || 0),
+                    fillOpacity: 1
+                }).addTo(planMap);
+                dot.bindPopup(buildSegmentPopup(p));
+                routeSegments.push(dot);
             }
 
             // ETA tooltip at destination

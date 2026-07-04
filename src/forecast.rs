@@ -98,6 +98,38 @@ impl<T> OneOrMany<T> {
 
 const MAX_DISTANCE_NM: f64 = 25.0;
 
+// ── Pre-parsed forecast lookup ────────────────────────────────────────────────
+
+/// A `FetchWithHourly` with its hourly timestamps parsed once. Wind lookups run many times
+/// (up to tens of thousands per isochrone route) against the same, unchanging fetch data —
+/// re-parsing each `ForecastHourlyPoint.timestamp` string on every lookup dominates isochrone
+/// runtime. Callers should `parse_fetches()` once per request and reuse the result.
+pub(crate) struct ParsedFetch<'a> {
+    lat: f64,
+    lon: f64,
+    model: &'a str,
+    hourly: Vec<(DateTime<Utc>, &'a ForecastHourlyPoint)>,
+}
+
+pub(crate) fn parse_fetches(fetches: &[FetchWithHourly]) -> Vec<ParsedFetch<'_>> {
+    fetches
+        .iter()
+        .map(|f| ParsedFetch {
+            lat: f.lat,
+            lon: f.lon,
+            model: &f.model,
+            hourly: f.hourly
+                .iter()
+                .filter_map(|p| {
+                    DateTime::parse_from_rfc3339(&p.timestamp)
+                        .ok()
+                        .map(|t| (t.with_timezone(&Utc), p))
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 // ── Public functions ──────────────────────────────────────────────────────────
 
 /// Normalise true wind angle to 0–180°.
@@ -291,7 +323,7 @@ pub fn parse_waypoints(s: &str) -> Result<Vec<(f64, f64)>, String> {
 }
 
 pub(crate) fn nearest_forecast_wind(
-    fetches: &[FetchWithHourly],
+    fetches: &[ParsedFetch],
     lat: f64,
     lon: f64,
     time: DateTime<Utc>,
@@ -300,6 +332,10 @@ pub(crate) fn nearest_forecast_wind(
         fetches
             .iter()
             .filter(|f| f.model == model)
+            // Cheap distance check before the per-point timestamp scan, so grid points far
+            // outside interpolation range (interpolate_idw's own MAX_DISTANCE_NM cutoff below)
+            // never pay for a nearest_hourly lookup they'd be discarded after anyway.
+            .filter(|f| haversine_distance_nm(lat, lon, f.lat, f.lon) <= MAX_DISTANCE_NM)
             .filter_map(|f| nearest_hourly(&f.hourly, time).map(|pt| (f.lat, f.lon, pt)))
             .collect()
     };
@@ -330,6 +366,7 @@ pub fn generate_route_track(
         return vec![];
     }
     let efficiency = polar_efficiency.clamp(0.01, 1.0);
+    let parsed = parse_fetches(fetches);
 
     let mut track: Vec<RouteTrackPoint> = Vec::new();
     let mut leg_start_time = departure;
@@ -353,7 +390,7 @@ pub fn generate_route_track(
 
             let bearing = crate::utilities::haversine_heading(pos.0, pos.1, to_lat, to_lon);
 
-            let (speed_kn, twa) = match (nearest_forecast_wind(fetches, pos.0, pos.1, t), polars) {
+            let (speed_kn, twa) = match (nearest_forecast_wind(&parsed, pos.0, pos.1, t), polars) {
                 (Some((wind_spd, wind_dir)), Some(p)) if wind_spd > 0.0 => {
                     let twa = compute_twa(bearing, wind_dir);
                     match p.boat_speed(twa, wind_spd).filter(|&s| s > 0.0) {
@@ -372,7 +409,7 @@ pub fn generate_route_track(
             };
 
             let hours_to_wp = remaining_nm / speed_kn;
-            let step_hours = hours_to_wp.min(1.0);
+            let step_hours = hours_to_wp.min(0.5);
             let dist_nm = speed_kn * step_hours;
 
             pos = crate::utilities::advance_position(pos.0, pos.1, bearing, dist_nm);
@@ -380,7 +417,7 @@ pub fn generate_route_track(
 
             track.push(RouteTrackPoint { lat: pos.0, lon: pos.1, time: t, speed_kn: Some(speed_kn), twa_deg: twa });
 
-            if hours_to_wp <= 1.0 {
+            if hours_to_wp <= 0.5 {
                 break;
             }
         }
@@ -399,13 +436,15 @@ pub fn compute_route_overlay(
     track: &[RouteTrackPoint],
     fetches: &[FetchWithHourly],
 ) -> Vec<RouteOverlayPoint> {
+    let parsed = parse_fetches(fetches);
     track
         .iter()
         .filter_map(|pt| {
             let collect = |model: &str| -> Vec<(f64, f64, ForecastHourlyPoint)> {
-                fetches
+                parsed
                     .iter()
                     .filter(|f| f.model == model)
+                    .filter(|f| haversine_distance_nm(pt.lat, pt.lon, f.lat, f.lon) <= MAX_DISTANCE_NM)
                     .filter_map(|f| nearest_hourly(&f.hourly, pt.time).map(|p| (f.lat, f.lon, p)))
                     .collect()
             };
@@ -431,20 +470,12 @@ pub fn compute_route_overlay(
         .collect()
 }
 
-fn nearest_hourly(hourly: &[ForecastHourlyPoint], ts: DateTime<Utc>) -> Option<ForecastHourlyPoint> {
+fn nearest_hourly(hourly: &[(DateTime<Utc>, &ForecastHourlyPoint)], ts: DateTime<Utc>) -> Option<ForecastHourlyPoint> {
     hourly
         .iter()
-        .min_by_key(|p| {
-            DateTime::parse_from_rfc3339(&p.timestamp)
-                .map(|t| (t.with_timezone(&Utc) - ts).num_seconds().unsigned_abs())
-                .unwrap_or(u64::MAX)
-        })
-        .filter(|p| {
-            DateTime::parse_from_rfc3339(&p.timestamp)
-                .map(|t| (t.with_timezone(&Utc) - ts).num_seconds().abs() < 7200)
-                .unwrap_or(false)
-        })
-        .cloned()
+        .min_by_key(|(t, _)| (*t - ts).num_seconds().unsigned_abs())
+        .filter(|(t, _)| (*t - ts).num_seconds().abs() < 7200)
+        .map(|(_, p)| (*p).clone())
 }
 
 fn interpolate_idw(
@@ -688,10 +719,10 @@ mod tests {
     fn test_generate_route_track_point_count() {
         use chrono::TimeZone;
         let dep = Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap();
-        // Livorno → Capraia ≈ 35.9 nm at 5 kn → 7.18 h → ceil=8 → 8 hourly + 1 destination = 9 points
+        // Livorno → Capraia ≈ 35.9 nm at 5 kn → 7.18 h → 14 full 30-min steps + 1 partial + 1 departure = 16 points
         let wpts = vec![(43.55_f64, 10.29_f64), (43.05, 9.84)];
         let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, None, &[]);
-        assert_eq!(track.len(), 9, "Expected 9 points, got {}", track.len());
+        assert_eq!(track.len(), 16, "Expected 16 points, got {}", track.len());
         assert!((track[0].lat - 43.55).abs() < 0.01);
         assert!((track[0].time - dep).num_seconds() == 0);
         let last = track.last().unwrap();
@@ -705,10 +736,10 @@ mod tests {
         let dep = Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap();
         let wpts = vec![(43.55_f64, 10.29_f64), (43.05, 9.84)];
         let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, None, &[]);
-        // All but the last step are exactly 1 hour apart; last step may be a partial hour
+        // All but the last step are exactly 30 min apart; last step may be a partial half-hour
         for i in 1..track.len() - 1 {
-            let diff = (track[i].time - track[i - 1].time).num_hours();
-            assert_eq!(diff, 1, "Expected 1-hour steps at index {}", i);
+            let diff = (track[i].time - track[i - 1].time).num_seconds();
+            assert_eq!(diff, 1800, "Expected 30-min steps at index {}", i);
         }
     }
 

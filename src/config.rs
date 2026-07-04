@@ -56,6 +56,16 @@ pub struct Config {
     /// Path to polar diagram CSV. Optional — when absent the route planner uses a fixed speed.
     #[serde(default)]
     pub polars_file_path: Option<String>,
+    /// Path to GeoJSON land polygon file for land avoidance in isochrone routing.
+    /// When absent, land avoidance is disabled.
+    /// Note: generalized sources like Natural Earth's ne_10m_land simplify away small
+    /// harbor/pier indentations, so a waypoint placed exactly at a pier can be misclassified
+    /// as land — see "Known Limitation" in docs/superpowers/specs/2026-07-03-land-avoidance-design.md.
+    #[serde(default)]
+    pub land_mask_path: Option<String>,
+    /// Grid resolution in degrees for the land mask raster (default 0.05 ≈ 3 nm).
+    #[serde(default = "default_land_mask_resolution_deg")]
+    pub land_mask_resolution_deg: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,6 +218,10 @@ fn default_sync_timeout_secs() -> u64 {
     120
 }
 
+fn default_land_mask_resolution_deg() -> f64 {
+    0.05
+}
+
 impl Default for SyncConfig {
     fn default() -> Self {
         Self {
@@ -228,6 +242,13 @@ pub struct LogConfig {
     pub file_prefix: String,
     /// Log level (trace, debug, info, warn, error)
     pub level: String,
+    /// Enable or disable logging to the console (stdout). File logging is unaffected.
+    #[serde(default = "default_console_enabled")]
+    pub console_enabled: bool,
+}
+
+fn default_console_enabled() -> bool {
+    true
 }
 
 impl Default for LogConfig {
@@ -236,6 +257,7 @@ impl Default for LogConfig {
             directory: "./logs".to_string(),
             file_prefix: "nmea_router".to_string(),
             level: "info".to_string(),
+            console_enabled: default_console_enabled(),
         }
     }
 }
@@ -725,6 +747,8 @@ impl Config {
             signalk: SignalKConfig::default(),
             sync: SyncConfig::default(),
             polars_file_path: None,
+            land_mask_path: None,
+            land_mask_resolution_deg: default_land_mask_resolution_deg(),
         }
     }
 }
@@ -970,6 +994,7 @@ mod tests {
         assert_eq!(log_config.directory, "./logs");
         assert_eq!(log_config.file_prefix, "nmea_router");
         assert_eq!(log_config.level, "info");
+        assert!(log_config.console_enabled);
     }
 
     #[test]
@@ -978,6 +1003,7 @@ mod tests {
             directory: "/var/log/nmea".to_string(),
             file_prefix: "router".to_string(),
             level: "debug".to_string(),
+            console_enabled: true,
         };
 
         let json = serde_json::to_string(&log_config).unwrap();
@@ -989,6 +1015,21 @@ mod tests {
         assert_eq!(deserialized.directory, "/var/log/nmea");
         assert_eq!(deserialized.file_prefix, "router");
         assert_eq!(deserialized.level, "debug");
+        assert!(deserialized.console_enabled);
+    }
+
+    #[test]
+    fn test_log_config_console_enabled_defaults_to_true_when_missing() {
+        let json = r#"{"directory": "./logs", "file_prefix": "nmea_router", "level": "info"}"#;
+        let log_config: LogConfig = serde_json::from_str(json).unwrap();
+        assert!(log_config.console_enabled);
+    }
+
+    #[test]
+    fn test_log_config_console_enabled_can_be_disabled() {
+        let json = r#"{"directory": "./logs", "file_prefix": "nmea_router", "level": "info", "console_enabled": false}"#;
+        let log_config: LogConfig = serde_json::from_str(json).unwrap();
+        assert!(!log_config.console_enabled);
     }
 
     #[test]
@@ -1542,5 +1583,39 @@ mod tests {
         assert_eq!(config.sync.target_url, "https://trips.example.com");
         assert_eq!(config.sync.api_key.as_deref(), Some("secret"));
         assert_eq!(config.sync.timeout_secs, 90);
+    }
+
+    #[test]
+    fn test_land_mask_config_defaults() {
+        let json = r#"{
+            "can": {"interface": "vcan0", "enabled": false},
+            "time": {"skew_threshold_ms": 500},
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(config.land_mask_path.is_none());
+        assert!((config.land_mask_resolution_deg - 0.05).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_land_mask_config_explicit() {
+        let json = r#"{
+            "can": {"interface": "vcan0", "enabled": false},
+            "time": {"skew_threshold_ms": 500},
+            "land_mask_path": "/etc/nmea_router/land.geojson",
+            "land_mask_resolution_deg": 0.03,
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.land_mask_path.as_deref(), Some("/etc/nmea_router/land.geojson"));
+        assert!((config.land_mask_resolution_deg - 0.03).abs() < 1e-9);
     }
 }

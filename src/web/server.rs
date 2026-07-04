@@ -65,6 +65,19 @@ pub async fn start_web_server(
         }
     });
 
+    let land_mask = config.land_mask_path.as_deref().and_then(|path| {
+        match crate::land_mask::LandMask::from_geojson(path, config.land_mask_resolution_deg) {
+            Ok(m) => {
+                tracing::info!(path, "Land mask loaded");
+                Some(std::sync::Arc::new(m))
+            }
+            Err(e) => {
+                tracing::warn!(path, error = %e, "Failed to load land mask — land avoidance disabled");
+                None
+            }
+        }
+    });
+
     let state = AppState {
         db: db.clone(),
         config,
@@ -74,6 +87,7 @@ pub async fn start_web_server(
         ais_cache,
         poller_status: poller_status.clone(),
         polars,
+        land_mask,
     };
 
     tokio::spawn(async {

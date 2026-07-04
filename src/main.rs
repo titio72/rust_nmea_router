@@ -26,6 +26,7 @@ mod udp_broadcaster;
 pub mod forecast;
 mod forecast_poller;
 pub mod polars;
+pub mod land_mask;
 pub mod routing;
 pub mod utilities;
 mod vessel_monitor;
@@ -67,14 +68,16 @@ fn init_logging(log_config: &config::LogConfig) -> Result<(), error::AppError> {
             )
         }));
 
-    let console_layer = fmt::layer().with_writer(std::io::stdout).with_timer(
-        fmt::time::OffsetTime::local_rfc_3339().unwrap_or_else(|_| {
-            fmt::time::OffsetTime::new(
-                time::UtcOffset::UTC,
-                time::format_description::well_known::Rfc3339,
-            )
-        }),
-    );
+    let console_layer = log_config.console_enabled.then(|| {
+        fmt::layer().with_writer(std::io::stdout).with_timer(
+            fmt::time::OffsetTime::local_rfc_3339().unwrap_or_else(|_| {
+                fmt::time::OffsetTime::new(
+                    time::UtcOffset::UTC,
+                    time::format_description::well_known::Rfc3339,
+                )
+            }),
+        )
+    });
 
     // Parse log level from config
     let env_filter =

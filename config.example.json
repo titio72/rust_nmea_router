@@ -14,7 +14,8 @@
   "logging": {
     "directory": "./logs",
     "file_prefix": "nmea_router",
-    "level": "info"
+    "level": "info",
+    "console_enabled": true
   },
   "time": {
     "skew_threshold_ms": 1000,
@@ -47,6 +48,8 @@
     "accept_invalid_certs": false
   },
   "polars_file_path": "/etc/nmea_router/polars.csv",
+  "land_mask_path": "/etc/nmea_router/land.geojson",
+  "land_mask_resolution_deg": 0.05,
   "database": {
     "connection": {
       "host": "localhost",
