@@ -13,68 +13,6 @@ const MAX_STEPS: usize = 336;        // 336 × 30 min = 168 h (7 days)
 const STEP_HOURS: f64 = 0.5;
 // Stop expanding once the best direct-to-destination ETA hasn't improved for this many steps.
 const STAGNANT_STEPS: usize = 6;    // 6 × 30 min = 3 h without improvement
-// The direct-to-destination ETA shortcut may only claim a frontier point as "best" when it's
-// already this close to the destination — matches the land-avoidance design's 5 nm max
-// resolution target. Beyond this range the frontier must keep expanding in real 30-min steps
-// rather than assuming a single constant-speed leg can cover the remaining distance.
-const MAX_FINAL_LEG_NM: f64 = 5.0;
-
-// ── Internal helpers ──────────────────────────────────────────────────────────
-
-// Takes an already-looked-up `wind` rather than a position/time to look up itself: callers in
-// the hot loop below already need the same wind sample for their own heading-candidate logic,
-// so looking it up twice for identical (lat, lon, time) inputs would double the cost for nothing.
-fn speed_for_final_leg(
-    from_lat: f64,
-    from_lon: f64,
-    to: (f64, f64),
-    wind: Option<(f64, f64)>,
-    motoring_speed_kn: f64,
-    polar_efficiency: f64,
-    min_sail_speed_kn: f64,
-    polars: &crate::polars::PolarTable,
-) -> f64 {
-    let bearing = crate::utilities::haversine_heading(from_lat, from_lon, to.0, to.1);
-    match wind {
-        Some((wind_spd, wind_dir)) if wind_spd > 0.0 => {
-            let twa = compute_twa(bearing, wind_dir);
-            match polars.boat_speed(twa, wind_spd).filter(|&s| s > 0.0) {
-                Some(raw) => {
-                    let eff = raw * polar_efficiency;
-                    if eff >= min_sail_speed_kn { eff } else { motoring_speed_kn }
-                }
-                None => motoring_speed_kn,
-            }
-        }
-        _ => motoring_speed_kn,
-    }
-}
-
-/// True if the straight line from `from` to `to` passes through land at any of a series of
-/// evenly-spaced samples. Guards the direct-to-destination ETA shortcuts below, which would
-/// otherwise let the router claim a final leg that sails straight through an island.
-fn path_crosses_land(
-    from: (f64, f64),
-    to: (f64, f64),
-    land_mask: Option<&crate::land_mask::LandMask>,
-) -> bool {
-    let mask = match land_mask {
-        Some(m) => m,
-        None => return false,
-    };
-    let dist_nm = haversine_distance_nm(from.0, from.1, to.0, to.1);
-    if dist_nm < 0.01 {
-        return false;
-    }
-    let bearing = haversine_heading(from.0, from.1, to.0, to.1);
-    // One sample per nautical mile is finer than the land mask's own grid resolution.
-    let samples = (dist_nm.ceil() as usize).max(4);
-    (1..samples).any(|i| {
-        let d = dist_nm * i as f64 / samples as f64;
-        let (lat, lon) = advance_position(from.0, from.1, bearing, d);
-        mask.is_land(lat, lon)
-    })
-}
 
 // ── Data structures ───────────────────────────────────────────────────────────
 
@@ -132,28 +70,9 @@ pub fn run_isochrone(
         let mut candidates: Vec<IsochronePoint> = Vec::new();
 
         for (parent_idx, parent) in prev.iter().enumerate() {
-            // Looked up once per parent and reused both for the arrival check right below and
-            // for every heading candidate's speed in the loop further down — they're all the
-            // same (lat, lon, time), so a second lookup would just repeat the same work.
             let wind = crate::forecast::nearest_forecast_wind(&parsed_fetches, parent.lat, parent.lon, parent.time);
-
-            // Check if this parent can reach the destination within the current step.
-            // This catches mid-step arrivals that fall between two 30-minute boundaries.
             let dist_to_dest = haversine_distance_nm(parent.lat, parent.lon, to.0, to.1);
-            let speed_to_dest = speed_for_final_leg(
-                parent.lat, parent.lon, to, wind,
-                motoring_speed_kn, polar_efficiency, min_sail_speed_kn, polars,
-            );
-            if dist_to_dest <= speed_to_dest * STEP_HOURS
-                && !path_crosses_land((parent.lat, parent.lon), to, land_mask)
-            {
-                let eta = parent.time + chrono::Duration::seconds(
-                    (dist_to_dest / speed_to_dest * 3600.0).round() as i64,
-                );
-                if best.as_ref().map_or(true, |(b, _, _)| eta < *b) {
-                    best = Some((eta, prev_step_idx, parent_idx));
-                }
-            }
+            let bearing_to_dest = haversine_heading(parent.lat, parent.lon, to.0, to.1);
 
             for h in 0..SECTOR_COUNT {
                 let heading = h as f64 * HEADING_STEP_DEG;
@@ -176,6 +95,25 @@ pub fn run_isochrone(
                 if land_mask.map_or(false, |m| m.is_land(new_pos.0, new_pos.1)) {
                     continue;
                 }
+
+                // Genuine arrival only: this heading is one of the real, physically-computed
+                // candidates above (wind/polar-derived, tacking angles included, land-checked)
+                // — not an assumed direct-bearing shortcut. It counts as reaching the
+                // destination only if it's both aimed at the destination (snapped to the
+                // nearest of the discretely-sampled headings) and fast enough to cover the
+                // remaining distance within this step. If the true bearing happens to be
+                // unsailable, arrival simply isn't declared yet — the search must keep tacking
+                // toward it over further real steps, exactly like a real sailor would.
+                let heading_diff = ((heading - bearing_to_dest + 540.0) % 360.0 - 180.0).abs();
+                if heading_diff <= HEADING_STEP_DEG / 2.0 && dist_to_dest <= speed_kn * STEP_HOURS {
+                    let eta = parent.time + chrono::Duration::seconds(
+                        (dist_to_dest / speed_kn * 3600.0).round() as i64,
+                    );
+                    if best.as_ref().map_or(true, |(b, _, _)| eta < *b) {
+                        best = Some((eta, prev_step_idx, parent_idx));
+                    }
+                }
+
                 candidates.push(IsochronePoint {
                     lat: new_pos.0,
                     lon: new_pos.1,
@@ -188,34 +126,10 @@ pub fn run_isochrone(
 
         isochrones.push(prune_isochrone(candidates, from, sail_weight_kn));
 
-        // Check every new frontier point: compute its direct-to-destination ETA and keep the global minimum.
-        // This handles heading-quantization drift: the optimal frontier may be slightly outside any
-        // fixed arrival threshold yet still represent a better ETA than the threshold-based winner.
-        let new_step_idx = isochrones.len() - 1;
-        for (idx, pt) in isochrones[new_step_idx].iter().enumerate() {
-            let remaining = haversine_distance_nm(pt.lat, pt.lon, to.0, to.1);
-            if remaining > MAX_FINAL_LEG_NM {
-                continue;
-            }
-            let wind = crate::forecast::nearest_forecast_wind(&parsed_fetches, pt.lat, pt.lon, pt.time);
-            let speed = speed_for_final_leg(
-                pt.lat, pt.lon, to, wind,
-                motoring_speed_kn, polar_efficiency, min_sail_speed_kn, polars,
-            );
-            let eta = pt.time + chrono::Duration::seconds(
-                (remaining / speed * 3600.0).round() as i64,
-            );
-            if best.as_ref().map_or(true, |(b, _, _)| eta < *b)
-                && !path_crosses_land((pt.lat, pt.lon), to, land_mask)
-            {
-                best = Some((eta, new_step_idx, idx));
-            }
-        }
-
         // Stagnation check: once the best ETA stops improving for STAGNANT_STEPS consecutive steps
         // the frontier has moved past the destination — terminate early. Only counts once a best
-        // candidate exists at all (i.e. the frontier has come within MAX_FINAL_LEG_NM) — before
-        // that, `best` is None every step by design and must not be mistaken for stagnation.
+        // candidate exists at all (i.e. some parent has come within genuine arrival range) —
+        // before that, `best` is None every step by design and must not be mistaken for stagnation.
         let current_eta = best.as_ref().map(|(e, _, _)| *e);
         if current_eta.is_some() {
             if current_eta == last_improved_eta {
@@ -391,72 +305,50 @@ mod tests {
         assert!(!result.reached_destination, "should not reach destination blocked by land");
     }
 
-    #[test]
-    fn test_final_leg_does_not_cross_land() {
-        // A thin land strip directly between `from` and `to`, far too long to sail around
-        // within the isochrone's stagnation window. A direct line from any point near the
-        // strip's western shore to `to` would cross it — the router must not claim that leg.
-        let json = serde_json::json!({
-            "type": "FeatureCollection",
-            "features": [{
-                "type": "Feature",
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [[[8.2, 30.0], [8.3, 30.0], [8.3, 55.0], [8.2, 55.0], [8.2, 30.0]]]
-                },
-                "properties": {}
-            }]
-        });
-        let mask = crate::land_mask::LandMask::from_geojson_value_for_test(&json, 0.05).unwrap();
-
-        let from = (43.0, 8.0);
-        let to = (43.0, 8.5);
-        let departure = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 6, 0, 0).unwrap();
-        let polars = dummy_polars();
-
-        let result = run_isochrone(from, to, departure, 6.0, 1.0, 0.0, 0.0, &polars, &[], Some(&mask));
-
-        for w in result.track.windows(2) {
-            assert!(
-                !path_crosses_land((w[0].0, w[0].1), (w[1].0, w[1].1), Some(&mask)),
-                "segment from {:?} to {:?} crosses land", w[0], w[1]
-            );
-        }
+    /// A polar that can't sail closer than 42° to the true wind (matches `constant_for_test`'s
+    /// breakpoints) but sails at a flat `speed_kn` on any sailable heading.
+    fn upwind_polars(speed_kn: f64) -> crate::polars::PolarTable {
+        crate::polars::PolarTable::constant_for_test(speed_kn)
     }
 
     #[test]
-    fn test_final_leg_shortcut_respects_max_distance() {
-        // A short land barrier forces a brief detour. Once clear of it, ~27 nm still remain to
-        // the destination — that must be closed via real 30-min steps, not a single "beeline"
-        // that assumes the whole remaining distance is coverable at a projected speed just
-        // because nothing currently in front of it happens to be land.
-        let json = serde_json::json!({
-            "type": "FeatureCollection",
-            "features": [{
-                "type": "Feature",
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [[[8.2, 42.95], [8.3, 42.95], [8.3, 43.05], [8.2, 43.05], [8.2, 42.95]]]
-                },
-                "properties": {}
-            }]
-        });
-        let mask = crate::land_mask::LandMask::from_geojson_value_for_test(&json, 0.05).unwrap();
-
+    fn test_arrival_prefers_tacking_over_forced_motor() {
+        // Destination is due north — dead upwind, since the wind blows from the north too.
+        // Sailing at the true bearing is impossible (TWA 0° < the polar's 42° minimum), but
+        // tacking at 45° off the wind sails at 6 kn, well above the 3 kn motoring speed. A
+        // router that only checks the single direct bearing for its final approach would be
+        // forced to motor the last stretch despite the wind; a genuinely tacking-aware router
+        // keeps making fast progress via real headings all the way to arrival.
         let from = (43.0, 8.0);
-        let to = (43.0, 8.8);
+        let to = (43.2, 8.0); // ~12 nm due north
         let departure = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 6, 0, 0).unwrap();
-        let polars = dummy_polars();
+        let motoring_speed_kn = 3.0;
+        let polars = upwind_polars(6.0);
 
-        let result = run_isochrone(from, to, departure, 6.0, 1.0, 0.0, 0.0, &polars, &[], Some(&mask));
-        assert!(result.reached_destination, "should route around the short barrier and arrive");
+        let fetches = vec![crate::db::operations::forecast::FetchWithHourly {
+            lat: 43.0,
+            lon: 8.0,
+            model: "ecmwf".to_string(),
+            hourly: (0..48).map(|h| crate::db::operations::forecast::ForecastHourlyPoint {
+                timestamp: (departure + chrono::Duration::hours(h)).format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                wind_speed_kn: Some(10.0),
+                wind_direction_deg: Some(0.0), // wind from the north, blowing toward the south
+                wind_gust_kn: None,
+                wave_height_m: None,
+                wave_period_s: None,
+                wave_direction_deg: None,
+                cape_j_kg: None,
+            }).collect(),
+        }];
 
-        for w in result.track.windows(2) {
-            let d = haversine_distance_nm(w[0].0, w[0].1, w[1].0, w[1].1);
-            assert!(
-                d <= MAX_FINAL_LEG_NM + 1.0,
-                "segment from {:?} to {:?} covers {:.2} nm, exceeding the final-leg cap", w[0], w[1], d
-            );
-        }
+        let result = run_isochrone(from, to, departure, motoring_speed_kn, 1.0, 0.0, 0.0, &polars, &fetches, None);
+        assert!(result.reached_destination, "should reach destination via tacking");
+
+        let total_hours = (result.track.last().unwrap().2 - departure).num_seconds() as f64 / 3600.0;
+        let motoring_only_hours = haversine_distance_nm(from.0, from.1, to.0, to.1) / motoring_speed_kn;
+        assert!(
+            total_hours < motoring_only_hours,
+            "expected tacking ({:.2}h) to beat pure motoring ({:.2}h)", total_hours, motoring_only_hours
+        );
     }
 }

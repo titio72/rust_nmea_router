@@ -277,7 +277,13 @@ pub struct OptimalRouteQuery {
     pub min_sail_speed_kn: f64,
     #[serde(default)]
     pub sail_weight_kn: f64,
+    /// Whether to route around land/islands using the configured land mask. Default true.
+    /// Omitted from older clients, so it must default on to preserve existing behavior.
+    #[serde(default = "default_avoid_land")]
+    pub avoid_land: bool,
 }
+
+fn default_avoid_land() -> bool { true }
 
 #[derive(Debug, Serialize)]
 pub struct ForecastStatusResponse {
@@ -1735,7 +1741,7 @@ pub async fn get_optimal_route(
         params.sail_weight_kn,
         polars,
         &fetches,
-        state.land_mask(),
+        if params.avoid_land { state.land_mask() } else { None },
     );
 
     // Derive speed_kn and twa_deg for each step from distance/time and wind forecast.

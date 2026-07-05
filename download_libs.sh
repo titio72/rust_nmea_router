@@ -47,3 +47,23 @@ download "leaflet.fullscreen.css" \
 
 download "icon-fullscreen.svg" \
     "https://cdn.jsdelivr.net/npm/leaflet.fullscreen@3.0.2/icon-fullscreen.svg"
+
+# webgl-wind has no tagged releases, so it's pinned to a commit SHA.
+download "wind-gl.js" \
+    "https://cdn.jsdelivr.net/gh/mapbox/webgl-wind@b1f6468d90d2f39763a8795a5042f316a32ff3c8/dist/wind-gl.js"
+
+# Patch wind-gl.js: its longitude-distortion correction assumes the wind texture
+# covers the whole globe (pos.y*180-90), which is wrong once cropped to a single
+# Forecast Area at real latitudes. Adds u_lat_min/u_lat_max uniforms so callers
+# can supply the area's actual latitude range instead.
+if [ -f "$LIBS_DIR/wind-gl.js" ]; then
+    if ! grep -q "u_lat_min" "$LIBS_DIR/wind-gl.js"; then
+        sed -i \
+            -e 's/uniform float u_drop_rate_bump;\\n\\nvarying vec2 v_tex_pos;/uniform float u_drop_rate_bump;\\nuniform float u_lat_min;\\nuniform float u_lat_max;\\n\\nvarying vec2 v_tex_pos;/' \
+            -e 's/float distortion = cos(radians(pos.y \* 180.0 - 90.0));/float distortion = cos(radians(mix(u_lat_max, u_lat_min, pos.y)));/' \
+            -e 's/this.dropRateBump = 0.01; \/\/ drop rate increase relative to individual particle speed/&\n\n    this.latMin = -90;\n    this.latMax = 90;/' \
+            -e 's/gl.uniform1f(program.u_drop_rate, this.dropRate);/&\n    gl.uniform1f(program.u_lat_min, this.latMin);\n    gl.uniform1f(program.u_lat_max, this.latMax);/' \
+            "$LIBS_DIR/wind-gl.js"
+        echo -e "${GREEN}✓ patched wind-gl.js (lat-aware distortion correction)${NC}"
+    fi
+fi

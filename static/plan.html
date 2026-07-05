@@ -4,10 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Forecast & Planning - NMEA Router</title>
+    <link rel="icon" type="image/png" href="/images/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
     <link rel="stylesheet" href="/libs/leaflet.min.css" />
     <script src="/js/shared-theme.js?v=3"></script>
     <script src="/libs/leaflet.min.js"></script>
+    <script src="/libs/wind-gl.js"></script>
+    <script src="/js/wind-particle-layer.js"></script>
     <style>
         #planMap { height: calc(100vh - 280px); min-height: 380px; border-radius: 6px; }
         .day-tab { padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px;
@@ -131,6 +134,11 @@
                                border:1px solid var(--border-color); border-radius:4px;
                                padding:3px 8px; color:var(--text-primary); font-size:13px;"> kn
                 </label>
+                <label style="color:var(--text-secondary); display:flex; align-items:center; gap:4px;"
+                       title="Route around land/islands when optimizing. Turn off to compare against a straight-line-ignoring-coastline result.">
+                    <input type="checkbox" id="avoidLandInput" checked>
+                    Avoid land
+                </label>
                 <button id="undoBtn" onclick="undoWaypoint()" disabled
                     style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
                            border:1px solid var(--border-color); border-radius:4px;
@@ -222,7 +230,8 @@
 
         // ── State ─────────────────────────────────────────────────────────────────
         let planMap = null;
-        let arrowMarkers = [];
+        let windLayers = new Map();  // area.id -> WindParticleLayer
+        let planAreas = [];          // ForecastArea[] from last /api/forecast/areas load
         let availableDays = [];
         let selectedDay = 0;
         let selectedHour = 0;
@@ -247,7 +256,7 @@
             }).addTo(planMap);
             planMap.on('click', onMapClick);
             planMap.on('zoomend moveend', () => {
-                if (lastGridPts.length) renderArrows(interpolateDisplayGrid(lastGridPts));
+                windLayers.forEach(layer => layer.reposition());
             });
 
             const WindLegend = L.Control.extend({
@@ -285,6 +294,8 @@
             if (savedMinSail) document.getElementById('minSailInput').value = savedMinSail;
             const savedSailWeight = localStorage.getItem('plan_sail_weight');
             if (savedSailWeight) document.getElementById('sailWeightInput').value = savedSailWeight;
+            const savedAvoidLand = localStorage.getItem('plan_avoid_land');
+            if (savedAvoidLand !== null) document.getElementById('avoidLandInput').checked = savedAvoidLand === 'true';
 
             await loadAvailableDays();
             restoreRoute();
@@ -506,7 +517,7 @@
             return result;
         }
 
-        // ── Grid-point arrows ──────────────────────────────────────────────────────
+        // ── Grid-point wind field ─────────────────────────────────────────────────
         async function loadGridPoints() {
             const ts = getSelectedISO();
             if (!ts) return;
@@ -524,24 +535,15 @@
                         ? 'AROME ~1.5 km (short-term)'
                         : 'ECMWF ~9 km';
                 }
-                renderArrows(interpolateDisplayGrid(lastGridPts));
+                windLayers.forEach(layer => layer.rebuildTexture());
                 renderStats();
             } catch (err) {
                 console.error('Failed to load grid points', err);
             }
         }
 
-        function windColor(speed) {
+        function interpolateColorStops(speed, stops) {
             const kn = Math.max(speed || 0, 0);
-            const stops = [
-                [0,  [170, 170, 170]],
-                [4,  [30,  160, 255]],
-                [7,  [0,   210, 180]],
-                [10, [0,   190,  60]],
-                [16, [220, 210,   0]],
-                [22, [255, 140,   0]],
-                [28, [220,  30,   0]],
-            ];
             if (kn <= stops[0][0]) return `rgb(${stops[0][1].join(',')})`;
             if (kn >= stops[stops.length - 1][0]) return `rgb(${stops[stops.length - 1][1].join(',')})`;
             for (let i = 1; i < stops.length; i++) {
@@ -553,36 +555,53 @@
             }
         }
 
-        function renderArrows(pts) {
-            arrowMarkers.forEach(m => planMap.removeLayer(m));
-            arrowMarkers = [];
-            pts.forEach(pt => {
-                const wind = pt.wind_speed_kn || 0;
-                const gust = pt.wind_gust_kn || 0;
-                const speed = showGust ? gust : wind;
-                const dir = pt.wind_direction_deg || 0;
-                // wind_direction_deg is the direction the wind comes FROM; rotate +180 so
-                // the arrow points in the direction the wind is blowing TO.
-                const arrowRot = (dir + 180) % 360;
-                const color = windColor(speed);
-                const svg =
-                    `<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">` +
-                    `<g transform="rotate(${arrowRot},11,11)">` +
-                    `<polygon points="11,2 15,16 11,12 7,16" fill="${color}" ` +
-                    `stroke="rgba(0,0,0,0.35)" stroke-width="0.8"/>` +
-                    `</g></svg>`;
-                const icon = L.divIcon({ html: svg, className: '', iconSize: [22, 22], iconAnchor: [11, 11] });
-                const m = L.marker([pt.lat, pt.lon], { icon }).addTo(planMap);
-                m.bindPopup(
+        function windColor(speed) {
+            return interpolateColorStops(speed, [
+                [0,  [170, 170, 170]],
+                [4,  [30,  160, 255]],
+                [7,  [0,   210, 180]],
+                [10, [0,   190,  60]],
+                [16, [220, 210,   0]],
+                [22, [255, 140,   0]],
+                [28, [220,  30,   0]],
+            ]);
+        }
+
+        // Route line/dots use shades of red instead of windColor()'s blue-green-yellow scale,
+        // so they stay visible against the colored wind-intensity background layer.
+        function routeColor(speed) {
+            return interpolateColorStops(speed, [
+                [0,  [255, 205, 210]],
+                [4,  [239, 154, 154]],
+                [7,  [229, 115, 115]],
+                [10, [211,  47,  47]],
+                [16, [183,  28,  28]],
+                [22, [136,  14,  14]],
+                [28, [ 90,   0,   0]],
+            ]);
+        }
+
+        function showWindPopupAt(latlng) {
+            const area = planAreas.find(a =>
+                latlng.lat >= a.lat_min && latlng.lat <= a.lat_max &&
+                latlng.lng >= a.lon_min && latlng.lng <= a.lon_max);
+            if (!area) return;
+            const pt = idwInterpolate(latlng.lat, latlng.lng, pointsInArea(lastGridPts, area));
+            if (!pt) return;
+            const wind = pt.wind_speed_kn || 0;
+            const gust = pt.wind_gust_kn || 0;
+            const dir = pt.wind_direction_deg || 0;
+            L.popup()
+                .setLatLng(latlng)
+                .setContent(
                     `<b>Wind:</b> ${wind.toFixed(1)} kn ${dir.toFixed(0)}°<br>` +
                     `<b>Gust:</b> ${gust.toFixed(1)} kn<br>` +
                     `<b>Wave:</b> ${(pt.wave_height_m || 0).toFixed(1)} m ` +
                     `${(pt.wave_period_s || 0).toFixed(0)} s<br>` +
                     `<b>CAPE:</b> ${(pt.cape_j_kg || 0).toFixed(0)} J/kg<br>` +
                     `<b>Model:</b> ${(document.getElementById('modelBadge')?.textContent) || '—'}`
-                );
-                arrowMarkers.push(m);
-            });
+                )
+                .openOn(planMap);
         }
 
         function toggleGustMode() {
@@ -600,7 +619,7 @@
                 btn.style.borderColor = 'var(--border-color)';
             }
             document.getElementById('legendLabel').textContent = showGust ? 'Gust (kn)' : 'Wind (kn)';
-            if (lastGridPts.length) renderArrows(interpolateDisplayGrid(lastGridPts));
+            windLayers.forEach(layer => layer.rebuildTexture());
         }
 
         function renderStats() {
@@ -709,7 +728,10 @@
         }
 
         function onMapClick(e) {
-            if (!routeMode || routeDone) return;
+            if (!routeMode || routeDone) {
+                showWindPopupAt(e.latlng);
+                return;
+            }
             const n = routeWaypoints.length;
 
             if (n > 0) {
@@ -747,6 +769,9 @@
         });
         document.getElementById('sailWeightInput').addEventListener('input', function () {
             localStorage.setItem('plan_sail_weight', this.value);
+        });
+        document.getElementById('avoidLandInput').addEventListener('change', function () {
+            localStorage.setItem('plan_avoid_land', this.checked);
         });
 
         async function computeRoute() {
@@ -810,6 +835,7 @@
             const efficiency = parseFloat(document.getElementById('efficiencyInput').value) / 100;
             const minSail    = parseFloat(document.getElementById('minSailInput').value);
             const sailWeight = parseFloat(document.getElementById('sailWeightInput').value) || 0;
+            const avoidLand  = document.getElementById('avoidLandInput').checked;
 
             try {
                 const url = `/api/forecast/optimal-route?from_lat=${from.lat.toFixed(6)}&from_lon=${from.lng.toFixed(6)}`
@@ -818,7 +844,8 @@
                     + `&motoring_speed_kn=${speed}`
                     + `&polar_efficiency=${efficiency.toFixed(3)}`
                     + `&min_sail_speed_kn=${minSail}`
-                    + `&sail_weight_kn=${sailWeight.toFixed(1)}`;
+                    + `&sail_weight_kn=${sailWeight.toFixed(1)}`
+                    + `&avoid_land=${avoidLand}`;
 
                 const resp = await fetch(url);
                 const json = await resp.json();
@@ -867,7 +894,7 @@
                 const seg = L.polyline(
                     [[p.lat, p.lon], [pNext.lat, pNext.lon]],
                     {
-                        color: windColor(p.wind_speed_kn || 0),
+                        color: routeColor(p.wind_speed_kn || 0),
                         weight: 5,
                         opacity: 0.9,
                         dashArray: isMotoring ? '8 7' : null
@@ -884,7 +911,7 @@
                     radius: 3,
                     weight: 1,
                     color: '#fff',
-                    fillColor: windColor(p.wind_speed_kn || 0),
+                    fillColor: routeColor(p.wind_speed_kn || 0),
                     fillOpacity: 1
                 }).addTo(planMap);
                 dot.bindPopup(buildSegmentPopup(p));
@@ -1262,6 +1289,28 @@
             }
         }
 
+        // Adds/removes a WindParticleLayer on planMap for each area, keyed by area.id,
+        // so existing layers (and their live WebGL contexts) aren't torn down and
+        // recreated on every areas refresh — only actual additions/removals are applied.
+        function syncWindLayers(areas) {
+            planAreas = areas;
+            const seen = new Set();
+            areas.forEach(area => {
+                seen.add(area.id);
+                if (!windLayers.has(area.id)) {
+                    const layer = new WindParticleLayer(area);
+                    windLayers.set(area.id, layer);
+                    layer.onAdd(planMap);
+                }
+            });
+            windLayers.forEach((layer, id) => {
+                if (!seen.has(id)) {
+                    layer.onRemove();
+                    windLayers.delete(id);
+                }
+            });
+        }
+
         async function loadForecastAreas() {
             try {
                 const resp = await fetch('/api/forecast/areas');
@@ -1269,6 +1318,7 @@
                 const areas = json.data || [];
                 renderForecastAreaList(areas);
                 renderForecastAreasOnMap(areas);
+                if (planMap) syncWindLayers(areas);
             } catch (err) {
                 console.error('Failed to load forecast areas', err);
                 renderForecastAreaList([]);
