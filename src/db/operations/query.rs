@@ -628,7 +628,16 @@ impl VesselDatabase {
             .iter()
             .map(|row| WebMetricData {
                 timestamp: get_or_log(row, "timestamp", String::new(), "fetch_metrics"),
-                metric_id: get_or_log(row, "metric_id", String::new(), "fetch_metrics"),
+                // metric_id is TINYINT UNSIGNED — read as u8 then convert to string.
+                // get_opt::<String, _> silently fails on integer columns in the mysql crate.
+                metric_id: row
+                    .get_opt::<u8, _>("metric_id")
+                    .and_then(|v| v.ok())
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| {
+                        warn!("[fetch_metrics] Column 'metric_id' is NULL/missing or not convertible, using default");
+                        String::new()
+                    }),
                 avg_value: row.get_opt::<f64, _>("value_avg").and_then(|v| v.ok()),
                 max_value: row.get_opt::<f64, _>("value_max").and_then(|v| v.ok()),
                 min_value: row.get_opt::<f64, _>("value_min").and_then(|v| v.ok()),
