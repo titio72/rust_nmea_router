@@ -949,7 +949,7 @@ Tests cover:
 
 ### Core Components
 
-1. **Main Loop** ([main.rs](src/main.rs))
+1. **Main Loop** ([router_loop.rs](src/router_loop.rs))
    - CAN frame reading with automatic reconnection and 500ms timeout
    - Message processing and routing
    - Database write coordination with retry logic

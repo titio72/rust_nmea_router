@@ -18,6 +18,87 @@
                    border: 1px solid var(--border-color); }
         .day-tab.active { background: var(--link-color); color: #fff; border-color: var(--link-color); }
         .day-tab:hover:not(.active) { background: var(--bg-hover); }
+
+        .alt-route-modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        .alt-route-modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .alt-route-modal-content {
+            background: var(--bg-secondary);
+            padding: 24px 26px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px var(--card-shadow);
+            max-width: 560px;
+            width: 90%;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .alt-route-modal-header {
+            font-size: 18px;
+            font-weight: bold;
+            color: var(--text-bold);
+            margin-bottom: 16px;
+        }
+        .alt-route-modal-stats {
+            display: flex;
+            gap: 24px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px 18px;
+            margin-bottom: 14px;
+        }
+        .alt-route-modal-stats > div { flex: 1; }
+        .alt-route-modal-stats .label { font-size: 11px; color: var(--text-secondary); margin-bottom: 2px; }
+        .alt-route-modal-stats .value { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+        .alt-route-modal-table-wrap { overflow-y: auto; }
+        .alt-route-modal table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .alt-route-modal th {
+            position: sticky; top: 0; background: var(--bg-secondary);
+            text-align: left; padding: 6px 10px; color: var(--text-secondary);
+            font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .alt-route-modal td { padding: 5px 10px; color: var(--text-primary); border-bottom: 1px solid var(--border-color); }
+        .alt-route-modal-actions {
+            margin-top: 16px; align-self: flex-end; display: flex; gap: 10px;
+        }
+        .alt-route-modal-close, .alt-route-modal-select {
+            padding: 9px 18px; border: none; border-radius: 4px; cursor: pointer;
+            font-size: 14px;
+        }
+        .alt-route-modal-close {
+            background-color: var(--bg-tertiary); color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        .alt-route-modal-close:hover { opacity: 0.8; }
+        .alt-route-modal-select {
+            background-color: var(--sailing-color); color: white; border: 1px solid transparent;
+        }
+        .alt-route-modal-select:hover { background-color: #229954; }
+        .route-report-table-wrap { max-height: 320px; overflow-y: auto; }
+        .route-report-table-wrap table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .route-report-table-wrap th {
+            position: sticky; top: 0; background: var(--bg-secondary);
+            text-align: left; padding: 6px 10px; color: var(--text-secondary);
+            font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .route-report-table-wrap td {
+            padding: 5px 10px; color: var(--text-primary);
+            border-bottom: 1px solid var(--border-color);
+        }
     </style>
 </head>
 <body>
@@ -128,6 +209,12 @@
                                border:1px solid var(--border-color); border-radius:4px;
                                padding:3px 8px; color:var(--text-primary); font-size:13px;"> kn
                 </label>
+                <label style="color:var(--text-secondary);" title="Motor instead of sail when the wind is tighter than this off the bow">Min wind angle:
+                    <input type="number" id="minTwaInput" value="60" min="0" max="180" step="1"
+                        style="width:52px; margin-left:6px; background:var(--bg-secondary);
+                               border:1px solid var(--border-color); border-radius:4px;
+                               padding:3px 8px; color:var(--text-primary); font-size:13px;">°
+                </label>
                 <label style="color:var(--text-secondary);" title="Bonus score per sailed hour during route optimisation. 0 = fastest route, higher values favour more sailing.">Sail preference:
                     <input type="number" id="sailWeightInput" value="0" min="0" max="10" step="0.5"
                         style="width:52px; margin-left:6px; background:var(--bg-secondary);
@@ -220,8 +307,49 @@
             <!-- Speed chart -->
             <div style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">Boat speed (kn)</div>
             <div id="speedChartContainer"></div>
+
+            <!-- Step-by-step table -->
+            <div style="font-size:11px; color:var(--text-secondary); margin-top:14px; margin-bottom:4px;">
+                Step-by-step
+            </div>
+            <div class="route-report-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Time</th><th>Boat Speed</th><th>Engine</th><th>TWS</th><th>TWD</th></tr>
+                    </thead>
+                    <tbody id="routeReportTableBody"></tbody>
+                </table>
+            </div>
         </div>
 
+    </div>
+
+    <div id="altRouteModal" class="alt-route-modal">
+        <div class="alt-route-modal-content">
+            <div class="alt-route-modal-header">Alternative Route</div>
+            <div class="alt-route-modal-stats">
+                <div>
+                    <div class="label">ETA</div>
+                    <div class="value" id="altRouteEta">—</div>
+                </div>
+                <div>
+                    <div class="label">Duration</div>
+                    <div class="value" id="altRouteDur">—</div>
+                </div>
+            </div>
+            <div class="alt-route-modal-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Time</th><th>Boat Speed</th><th>Engine</th><th>TWS</th><th>TWD</th></tr>
+                    </thead>
+                    <tbody id="altRouteTableBody"></tbody>
+                </table>
+            </div>
+            <div class="alt-route-modal-actions">
+                <button class="alt-route-modal-close" onclick="closeFrontierReport()">Close</button>
+                <button class="alt-route-modal-select" onclick="selectFrontierRoute()">Select this route</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -243,6 +371,14 @@
         let waypointMarkers = [];   // L.CircleMarker[] one per waypoint
         let previewLines = [];      // L.Polyline[] dashed segments between consecutive waypoints
         let routeSegments = [];     // coloured segments from drawRouteLine
+        let frontierLines = [];     // muted backdrop polylines from isochrone search frontiers — session-only, never persisted
+        let lastFrontiers = [];     // raw FrontierPoint[][] from last API call — session-only, never persisted
+        let lastFrontiersDeparture = null; // departure ISO string used for the last optimize call — anchors frontier report timestamps
+        let alternativeLine = null; // L.Polyline dashed hover highlight of discarded route, replaced/cleared on mousemove/mouseout
+        let openFrontierReportStepIdx = null; // stepIdx/ptIdx of the frontier report currently shown in altRouteModal, for "Select this route"
+        let openFrontierReportPtIdx = null;
+
+        const FRONTIER_STEP_HOURS = 0.5; // must match STEP_HOURS in src/routing.rs
 
         let lastGridPts = [];     // raw GridPointForecast[] from last API call
         let showGust = false;     // when true, color arrows by gust speed instead of wind speed
@@ -292,6 +428,8 @@
             if (savedEff) document.getElementById('efficiencyInput').value = savedEff;
             const savedMinSail = localStorage.getItem('plan_min_sail_speed');
             if (savedMinSail) document.getElementById('minSailInput').value = savedMinSail;
+            const savedMinTwa = localStorage.getItem('plan_min_twa_deg');
+            if (savedMinTwa) document.getElementById('minTwaInput').value = savedMinTwa;
             const savedSailWeight = localStorage.getItem('plan_sail_weight');
             if (savedSailWeight) document.getElementById('sailWeightInput').value = savedSailWeight;
             const savedAvoidLand = localStorage.getItem('plan_avoid_land');
@@ -581,10 +719,17 @@
             ]);
         }
 
+        function pointInArea(lat, lon, area) {
+            return lat >= area.lat_min && lat <= area.lat_max &&
+                   lon >= area.lon_min && lon <= area.lon_max;
+        }
+
+        function pointInAnyArea(lat, lon) {
+            return planAreas.some(a => pointInArea(lat, lon, a));
+        }
+
         function showWindPopupAt(latlng) {
-            const area = planAreas.find(a =>
-                latlng.lat >= a.lat_min && latlng.lat <= a.lat_max &&
-                latlng.lng >= a.lon_min && latlng.lng <= a.lon_max);
+            const area = planAreas.find(a => pointInArea(latlng.lat, latlng.lng, a));
             if (!area) return;
             const pt = idwInterpolate(latlng.lat, latlng.lng, pointsInArea(lastGridPts, area));
             if (!pt) return;
@@ -716,6 +861,12 @@
             routeWaypoints = [];
             routeSegments.forEach(l => planMap.removeLayer(l));
             routeSegments = [];
+            frontierLines.forEach(l => planMap.removeLayer(l));
+            frontierLines = [];
+            lastFrontiers = [];
+            lastFrontiersDeparture = null;
+            closeFrontierReport();
+            if (alternativeLine) { planMap.removeLayer(alternativeLine); alternativeLine = null; }
             document.getElementById('routeBar').style.display = 'none';
             document.getElementById('routeSummary').style.display = 'none';
             document.getElementById('routeWptCount').textContent = 'click map to add waypoints';
@@ -767,6 +918,9 @@
         document.getElementById('minSailInput').addEventListener('input', function () {
             localStorage.setItem('plan_min_sail_speed', this.value);
         });
+        document.getElementById('minTwaInput').addEventListener('input', function () {
+            localStorage.setItem('plan_min_twa_deg', this.value);
+        });
         document.getElementById('sailWeightInput').addEventListener('input', function () {
             localStorage.setItem('plan_sail_weight', this.value);
         });
@@ -779,9 +933,16 @@
             const speed      = parseFloat(document.getElementById('speedInput').value);
             const efficiency = parseFloat(document.getElementById('efficiencyInput').value) / 100;
             const minSail    = parseFloat(document.getElementById('minSailInput').value);
+            const minTwa     = parseFloat(document.getElementById('minTwaInput').value);
             if (!routeDone || routeWaypoints.length < 2 || !dep || !(speed > 0)) return;
 
             drawRouteLine([]);
+            frontierLines.forEach(l => planMap.removeLayer(l));
+            frontierLines = [];
+            lastFrontiers = [];
+            lastFrontiersDeparture = null;
+            closeFrontierReport();
+            if (alternativeLine) { planMap.removeLayer(alternativeLine); alternativeLine = null; }
             lastRouteOverlay = [];
 
             const departure      = dep.slice(0, 16) + ':00Z';
@@ -792,7 +953,8 @@
                 `&departure=${encodeURIComponent(departure)}` +
                 `&motoring_speed_kn=${speed}` +
                 `&polar_efficiency=${efficiency.toFixed(3)}` +
-                `&min_sail_speed_kn=${minSail}`;
+                `&min_sail_speed_kn=${minSail}` +
+                `&min_twa_deg=${minTwa}`;
 
             const btn = document.getElementById('computeBtn');
             btn.textContent = 'Computing…';
@@ -824,6 +986,12 @@
             if (!routeDone || routeWaypoints.length < 2 || !dep || !(speed > 0)) return;
 
             drawRouteLine([]);
+            frontierLines.forEach(l => planMap.removeLayer(l));
+            frontierLines = [];
+            lastFrontiers = [];
+            lastFrontiersDeparture = null;
+            closeFrontierReport();
+            if (alternativeLine) { planMap.removeLayer(alternativeLine); alternativeLine = null; }
             lastRouteOverlay = [];
 
             btn.disabled = true;
@@ -834,6 +1002,7 @@
             const departure  = dep.slice(0, 16) + ':00Z';
             const efficiency = parseFloat(document.getElementById('efficiencyInput').value) / 100;
             const minSail    = parseFloat(document.getElementById('minSailInput').value);
+            const minTwa     = parseFloat(document.getElementById('minTwaInput').value);
             const sailWeight = parseFloat(document.getElementById('sailWeightInput').value) || 0;
             const avoidLand  = document.getElementById('avoidLandInput').checked;
 
@@ -844,17 +1013,20 @@
                     + `&motoring_speed_kn=${speed}`
                     + `&polar_efficiency=${efficiency.toFixed(3)}`
                     + `&min_sail_speed_kn=${minSail}`
+                    + `&min_twa_deg=${minTwa}`
                     + `&sail_weight_kn=${sailWeight.toFixed(1)}`
                     + `&avoid_land=${avoidLand}`;
 
                 const resp = await fetch(url);
                 const json = await resp.json();
-                if (json.status !== 'ok' || !json.data?.length) {
+                if (json.status !== 'ok' || !json.data?.route?.length) {
                     btn.textContent = '✗ ' + (json.error || 'Error');
                     setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
                     return;
                 }
-                drawRouteLine(json.data);
+                lastFrontiersDeparture = departure;
+                drawFrontiers(json.data.frontiers || []);
+                drawRouteLine(json.data.route);
                 btn.textContent = orig;
                 btn.disabled = false;
             } catch (_) {
@@ -875,6 +1047,224 @@
             const twa  = p.twa_deg         != null ? p.twa_deg.toFixed(0)         + '°'    : '—';
             return `<b>${ts}</b><br>Wind: ${spd} · ${dir} (gust ${gust})<br>`
                  + `Wave: ${wh} / ${wp}<br>Boat speed: ${spd2} · TWA: ${twa}`;
+        }
+
+        // Frontier grid samples are raw isochrone reachability points — they never land
+        // exactly on the destination. Mirrors the backend's own backtrack() (src/routing.rs),
+        // which always appends the exact destination coordinate + extrapolated arrival time
+        // as the final route point. Returns null if the point is already at the destination.
+        function frontierDestinationLeg(lastLat, lastLon, lastTime, speedKn) {
+            const dest = routeWaypoints[routeWaypoints.length - 1];
+            const distNm = degDistNm(lastLat, lastLon, dest.lat, dest.lng);
+            if (distNm < 0.05) return null;
+            const spd = speedKn > 0.1 ? speedKn : 0.1;
+            const hours = distNm / spd;
+            return { lat: dest.lat, lon: dest.lng, time: new Date(lastTime.getTime() + hours * 3600000) };
+        }
+
+        // Walks parent_idx from (stepIdx, ptIdx) in lastFrontiers back to the route origin,
+        // returning an origin-to-point path of [lat, lon] pairs. Appends an extrapolated
+        // final leg to the actual destination waypoint (see frontierDestinationLeg).
+        function backtrackFrontierPath(stepIdx, ptIdx) {
+            const path = [];
+            let s = stepIdx, i = ptIdx;
+            const clickedPt = lastFrontiers[stepIdx][ptIdx];
+            while (s >= 0) {
+                const pt = lastFrontiers[s][i];
+                path.push([pt.lat, pt.lon]);
+                i = pt.parent_idx;
+                s -= 1;
+            }
+            const origin = routeWaypoints[0];
+            path.push([origin.lat, origin.lng]);
+            path.reverse();
+
+            const lastTime = new Date(new Date(lastFrontiersDeparture).getTime()
+                + (stepIdx + 1) * FRONTIER_STEP_HOURS * 3600000);
+            const leg = frontierDestinationLeg(clickedPt.lat, clickedPt.lon, lastTime, clickedPt.speed_kn);
+            if (leg) path.push([leg.lat, leg.lon]);
+            return path;
+        }
+
+        // latlngs/ptIdxs are parallel arrays for one drawn frontier run: latlngs[i] is the
+        // [lat, lon] of the point whose original index (into lastFrontiers[stepIdx]) is ptIdxs[i].
+        // Returns the ptIdxs entry closest to the event's map position.
+        function nearestFrontierPtIdx(e, ptIdxs, latlngs) {
+            let nearest = 0;
+            let nearestDist = Infinity;
+            for (let i = 0; i < latlngs.length; i++) {
+                const dLat = latlngs[i][0] - e.latlng.lat;
+                const dLon = latlngs[i][1] - e.latlng.lng;
+                const dist = dLat * dLat + dLon * dLon;
+                if (dist < nearestDist) {
+                    nearestDist = dist;
+                    nearest = i;
+                }
+            }
+            return ptIdxs[nearest];
+        }
+
+        function showFrontierAlternative(e, stepIdx, ptIdxs, latlngs) {
+            const path = backtrackFrontierPath(stepIdx, nearestFrontierPtIdx(e, ptIdxs, latlngs));
+            if (alternativeLine) planMap.removeLayer(alternativeLine);
+            alternativeLine = L.polyline(path, {
+                color: '#ff8c00',
+                weight: 2,
+                opacity: 0.9,
+                dashArray: '4,4'
+            }).addTo(planMap);
+        }
+
+        function hideFrontierAlternative() {
+            if (alternativeLine) {
+                planMap.removeLayer(alternativeLine);
+                alternativeLine = null;
+            }
+        }
+
+        // Walks parent_idx from (stepIdx, ptIdx) back to the route origin, returning
+        // one row per 0.5h step with the leg telemetry that was already computed during
+        // the isochrone search (speed, engine status, true wind speed/direction).
+        function backtrackFrontierReport(stepIdx, ptIdx) {
+            const rows = [];
+            let s = stepIdx, i = ptIdx;
+            const clickedPt = lastFrontiers[stepIdx][ptIdx];
+            while (s >= 0) {
+                const pt = lastFrontiers[s][i];
+                rows.push({
+                    time: new Date(new Date(lastFrontiersDeparture).getTime()
+                        + (s + 1) * FRONTIER_STEP_HOURS * 3600000),
+                    speed_kn: pt.speed_kn,
+                    motoring: pt.motoring,
+                    wind_speed_kn: pt.wind_speed_kn,
+                    wind_dir_deg: pt.wind_dir_deg,
+                    relative_wind_deg: pt.relative_wind_deg
+                });
+                i = pt.parent_idx;
+                s -= 1;
+            }
+            rows.push({ time: new Date(lastFrontiersDeparture), speed_kn: null, motoring: null,
+                        wind_speed_kn: null, wind_dir_deg: null, relative_wind_deg: null });
+            rows.reverse();
+
+            const lastTime = rows[rows.length - 1].time;
+            const leg = frontierDestinationLeg(clickedPt.lat, clickedPt.lon, lastTime, clickedPt.speed_kn);
+            if (leg) {
+                rows.push({ time: leg.time, speed_kn: clickedPt.speed_kn, motoring: clickedPt.motoring,
+                            wind_speed_kn: null, wind_dir_deg: null, relative_wind_deg: null });
+            }
+            return rows;
+        }
+
+        function closeFrontierReport() {
+            document.getElementById('altRouteModal').classList.remove('active');
+            openFrontierReportStepIdx = null;
+            openFrontierReportPtIdx = null;
+        }
+
+        function showFrontierReport(stepIdx, ptIdx) {
+            if (!lastFrontiersDeparture) return;
+            openFrontierReportStepIdx = stepIdx;
+            openFrontierReportPtIdx = ptIdx;
+            const rows = backtrackFrontierReport(stepIdx, ptIdx);
+            const dep = rows[0].time;
+            const eta = rows[rows.length - 1].time;
+            const durMs = eta.getTime() - dep.getTime();
+            const h = Math.floor(durMs / 3600000);
+            const m = Math.round((durMs % 3600000) / 60000);
+            document.getElementById('altRouteEta').textContent =
+                eta.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
+                + ' ' + eta.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
+            document.getElementById('altRouteDur').textContent = m > 0 ? `${h}h ${m}m` : `${h}h`;
+
+            const body = document.getElementById('altRouteTableBody');
+            body.innerHTML = rows.map(r => {
+                const t = r.time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
+                    + ' UTC ' + r.time.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'UTC' });
+                const spd = r.speed_kn != null ? r.speed_kn.toFixed(1) + ' kn' : '—';
+                const eng = r.motoring == null ? '—' : (r.motoring ? '⚙ Motoring' : '⛵ Sailing');
+                const tws = r.wind_speed_kn != null ? r.wind_speed_kn.toFixed(1) + ' kn' : '—';
+                const twd = r.relative_wind_deg != null ? r.relative_wind_deg.toFixed(0) + '°' : '—';
+                return `<tr><td>${t}</td><td>${spd}</td><td>${eng}</td><td>${tws}</td><td>${twd}</td></tr>`;
+            }).join('');
+
+            document.getElementById('altRouteModal').classList.add('active');
+        }
+
+        // Promotes the frontier path/report currently shown in altRouteModal to the
+        // displayed accepted route, replacing whatever drawRouteLine/drawRouteSummary
+        // currently show. Merges backtrackFrontierPath's lat/lon with
+        // backtrackFrontierReport's telemetry (same parent_idx walk, same row count)
+        // into a RouteTrackPoint-shaped array.
+        function selectFrontierRoute() {
+            if (openFrontierReportStepIdx == null || openFrontierReportPtIdx == null) return;
+            const path = backtrackFrontierPath(openFrontierReportStepIdx, openFrontierReportPtIdx);
+            const rows = backtrackFrontierReport(openFrontierReportStepIdx, openFrontierReportPtIdx);
+            const pts = rows.map((r, i) => ({
+                lat: path[i][0],
+                lon: path[i][1],
+                timestamp: r.time.toISOString(),
+                speed_kn: r.speed_kn,
+                twa_deg: r.motoring == null ? null : (r.motoring ? null : 0),
+                wind_speed_kn: r.wind_speed_kn,
+                wind_direction_deg: r.wind_dir_deg,
+                relative_wind_deg: r.relative_wind_deg,
+                wind_gust_kn: null,
+                wave_height_m: null,
+                wave_period_s: null
+            }));
+
+            hideFrontierAlternative();
+
+            drawRouteLine(pts);
+            drawRouteSummary(pts);
+            closeFrontierReport();
+        }
+
+        function drawFrontierRun(latlngs, stepIdx, ptIdxs) {
+            const line = L.polyline(latlngs, {
+                color: '#444',
+                weight: 1,
+                opacity: 0.6
+            }).addTo(planMap);
+            // Invisible fat line layered on top of the thin visible one — the visible
+            // weight:1 stroke is too thin to reliably catch mousemove, so hover detection
+            // uses this wider (but transparent) hit target instead.
+            const hitLine = L.polyline(latlngs, {
+                weight: 16,
+                opacity: 0
+            }).addTo(planMap);
+            hitLine.on('mousemove', e => showFrontierAlternative(e, stepIdx, ptIdxs, latlngs));
+            hitLine.on('mouseout', hideFrontierAlternative);
+            hitLine.on('click', e => {
+                L.DomEvent.stopPropagation(e);
+                showFrontierReport(stepIdx, nearestFrontierPtIdx(e, ptIdxs, latlngs));
+            });
+            frontierLines.push(line, hitLine);
+        }
+
+        function drawFrontiers(frontiers) {
+            frontierLines.forEach(l => planMap.removeLayer(l));
+            frontierLines = [];
+            hideFrontierAlternative();
+            lastFrontiers = frontiers;
+            for (let s = 0; s < frontiers.length; s++) {
+                const frontier = frontiers[s];
+                let run = [];
+                let runIdx = [];
+                for (let i = 0; i < frontier.length; i++) {
+                    const { lat, lon } = frontier[i];
+                    if (pointInAnyArea(lat, lon)) {
+                        run.push([lat, lon]);
+                        runIdx.push(i);
+                    } else {
+                        if (run.length >= 2) drawFrontierRun(run, s, runIdx);
+                        run = [];
+                        runIdx = [];
+                    }
+                }
+                if (run.length >= 2) drawFrontierRun(run, s, runIdx);
+            }
         }
 
         function drawRouteLine(pts) {
@@ -979,6 +1369,7 @@
             document.getElementById('modeBarMotor').style.width = motorPct + '%';
 
             drawSpeedChart(pts, depMs, totalHours);
+            renderRouteReportTable(pts);
             panel.style.display = '';
         }
 
@@ -1057,6 +1448,20 @@
 
             svg += '</svg>';
             document.getElementById('speedChartContainer').innerHTML = svg;
+        }
+
+        function renderRouteReportTable(pts) {
+            const body = document.getElementById('routeReportTableBody');
+            body.innerHTML = pts.map(p => {
+                const t = new Date(p.timestamp);
+                const time = t.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
+                    + ' UTC ' + t.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'UTC' });
+                const spd = p.speed_kn != null ? p.speed_kn.toFixed(1) + ' kn' : '—';
+                const eng = p.speed_kn == null ? '—' : (p.twa_deg === null ? '⚙ Motoring' : '⛵ Sailing');
+                const tws = p.wind_speed_kn != null ? p.wind_speed_kn.toFixed(1) + ' kn' : '—';
+                const twd = p.relative_wind_deg != null ? p.relative_wind_deg.toFixed(0) + '°' : '—';
+                return `<tr><td>${time}</td><td>${spd}</td><td>${eng}</td><td>${tws}</td><td>${twd}</td></tr>`;
+            }).join('');
         }
 
         // ── Route persistence ─────────────────────────────────────────────────────

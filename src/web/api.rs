@@ -22,11 +22,11 @@ use tracing::{error, info, warn, Span};
 
 use crate::ais_target_cache::{AisTargetCache, AisTargetData};
 use crate::config::Config;
+use crate::db::operations::sync::{SyncManifestPayload, SyncManifestResult, SyncResult};
 use crate::db::{
     HeatmapData, MultiMetricData, NavAnalysisRow, SpeedDistributionData, TrackAnalytics,
     TrackPoint, TripLegsData, TripSummary, VesselDatabase, WebMetricData, WindStatisticsData,
 };
-use crate::db::operations::sync::{SyncManifestPayload, SyncManifestResult, SyncResult};
 use crate::web::auth::JwtSecret;
 use crate::web::broadcast_manager::SignalKBroadcastChannels;
 use chrono::{DateTime, NaiveDate, Utc};
@@ -250,7 +250,7 @@ pub struct ForecastGridPointsQuery {
 
 #[derive(Debug, Deserialize)]
 pub struct ForecastRouteQuery {
-    pub waypoints: String,   // "lat1,lon1;lat2,lon2;…" — at least 2 pairs
+    pub waypoints: String, // "lat1,lon1;lat2,lon2;…" — at least 2 pairs
     pub departure: String,
     pub motoring_speed_kn: f64,
     /// Fraction of raw polar speed to use (0–1). Default 1.0 (full polar speed).
@@ -259,9 +259,18 @@ pub struct ForecastRouteQuery {
     /// Motor instead of sail when effective polar speed is below this threshold (kn). Default 0.
     #[serde(default)]
     pub min_sail_speed_kn: f64,
+    /// Motor instead of sail when the true wind angle is tighter (closer to the wind) than
+    /// this, regardless of what the polar table would otherwise report. Default 60°.
+    #[serde(default = "default_min_twa_deg")]
+    pub min_twa_deg: f64,
 }
 
-fn default_polar_efficiency() -> f64 { 1.0 }
+fn default_polar_efficiency() -> f64 {
+    1.0
+}
+fn default_min_twa_deg() -> f64 {
+    60.0
+}
 
 #[derive(Debug, Deserialize)]
 pub struct OptimalRouteQuery {
@@ -269,12 +278,16 @@ pub struct OptimalRouteQuery {
     pub from_lon: f64,
     pub to_lat: f64,
     pub to_lon: f64,
-    pub departure: String,          // ISO 8601 UTC, e.g. "2026-06-01T06:00:00Z"
+    pub departure: String, // ISO 8601 UTC, e.g. "2026-06-01T06:00:00Z"
     pub motoring_speed_kn: f64,
     #[serde(default = "default_polar_efficiency")]
     pub polar_efficiency: f64,
     #[serde(default)]
     pub min_sail_speed_kn: f64,
+    /// Motor instead of sail when the true wind angle is tighter (closer to the wind) than
+    /// this, regardless of what the polar table would otherwise report. Default 60°.
+    #[serde(default = "default_min_twa_deg")]
+    pub min_twa_deg: f64,
     #[serde(default)]
     pub sail_weight_kn: f64,
     /// Whether to route around land/islands using the configured land mask. Default true.
@@ -283,7 +296,9 @@ pub struct OptimalRouteQuery {
     pub avoid_land: bool,
 }
 
-fn default_avoid_land() -> bool { true }
+fn default_avoid_land() -> bool {
+    true
+}
 
 #[derive(Debug, Serialize)]
 pub struct ForecastStatusResponse {
@@ -821,7 +836,6 @@ pub async fn list_exports() -> Result<Json<ApiResponse<Vec<ExportFileInfo>>>, St
     }
 }
 
-
 pub async fn get_heatmap(
     State(state): State<AppState>,
     Query(params): Query<HeatmapQuery>,
@@ -1245,20 +1259,26 @@ fn err_chain(e: &dyn std::error::Error) -> String {
     msg
 }
 
-pub async fn post_sync_push(
-    State(state): State<AppState>,
-) -> Json<ApiResponse<SyncResult>> {
+pub async fn post_sync_push(State(state): State<AppState>) -> Json<ApiResponse<SyncResult>> {
     let sync_cfg = &state.config.sync;
 
     if !sync_cfg.enabled {
-        return Json(ApiResponse::error("Sync push is not enabled in config".to_string()));
+        return Json(ApiResponse::error(
+            "Sync push is not enabled in config".to_string(),
+        ));
     }
     if sync_cfg.target_url.is_empty() {
-        return Json(ApiResponse::error("sync.target_url is not configured".to_string()));
+        return Json(ApiResponse::error(
+            "sync.target_url is not configured".to_string(),
+        ));
     }
     let api_key = match &sync_cfg.api_key {
         Some(k) => k.clone(),
-        None => return Json(ApiResponse::error("sync.api_key is not configured".to_string())),
+        None => {
+            return Json(ApiResponse::error(
+                "sync.api_key is not configured".to_string(),
+            ))
+        }
     };
 
     let all_uuids = match state.db().get_all_trip_uuids() {
@@ -1287,7 +1307,10 @@ pub async fn post_sync_push(
 
     // Step 1: Send manifest so the viewer can delete orphaned trips
     let manifest_url = format!("{}/api/sync/manifest", base_url);
-    let manifest = SyncManifestPayload { all_uuids, synced_at: synced_at.clone() };
+    let manifest = SyncManifestPayload {
+        all_uuids,
+        synced_at: synced_at.clone(),
+    };
     let manifest_resp = match client
         .post(&manifest_url)
         .bearer_auth(&api_key)
@@ -1299,26 +1322,37 @@ pub async fn post_sync_push(
         Err(e) => {
             let detail = err_chain(&e);
             error!(url = %manifest_url, error = %detail, "Sync: manifest HTTP request failed");
-            return Json(ApiResponse::error(format!("Manifest push failed: {}", detail)));
+            return Json(ApiResponse::error(format!(
+                "Manifest push failed: {}",
+                detail
+            )));
         }
     };
     if !manifest_resp.status().is_success() {
         let http_status = manifest_resp.status().as_u16();
         let body = manifest_resp.text().await.unwrap_or_default();
         error!(http_status, body = %body, "Sync: manifest rejected by remote");
-        return Json(ApiResponse::error(format!("Remote returned HTTP {}: {}", http_status, body)));
+        return Json(ApiResponse::error(format!(
+            "Remote returned HTTP {}: {}",
+            http_status, body
+        )));
     }
     let manifest_result: ApiResponse<SyncManifestResult> = match manifest_resp.json().await {
         Ok(r) => r,
         Err(e) => {
             let detail = err_chain(&e);
             error!(error = %detail, "Sync: failed to parse manifest response");
-            return Json(ApiResponse::error(format!("Bad manifest response: {}", detail)));
+            return Json(ApiResponse::error(format!(
+                "Bad manifest response: {}",
+                detail
+            )));
         }
     };
     if manifest_result.status != "ok" {
         return Json(ApiResponse::error(
-            manifest_result.error.unwrap_or_else(|| "Manifest step failed".to_string()),
+            manifest_result
+                .error
+                .unwrap_or_else(|| "Manifest step failed".to_string()),
         ));
     }
     let (deleted_count, missing_uuids) = match manifest_result.data {
@@ -1374,12 +1408,19 @@ pub async fn post_sync_push(
     }
 
     // Step 3: Record last_synced_at locally
-    if let Err(e) = state.db().set_system_status_string("last_synced_at", &synced_at) {
+    if let Err(e) = state
+        .db()
+        .set_system_status_string("last_synced_at", &synced_at)
+    {
         error!(error = %e, "Sync: failed to persist last_synced_at locally");
     }
 
     info!(deleted_count, upserted_count, "Sync push complete");
-    Json(ApiResponse::ok(SyncResult { deleted_count, upserted_count, synced_at }))
+    Json(ApiResponse::ok(SyncResult {
+        deleted_count,
+        upserted_count,
+        synced_at,
+    }))
 }
 
 /// Returns Some(Response) with a 401 body if auth fails, None if auth passes.
@@ -1429,7 +1470,8 @@ pub async fn post_sync_manifest(
     let missing_uuids = match state.db().get_all_trip_uuids() {
         Ok(existing) => {
             let existing_set: std::collections::HashSet<String> = existing.into_iter().collect();
-            payload.all_uuids
+            payload
+                .all_uuids
                 .iter()
                 .filter(|u| !existing_set.contains(*u))
                 .cloned()
@@ -1441,13 +1483,20 @@ pub async fn post_sync_manifest(
         }
     };
 
-    if let Err(e) = state.db().set_system_status_string("last_synced_at", &payload.synced_at) {
+    if let Err(e) = state
+        .db()
+        .set_system_status_string("last_synced_at", &payload.synced_at)
+    {
         error!(error = %e, "Sync manifest: failed to persist synced_at");
     }
 
     let missing_count = missing_uuids.len();
     info!(deleted_count, missing_count, "Sync manifest applied");
-    Json(ApiResponse::ok(SyncManifestResult { deleted_count, missing_uuids })).into_response()
+    Json(ApiResponse::ok(SyncManifestResult {
+        deleted_count,
+        missing_uuids,
+    }))
+    .into_response()
 }
 
 pub async fn post_sync_trip(
@@ -1562,7 +1611,7 @@ pub async fn delete_forecast_area(
     Query(params): Query<ForecastAreaIdQuery>,
 ) -> Result<Json<ApiResponse<()>>, StatusCode> {
     match state.db().delete_forecast_area(params.id) {
-        Ok(true)  => Ok(Json(ApiResponse::ok(()))),
+        Ok(true) => Ok(Json(ApiResponse::ok(()))),
         Ok(false) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
             error!(error = %e, area_id = params.id, "Failed to delete forecast area");
@@ -1574,14 +1623,20 @@ pub async fn delete_forecast_area(
 pub async fn get_forecast_status(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<ForecastStatusResponse>>, StatusCode> {
-    let poller = state.poller_status.lock()
+    let poller = state
+        .poller_status
+        .lock()
         .unwrap_or_else(|p| p.into_inner())
         .clone();
     let (area_count, point_count) = state.db().get_forecast_counts().unwrap_or((0, 0));
     Ok(Json(ApiResponse::ok(ForecastStatusResponse {
         online: poller.online,
-        last_fetch: poller.last_fetch.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
-        next_fetch: poller.next_fetch.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+        last_fetch: poller
+            .last_fetch
+            .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+        next_fetch: poller
+            .next_fetch
+            .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
         area_count,
         point_count,
     })))
@@ -1592,12 +1647,17 @@ pub async fn refresh_forecast(
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
     let areas = state.db().list_forecast_areas().unwrap_or_default();
     if areas.is_empty() {
-        return Ok(Json(ApiResponse::error("No forecast areas defined".to_string())));
+        return Ok(Json(ApiResponse::error(
+            "No forecast areas defined".to_string(),
+        )));
     }
     let mut total_points = 0usize;
     for area in &areas {
         match crate::forecast::fetch_area_forecast(
-            area.lat_min, area.lat_max, area.lon_min, area.lon_max,
+            area.lat_min,
+            area.lat_max,
+            area.lon_min,
+            area.lon_max,
         )
         .await
         {
@@ -1606,9 +1666,8 @@ pub async fn refresh_forecast(
                 let db = state.db();
                 let mut stored = 0usize;
                 for f in &forecasts {
-                    match db.insert_forecast(
-                        area.id, &f.model, f.lat, f.lon, fetched_at, &f.hourly,
-                    ) {
+                    match db.insert_forecast(area.id, &f.model, f.lat, f.lon, fetched_at, &f.hourly)
+                    {
                         Ok(()) => stored += 1,
                         Err(e) => warn!(area_id = area.id, error = %e,
                               "refresh_forecast: failed to store point"),
@@ -1622,7 +1681,10 @@ pub async fn refresh_forecast(
                     }
                 }
                 total_points += forecasts.len();
-                let mut s = state.poller_status.lock().unwrap_or_else(|p| p.into_inner());
+                let mut s = state
+                    .poller_status
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
                 s.online = true;
                 s.last_fetch = Some(fetched_at);
                 s.next_fetch = Some(fetched_at + chrono::Duration::seconds(3 * 3600));
@@ -1630,18 +1692,29 @@ pub async fn refresh_forecast(
             Err(e) => {
                 warn!(area_id = area.id, error = %e,
                       "refresh_forecast: fetch failed");
-                state.poller_status.lock().unwrap_or_else(|p| p.into_inner()).online = false;
-                return Ok(Json(ApiResponse::error(format!("Fetch failed for area {}: {}", area.id, e))));
+                state
+                    .poller_status
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .online = false;
+                return Ok(Json(ApiResponse::error(format!(
+                    "Fetch failed for area {}: {}",
+                    area.id, e
+                ))));
             }
         }
     }
-    Ok(Json(ApiResponse::ok(format!("{} grid points fetched", total_points))))
+    Ok(Json(ApiResponse::ok(format!(
+        "{} grid points fetched",
+        total_points
+    ))))
 }
 
 pub async fn get_forecast_grid_points(
     State(state): State<AppState>,
     Query(params): Query<ForecastGridPointsQuery>,
-) -> Result<Json<ApiResponse<Vec<crate::db::operations::forecast::GridPointForecast>>>, StatusCode> {
+) -> Result<Json<ApiResponse<Vec<crate::db::operations::forecast::GridPointForecast>>>, StatusCode>
+{
     match state.db().get_grid_points_at(&params.timestamp) {
         Ok(pts) => Ok(Json(ApiResponse::ok(pts))),
         Err(e) => {
@@ -1669,7 +1742,14 @@ pub async fn get_forecast_route(
         Err(e) => return Ok(Json(ApiResponse::error(e))),
     };
     if params.motoring_speed_kn <= 0.0 {
-        return Ok(Json(ApiResponse::error("motoring_speed_kn must be positive".to_string())));
+        return Ok(Json(ApiResponse::error(
+            "motoring_speed_kn must be positive".to_string(),
+        )));
+    }
+    if !(0.0..=180.0).contains(&params.min_twa_deg) {
+        return Ok(Json(ApiResponse::error(
+            "min_twa_deg must be between 0 and 180".to_string(),
+        )));
     }
     let fetches = match state.db().fetch_forecast_fetches() {
         Ok(f) => f,
@@ -1684,6 +1764,7 @@ pub async fn get_forecast_route(
         params.motoring_speed_kn,
         params.polar_efficiency,
         params.min_sail_speed_kn,
+        params.min_twa_deg,
         state.polars(),
         &fetches,
     );
@@ -1691,30 +1772,51 @@ pub async fn get_forecast_route(
     Ok(Json(ApiResponse::ok(overlay)))
 }
 
+#[derive(Debug, Serialize)]
+pub struct OptimalRouteResponse {
+    pub route: Vec<crate::forecast::RouteOverlayPoint>,
+    pub frontiers: Vec<Vec<crate::routing::FrontierPoint>>,
+}
+
 pub async fn get_optimal_route(
     State(state): State<AppState>,
     Query(params): Query<OptimalRouteQuery>,
-) -> Result<Json<ApiResponse<Vec<crate::forecast::RouteOverlayPoint>>>, StatusCode> {
+) -> Result<Json<ApiResponse<OptimalRouteResponse>>, StatusCode> {
     let polars = match state.polars() {
         Some(p) => p,
-        None => return Ok(Json(ApiResponse::error(
-            "No polar table configured — cannot run isochrone routing".to_string()
-        ))),
+        None => {
+            return Ok(Json(ApiResponse::error(
+                "No polar table configured — cannot run isochrone routing".to_string(),
+            )))
+        }
     };
 
     let departure = match chrono::DateTime::parse_from_rfc3339(&params.departure) {
         Ok(dt) => dt.with_timezone(&chrono::Utc),
-        Err(_) => return Ok(Json(ApiResponse::error(
-            format!("Invalid departure timestamp: {}", params.departure)
-        ))),
+        Err(_) => {
+            return Ok(Json(ApiResponse::error(format!(
+                "Invalid departure timestamp: {}",
+                params.departure
+            ))))
+        }
     };
 
     if params.motoring_speed_kn <= 0.0 {
-        return Ok(Json(ApiResponse::error("motoring_speed_kn must be positive".to_string())));
+        return Ok(Json(ApiResponse::error(
+            "motoring_speed_kn must be positive".to_string(),
+        )));
     }
 
     if params.sail_weight_kn < 0.0 {
-        return Ok(Json(ApiResponse::error("sail_weight_kn must be non-negative".to_string())));
+        return Ok(Json(ApiResponse::error(
+            "sail_weight_kn must be non-negative".to_string(),
+        )));
+    }
+
+    if !(0.0..=180.0).contains(&params.min_twa_deg) {
+        return Ok(Json(ApiResponse::error(
+            "min_twa_deg must be between 0 and 180".to_string(),
+        )));
     }
 
     let fetches = match state.db().fetch_forecast_fetches() {
@@ -1727,7 +1829,7 @@ pub async fn get_optimal_route(
 
     if fetches.is_empty() {
         return Ok(Json(ApiResponse::error(
-            "No forecast data available".to_string()
+            "No forecast data available".to_string(),
         )));
     }
 
@@ -1738,40 +1840,78 @@ pub async fn get_optimal_route(
         params.motoring_speed_kn,
         params.polar_efficiency,
         params.min_sail_speed_kn,
+        params.min_twa_deg,
         params.sail_weight_kn,
         polars,
         &fetches,
-        if params.avoid_land { state.land_mask() } else { None },
+        if params.avoid_land {
+            state.land_mask()
+        } else {
+            None
+        },
     );
 
     // Derive speed_kn and twa_deg for each step from distance/time and wind forecast.
     // First point is the departure — no incoming step, so speed/twa are None.
     // reached_destination is not surfaced — callers receive the best-effort route regardless.
     let parsed_fetches = crate::forecast::parse_fetches(&fetches);
-    let mut route_points: Vec<crate::forecast::RouteTrackPoint> = Vec::with_capacity(result.track.len());
+    let mut route_points: Vec<crate::forecast::RouteTrackPoint> =
+        Vec::with_capacity(result.track.len());
     for (i, &(lat, lon, time)) in result.track.iter().enumerate() {
         if i == 0 {
-            route_points.push(crate::forecast::RouteTrackPoint { lat, lon, time, speed_kn: None, twa_deg: None });
+            route_points.push(crate::forecast::RouteTrackPoint {
+                lat,
+                lon,
+                time,
+                speed_kn: None,
+                twa_deg: None,
+                relative_wind_deg: None,
+            });
             continue;
         }
         let (prev_lat, prev_lon, prev_time) = result.track[i - 1];
         let step_hours = (time - prev_time).num_seconds() as f64 / 3600.0;
         let dist_nm = crate::utilities::haversine_distance_nm(prev_lat, prev_lon, lat, lon);
-        let speed_kn = if step_hours > 0.0 { dist_nm / step_hours } else { 0.0 };
+        let speed_kn = if step_hours > 0.0 {
+            dist_nm / step_hours
+        } else {
+            0.0
+        };
         let bearing = crate::utilities::haversine_heading(prev_lat, prev_lon, lat, lon);
-        let twa_deg = crate::forecast::nearest_forecast_wind(&parsed_fetches, prev_lat, prev_lon, prev_time)
+        // Single wind sample for this step, taken at its start position/time — reused for both
+        // the sail/motor decision below AND relative_wind_deg, so the two can never disagree (a
+        // prior version recomputed relative_wind_deg later from a separately re-interpolated
+        // end-of-step sample, which could silently differ from the sample that actually drove
+        // the decision).
+        let wind = crate::forecast::nearest_forecast_wind(&parsed_fetches, prev_lat, prev_lon, prev_time);
+        let relative_wind_deg = wind.map(|(_, wd)| crate::forecast::compute_twa(bearing, wd));
+        let twa_deg = wind
             .filter(|(ws, _)| *ws > 0.0)
             .and_then(|(ws, wd)| {
                 let twa = crate::forecast::compute_twa(bearing, wd);
-                polars.boat_speed(twa, ws)
+                if twa < params.min_twa_deg {
+                    return None;
+                }
+                polars
+                    .boat_speed(twa, ws)
                     .filter(|&raw| raw * params.polar_efficiency >= params.min_sail_speed_kn)
                     .map(|_| twa)
             });
-        route_points.push(crate::forecast::RouteTrackPoint { lat, lon, time, speed_kn: Some(speed_kn), twa_deg });
+        route_points.push(crate::forecast::RouteTrackPoint {
+            lat,
+            lon,
+            time,
+            speed_kn: Some(speed_kn),
+            twa_deg,
+            relative_wind_deg,
+        });
     }
 
     let overlay = crate::forecast::compute_route_overlay(&route_points, &fetches);
-    Ok(Json(ApiResponse::ok(overlay)))
+    Ok(Json(ApiResponse::ok(OptimalRouteResponse {
+        route: overlay,
+        frontiers: result.frontiers,
+    })))
 }
 
 pub fn create_api_router(state: AppState) -> Router {
@@ -1792,11 +1932,6 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/heatmap", get(get_heatmap))
         .route("/nav_analysis", get(get_nav_analysis))
         .route("/ais_targets", get(get_ais_targets))
-        .route("/forecast/areas", get(get_forecast_areas))
-        .route("/forecast/status", get(get_forecast_status))
-        .route("/forecast/grid-points", get(get_forecast_grid_points))
-        .route("/forecast/route", get(get_forecast_route))
-        .route("/forecast/optimal-route", get(get_optimal_route))
         .route("/config/read_only", get(get_read_only))
         .route("/sync/status", get(get_sync_status))
         .route("/sync/manifest", post(post_sync_manifest))
@@ -1832,6 +1967,11 @@ pub fn create_api_router(state: AppState) -> Router {
             .route("/backup/download", get(download_backup))
             .route("/system/shutdown", post(system_shutdown))
             .route("/sync/push", post(post_sync_push))
+            .route("/forecast/areas", get(get_forecast_areas))
+            .route("/forecast/status", get(get_forecast_status))
+            .route("/forecast/grid-points", get(get_forecast_grid_points))
+            .route("/forecast/route", get(get_forecast_route))
+            .route("/forecast/optimal-route", get(get_optimal_route))
             .route("/forecast/areas", post(create_forecast_area))
             .route("/forecast/areas", delete(delete_forecast_area))
             .route("/forecast/refresh", post(refresh_forecast));
@@ -1886,9 +2026,7 @@ mod tests {
         create_test_app_with_cache(crate::ais_target_cache::new_ais_cache())
     }
 
-    fn create_test_app_with_cache(
-        ais_cache: Arc<std::sync::Mutex<AisTargetCache>>,
-    ) -> Router {
+    fn create_test_app_with_cache(ais_cache: Arc<std::sync::Mutex<AisTargetCache>>) -> Router {
         let db = create_test_db();
         let config = crate::config::Config::new_default_instance();
         let signalk_broadcast = Arc::new(SignalKBroadcastChannels::new());
@@ -1899,7 +2037,9 @@ mod tests {
             backup_in_progress: Arc::new(AtomicBool::new(false)),
             jwt_secret: Arc::new(JwtSecret::generate()),
             ais_cache,
-            poller_status: Arc::new(std::sync::Mutex::new(crate::forecast_poller::ForecastPollerStatus::default())),
+            poller_status: Arc::new(std::sync::Mutex::new(
+                crate::forecast_poller::ForecastPollerStatus::default(),
+            )),
             polars: None,
             land_mask: None,
         };
@@ -2779,7 +2919,9 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(json["status"], "ok");
@@ -2789,7 +2931,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_ais_targets_returns_cached_entry() {
-        use nmea2k::{MessageHandler, N2kFrame, Identifier, pgns::{N2kMessage, AisClassAStaticData}};
+        use nmea2k::{
+            pgns::{AisClassAStaticData, N2kMessage},
+            Identifier, MessageHandler, N2kFrame,
+        };
         use socketcan::ExtendedId;
 
         const TEST_MMSI: u32 = 999000001;
@@ -2840,14 +2985,19 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(json["status"], "ok");
         let targets = json["data"].as_array().unwrap();
 
         let entry = targets.iter().find(|t| t["mmsi"] == TEST_MMSI);
-        assert!(entry.is_some(), "TEST_MMSI {TEST_MMSI} should be in the response");
+        assert!(
+            entry.is_some(),
+            "TEST_MMSI {TEST_MMSI} should be in the response"
+        );
         let entry = entry.unwrap();
         assert_eq!(entry["name"], "TEST VESSEL");
         assert_eq!(entry["callsign"], "TESTCS");
@@ -2872,7 +3022,9 @@ mod tests {
             backup_in_progress: Arc::new(AtomicBool::new(false)),
             jwt_secret: Arc::new(JwtSecret::generate()),
             ais_cache: crate::ais_target_cache::new_ais_cache(),
-            poller_status: Arc::new(std::sync::Mutex::new(crate::forecast_poller::ForecastPollerStatus::default())),
+            poller_status: Arc::new(std::sync::Mutex::new(
+                crate::forecast_poller::ForecastPollerStatus::default(),
+            )),
             polars: None,
             land_mask: None,
         };
@@ -3603,7 +3755,9 @@ mod tests {
             backup_in_progress: Arc::new(AtomicBool::new(false)),
             jwt_secret: Arc::new(JwtSecret::generate()),
             ais_cache: crate::ais_target_cache::new_ais_cache(),
-            poller_status: Arc::new(std::sync::Mutex::new(crate::forecast_poller::ForecastPollerStatus::default())),
+            poller_status: Arc::new(std::sync::Mutex::new(
+                crate::forecast_poller::ForecastPollerStatus::default(),
+            )),
             polars: None,
             land_mask: None,
         };

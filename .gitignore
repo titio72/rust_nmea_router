@@ -5,6 +5,10 @@ logs/
 /static/libs/
 /static/exports/
 /backups/
+/graphify-out/
+/.tokensave/
 package-lock.json
 .mcp.json
+route.json
+rust_out
 .superpowers/
