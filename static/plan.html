@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Forecast & Planning - NMEA Router</title>
+    <title>Planning - NMEA Router</title>
     <link rel="icon" type="image/png" href="/images/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
     <link rel="stylesheet" href="/libs/leaflet.min.css" />
@@ -12,7 +12,24 @@
     <script src="/libs/wind-gl.js"></script>
     <script src="/js/wind-particle-layer.js"></script>
     <style>
-        #planMap { height: calc(100vh - 280px); min-height: 380px; border-radius: 6px; }
+        .container { max-width: 100%; margin: 0; padding: 0; }
+        #mapWrap { position: relative; width: 100%; min-height: 380px; }
+        #planMap { position: absolute; inset: 0; }
+
+        .map-overlay-panel {
+            position: absolute;
+            background: color-mix(in srgb, var(--bg-secondary) 90%, transparent);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: 0 4px 16px var(--card-shadow);
+            z-index: 500;
+            backdrop-filter: blur(4px);
+        }
+        .map-overlay-header {
+            display: flex; align-items: center; cursor: pointer; user-select: none;
+            font-size: 11px; color: var(--text-secondary); font-weight: 600;
+            letter-spacing: 0.5px; text-transform: uppercase; gap: 6px;
+        }
         .day-tab { padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px;
                    background: var(--bg-secondary); color: var(--text-secondary);
                    border: 1px solid var(--border-color); }
@@ -87,16 +104,16 @@
             background-color: var(--sailing-color); color: white; border: 1px solid transparent;
         }
         .alt-route-modal-select:hover { background-color: #229954; }
-        .route-report-table-wrap { max-height: 320px; overflow-y: auto; }
-        .route-report-table-wrap table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .route-report-table-wrap { flex: 1; min-height: 0; overflow-y: auto; overflow-x: auto; }
+        .route-report-table-wrap table { border-collapse: collapse; font-size: 11px; white-space: nowrap; }
         .route-report-table-wrap th {
             position: sticky; top: 0; background: var(--bg-secondary);
-            text-align: left; padding: 6px 10px; color: var(--text-secondary);
-            font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;
+            text-align: left; padding: 4px 7px; color: var(--text-secondary);
+            font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px;
             border-bottom: 1px solid var(--border-color);
         }
         .route-report-table-wrap td {
-            padding: 5px 10px; color: var(--text-primary);
+            padding: 3px 7px; color: var(--text-primary);
             border-bottom: 1px solid var(--border-color);
         }
     </style>
@@ -104,224 +121,193 @@
 <body>
     <div id="headerContainer"></div>
 
-    <div style="max-width:1500px; margin:0 auto; padding:20px;">
-
-        <!-- Forecast Areas management -->
-        <div class="level-1-container" style="margin-bottom:10px; padding:14px 20px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-                <h2 onclick="toggleForecastAreas()"
-                    style="font-size:16px; font-weight:bold; color:var(--text-bold); margin:0;
-                           cursor:pointer; user-select:none; display:flex; align-items:center; gap:8px;">
-                    <span id="forecastAreasChevron" style="font-size:12px;">▾</span>Forecast Areas
-                </h2>
-                <div style="display:flex; align-items:center; gap:14px;">
-                    <span id="forecastPollerStatus" style="font-size:12px; color:var(--text-secondary);"></span>
-                    <button id="forecastRefreshBtn" onclick="refreshForecast()"
-                        style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
-                               border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
-                        ↻ Refresh
-                    </button>
-                </div>
-            </div>
-            <div id="forecastAreasBody" style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
-                <div>
-                    <div id="forecastAreaList" style="margin-bottom:12px;"></div>
-                    <button id="drawAreaBtn" onclick="startDrawArea()"
-                        style="padding:6px 14px; background:var(--link-color); color:#fff; border:none;
-                               border-radius:4px; cursor:pointer; font-size:13px;">
-                        Draw Area
-                    </button>
-                    <button id="cancelDrawBtn" onclick="cancelDrawArea()"
-                        style="display:none; padding:6px 14px; background:#e74c3c; color:#fff; border:none;
-                               border-radius:4px; cursor:pointer; font-size:13px; margin-left:8px;">
-                        Cancel
-                    </button>
-                    <span id="drawAreaHint"
-                        style="font-size:12px; color:var(--text-secondary); margin-left:10px; display:none;">
-                        Click and drag on the map to draw a bounding box
-                    </span>
-                </div>
-                <div id="forecastAreaMapEl"
-                     style="height:200px; border-radius:6px; border:1px solid var(--border-color);"></div>
-            </div>
-        </div>
-
-        <!-- Time scrubber -->
-        <div class="level-1-container" style="padding:14px 20px; margin-bottom:10px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                <div id="dayTabsContainer" style="display:flex; gap:5px; flex-wrap:wrap;"></div>
-                <div style="display:flex; gap:8px; align-items:center;">
-                    <button id="gustToggleBtn" onclick="toggleGustMode()"
-                        style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
-                               border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
-                        Show Gust
-                    </button>
-                    <button id="planRouteBtn" onclick="toggleRouteMode()"
-                        style="padding:5px 14px; background:var(--link-color); color:#fff; border:none;
-                               border-radius:4px; cursor:pointer; font-size:13px;">
-                        Plan Route
-                    </button>
-                </div>
-            </div>
-            <div style="display:flex; align-items:center; gap:12px;">
-                <input type="range" id="hourSlider" min="0" max="23" value="0"
-                    style="flex:1; accent-color:var(--link-color);">
-                <span id="selectedTime"
-                    style="font-size:13px; color:var(--text-bold); min-width:185px; text-align:right;"></span>
-                <button onclick="jumpToNow()"
-                    style="padding:4px 10px; font-size:12px; border:1px solid var(--border-color);
-                           border-radius:4px; background:transparent; color:var(--text-secondary); cursor:pointer;">
-                    Now
-                </button>
-            </div>
-        </div>
-
-        <!-- Route bar (hidden until route mode) -->
-        <div id="routeBar" class="level-1-container"
-             style="display:none; padding:10px 20px; margin-bottom:10px;">
-            <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; font-size:13px;">
-                <span id="routeWptCount"
-                    style="color:var(--text-primary); font-weight:600; min-width:200px;">
-                    click map to add waypoints
-                </span>
-                <span style="color:var(--border-color); margin:0 4px;">|</span>
-                <label style="color:var(--text-secondary);">Dep (UTC):
-                    <input type="datetime-local" id="depInput"
-                        style="margin-left:6px; background:var(--bg-secondary);
-                               border:1px solid var(--border-color); border-radius:4px;
-                               padding:3px 8px; color:var(--text-primary); font-size:13px;">
-                </label>
-                <label style="color:var(--text-secondary);">Motoring speed:
-                    <input type="number" id="speedInput" value="5.5" min="1" max="20" step="0.5"
-                        style="width:64px; margin-left:6px; background:var(--bg-secondary);
-                               border:1px solid var(--border-color); border-radius:4px;
-                               padding:3px 8px; color:var(--text-primary); font-size:13px;"> kn
-                </label>
-                <label style="color:var(--text-secondary);" title="Fraction of polar speed to use (sea state, sail trim, etc.)">Polar efficiency:
-                    <input type="number" id="efficiencyInput" value="95" min="50" max="100" step="1"
-                        style="width:52px; margin-left:6px; background:var(--bg-secondary);
-                               border:1px solid var(--border-color); border-radius:4px;
-                               padding:3px 8px; color:var(--text-primary); font-size:13px;"> %
-                </label>
-                <label style="color:var(--text-secondary);" title="Motor if expected sail speed drops below this">Min sail speed:
-                    <input type="number" id="minSailInput" value="3.0" min="0" max="10" step="0.5"
-                        style="width:52px; margin-left:6px; background:var(--bg-secondary);
-                               border:1px solid var(--border-color); border-radius:4px;
-                               padding:3px 8px; color:var(--text-primary); font-size:13px;"> kn
-                </label>
-                <label style="color:var(--text-secondary);" title="Motor instead of sail when the wind is tighter than this off the bow">Min wind angle:
-                    <input type="number" id="minTwaInput" value="60" min="0" max="180" step="1"
-                        style="width:52px; margin-left:6px; background:var(--bg-secondary);
-                               border:1px solid var(--border-color); border-radius:4px;
-                               padding:3px 8px; color:var(--text-primary); font-size:13px;">°
-                </label>
-                <label style="color:var(--text-secondary);" title="Bonus score per sailed hour during route optimisation. 0 = fastest route, higher values favour more sailing.">Sail preference:
-                    <input type="number" id="sailWeightInput" value="0" min="0" max="10" step="0.5"
-                        style="width:52px; margin-left:6px; background:var(--bg-secondary);
-                               border:1px solid var(--border-color); border-radius:4px;
-                               padding:3px 8px; color:var(--text-primary); font-size:13px;"> kn
-                </label>
-                <label style="color:var(--text-secondary); display:flex; align-items:center; gap:4px;"
-                       title="Route around land/islands when optimizing. Turn off to compare against a straight-line-ignoring-coastline result.">
-                    <input type="checkbox" id="avoidLandInput" checked>
-                    Avoid land
-                </label>
-                <button id="undoBtn" onclick="undoWaypoint()" disabled
-                    style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
-                           border:1px solid var(--border-color); border-radius:4px;
-                           cursor:pointer; font-size:13px;">
-                    ↩ Undo
-                </button>
-                <button id="doneBtn" onclick="doneDrawing()" disabled
-                    style="padding:5px 14px; background:#48bb78; color:#fff; border:none;
-                           border-radius:4px; cursor:pointer; font-size:13px;">
-                    ✓ Done
-                </button>
-                <button id="computeBtn" onclick="computeRoute()" disabled
-                    style="padding:5px 14px; background:var(--link-color); color:#fff; border:none;
-                           border-radius:4px; cursor:pointer; font-size:13px; opacity:0.4;">
-                    Compute
-                </button>
-                <button id="optimizeBtn" onclick="optimizeRoute()" disabled
-                    style="padding:6px 16px; background:#805ad5; color:#fff;
-                           border:none; border-radius:4px; cursor:pointer; font-size:13px; opacity:0.4;">
-                    ⚡ Optimize
-                </button>
-            </div>
-        </div>
-
-        <!-- Map -->
-        <div class="level-1-container" style="padding:0; overflow:hidden; margin-bottom:10px;">
+    <div class="container">
+        <div id="mapWrap">
             <div id="planMap"></div>
+
+            <!-- Top overlay: time scrubber + forecast controls + stats -->
+            <div id="topOverlay" class="map-overlay-panel" style="top:12px; left:12px; right:12px; padding:10px 14px;">
+                <div class="map-overlay-header" onclick="toggleOverlayCollapse('topOverlayBody','topOverlayChevron')">
+                    <span id="topOverlayChevron">▾</span> Forecast &amp; Time
+                </div>
+                <div id="topOverlayBody" style="margin-top:8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                        <div id="dayTabsContainer" style="display:flex; gap:5px; flex-wrap:wrap;"></div>
+                        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                            <span id="forecastPollerStatus" style="font-size:12px; color:var(--text-secondary);"></span>
+                            <button id="forecastRefreshBtn" onclick="refreshForecast()"
+                                style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
+                                       border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
+                                ↻ Refresh
+                            </button>
+                            <button id="gustToggleBtn" onclick="toggleGustMode()"
+                                style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
+                                       border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
+                                Show Gust
+                            </button>
+                            <button id="planRouteBtn" onclick="toggleRouteMode()"
+                                style="padding:5px 14px; background:var(--link-color); color:#fff; border:none;
+                                       border-radius:4px; cursor:pointer; font-size:13px;">
+                                Plan Route
+                            </button>
+                        </div>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px;">
+                        <input type="range" id="hourSlider" min="0" max="23" value="0"
+                            style="flex:1; accent-color:var(--link-color);">
+                        <span id="selectedTime"
+                            style="font-size:13px; color:var(--text-bold); min-width:185px; text-align:right;"></span>
+                        <button onclick="jumpToNow()"
+                            style="padding:4px 10px; font-size:12px; border:1px solid var(--border-color);
+                                   border-radius:4px; background:transparent; color:var(--text-secondary); cursor:pointer;">
+                            Now
+                        </button>
+                    </div>
+                    <div style="display:flex; gap:22px; flex-wrap:wrap; font-size:12px; color:var(--text-secondary);">
+                        Wind: <strong id="statWind" style="color:var(--text-primary);">—</strong>
+                        &nbsp;Gust: <strong id="statGust" style="color:var(--text-primary);">—</strong>
+                        &nbsp;Wave: <strong id="statWave" style="color:var(--text-primary);">—</strong>
+                        &nbsp;Period: <strong id="statPeriod" style="color:var(--text-primary);">—</strong>
+                        &nbsp;CAPE: <strong id="statCape" style="color:var(--text-primary);">—</strong>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Left sidebar overlay: route config (hidden until route mode) -->
+            <div id="routeBar" class="map-overlay-panel"
+                 style="display:none; left:12px; width:280px; max-height:60vh; overflow-y:auto; padding:12px 14px;">
+                <div class="map-overlay-header" onclick="toggleOverlayCollapse('routeBarBody','routeBarChevron')">
+                    <span id="routeBarChevron">▾</span> Route
+                </div>
+                <div id="routeBarBody" style="display:flex; flex-direction:column; gap:10px; margin-top:10px; font-size:13px;">
+                    <span id="routeWptCount" style="color:var(--text-primary); font-weight:600;">
+                        click map to add waypoints
+                    </span>
+                    <label style="color:var(--text-secondary); display:flex; flex-direction:column; gap:3px;">Dep (UTC):
+                        <input type="datetime-local" id="depInput"
+                            style="background:var(--bg-secondary); border:1px solid var(--border-color);
+                                   border-radius:4px; padding:4px 8px; color:var(--text-primary); font-size:13px;">
+                    </label>
+                    <label style="color:var(--text-secondary); display:flex; flex-direction:column; gap:3px;">Motoring speed (kn):
+                        <input type="number" id="speedInput" value="5.5" min="1" max="20" step="0.5"
+                            style="background:var(--bg-secondary); border:1px solid var(--border-color);
+                                   border-radius:4px; padding:4px 8px; color:var(--text-primary); font-size:13px;">
+                    </label>
+                    <label style="color:var(--text-secondary); display:flex; flex-direction:column; gap:3px;"
+                           title="Fraction of polar speed to use (sea state, sail trim, etc.)">Polar efficiency (%):
+                        <input type="number" id="efficiencyInput" value="95" min="50" max="100" step="1"
+                            style="background:var(--bg-secondary); border:1px solid var(--border-color);
+                                   border-radius:4px; padding:4px 8px; color:var(--text-primary); font-size:13px;">
+                    </label>
+                    <label style="color:var(--text-secondary); display:flex; flex-direction:column; gap:3px;"
+                           title="Motor if expected sail speed drops below this">Min sail speed (kn):
+                        <input type="number" id="minSailInput" value="3.0" min="0" max="10" step="0.5"
+                            style="background:var(--bg-secondary); border:1px solid var(--border-color);
+                                   border-radius:4px; padding:4px 8px; color:var(--text-primary); font-size:13px;">
+                    </label>
+                    <label style="color:var(--text-secondary); display:flex; flex-direction:column; gap:3px;"
+                           title="Motor instead of sail when the wind is tighter than this off the bow">Min wind angle (°):
+                        <input type="number" id="minTwaInput" value="60" min="0" max="180" step="1"
+                            style="background:var(--bg-secondary); border:1px solid var(--border-color);
+                                   border-radius:4px; padding:4px 8px; color:var(--text-primary); font-size:13px;">
+                    </label>
+                    <label style="color:var(--text-secondary); display:flex; flex-direction:column; gap:3px;"
+                           title="Bonus score per sailed hour during route optimisation. 0 = fastest route, higher values favour more sailing.">Sail preference (kn):
+                        <input type="number" id="sailWeightInput" value="0" min="0" max="10" step="0.5"
+                            style="background:var(--bg-secondary); border:1px solid var(--border-color);
+                                   border-radius:4px; padding:4px 8px; color:var(--text-primary); font-size:13px;">
+                    </label>
+                    <label style="color:var(--text-secondary); display:flex; align-items:center; gap:6px;"
+                           title="Route around land/islands when optimizing. Turn off to compare against a straight-line-ignoring-coastline result.">
+                        <input type="checkbox" id="avoidLandInput" checked>
+                        Avoid land
+                    </label>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:4px;">
+                        <button id="undoBtn" onclick="undoWaypoint()" disabled
+                            style="padding:6px 10px; background:var(--bg-secondary); color:var(--text-secondary);
+                                   border:1px solid var(--border-color); border-radius:4px;
+                                   cursor:pointer; font-size:13px;">
+                            ↩ Undo
+                        </button>
+                        <button id="doneBtn" onclick="doneDrawing()" disabled
+                            style="padding:6px 10px; background:#48bb78; color:#fff; border:none;
+                                   border-radius:4px; cursor:pointer; font-size:13px;">
+                            ✓ Done
+                        </button>
+                        <button id="computeBtn" onclick="computeRoute()" disabled
+                            style="padding:6px 10px; background:var(--link-color); color:#fff; border:none;
+                                   border-radius:4px; cursor:pointer; font-size:13px; opacity:0.4;">
+                            Compute
+                        </button>
+                        <button id="optimizeBtn" onclick="optimizeRoute()" disabled
+                            style="padding:6px 10px; background:#805ad5; color:#fff;
+                                   border:none; border-radius:4px; cursor:pointer; font-size:13px; opacity:0.4;">
+                            ⚡ Optimize
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom sheet overlay: route summary (shown after compute) -->
+            <div id="routeSummary" class="map-overlay-panel"
+                 style="display:none; right:12px; bottom:12px; width:300px; padding:10px 12px;
+                        flex-direction:column; overflow:hidden;">
+                <div class="map-overlay-header" onclick="toggleOverlayCollapse('routeSummaryBody','routeSummaryChevron')">
+                    <span id="routeSummaryChevron">▾</span> Route Summary
+                </div>
+                <div id="routeSummaryBody" style="display:flex; flex-direction:column; flex:1; min-height:0; margin-top:8px; font-size:12px;">
+                    <!-- Key stats -->
+                    <div style="display:grid; grid-template-columns:1fr 1fr; border:1px solid var(--border-color);
+                                border-radius:6px; overflow:hidden; margin-bottom:10px;">
+                        <div style="padding:6px 9px; border-right:1px solid var(--border-color); border-bottom:1px solid var(--border-color);">
+                            <div style="font-size:10px; color:var(--text-secondary); margin-bottom:1px;">Distance</div>
+                            <div id="sumDistance" style="font-size:15px; font-weight:700; color:var(--text-primary);">—</div>
+                        </div>
+                        <div style="padding:6px 9px; border-bottom:1px solid var(--border-color);">
+                            <div style="font-size:10px; color:var(--text-secondary); margin-bottom:1px;">Duration</div>
+                            <div id="sumDur" style="font-size:15px; font-weight:700; color:var(--text-primary);">—</div>
+                        </div>
+                        <div style="padding:6px 9px; border-right:1px solid var(--border-color);">
+                            <div style="font-size:10px; color:var(--text-secondary); margin-bottom:1px;">Departure</div>
+                            <div id="sumDep" style="font-size:11px; font-weight:600; color:var(--text-primary);">—</div>
+                        </div>
+                        <div style="padding:6px 9px;">
+                            <div style="font-size:10px; color:var(--text-secondary); margin-bottom:1px;">Arrival</div>
+                            <div id="sumArr" style="font-size:11px; font-weight:600; color:var(--text-primary);">—</div>
+                        </div>
+                    </div>
+
+                    <!-- Sail / motor split -->
+                    <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-secondary);
+                                margin-bottom:4px;">
+                        <span>⛵ &nbsp;<strong id="sumSailPct" style="color:#48bb78;">—</strong></span>
+                        <span>⚙ &nbsp;<strong id="sumMotorPct" style="color:#9ca3af;">—</strong></span>
+                    </div>
+                    <div style="height:6px; border-radius:3px; overflow:hidden; background:var(--bg-secondary);
+                                display:flex; margin-bottom:10px;">
+                        <div id="modeBarSail"  style="background:#48bb78; transition:width 0.4s;"></div>
+                        <div id="modeBarMotor" style="background:#9ca3af; transition:width 0.4s;"></div>
+                    </div>
+
+                    <!-- Speed chart -->
+                    <div style="font-size:10px; color:var(--text-secondary); margin-bottom:3px;">Boat speed (kn)</div>
+                    <div id="speedChartContainer"></div>
+
+                    <!-- Step-by-step table -->
+                    <div style="font-size:10px; color:var(--text-secondary); margin-top:10px; margin-bottom:3px;">
+                        Step-by-step
+                    </div>
+                    <div class="route-report-table-wrap">
+                        <table>
+                            <thead>
+                                <tr><th>Time</th><th>Speed</th><th>Engine</th><th>TWS</th><th>TWD</th><th>Gust</th><th>AWA</th><th>AWS</th></tr>
+                            </thead>
+                            <tbody id="routeReportTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
         </div>
-
-        <!-- Stats bar -->
-        <div class="level-1-container" style="padding:12px 20px;">
-            <div style="display:flex; gap:28px; flex-wrap:wrap; font-size:13px; color:var(--text-secondary);">
-                Wind: <strong id="statWind" style="color:var(--text-primary);">—</strong>
-                &nbsp;Gust: <strong id="statGust" style="color:var(--text-primary);">—</strong>
-                &nbsp;Wave: <strong id="statWave" style="color:var(--text-primary);">—</strong>
-                &nbsp;Period: <strong id="statPeriod" style="color:var(--text-primary);">—</strong>
-                &nbsp;CAPE: <strong id="statCape" style="color:var(--text-primary);">—</strong>
-            </div>
-        </div>
-
-        <!-- Route summary (shown after compute) -->
-        <div id="routeSummary" class="level-1-container" style="display:none; padding:16px 20px; margin-top:10px;">
-            <div style="font-size:11px; color:var(--text-secondary); font-weight:600; letter-spacing:0.6px;
-                        text-transform:uppercase; margin-bottom:12px;">Route Summary</div>
-
-            <!-- Key stats -->
-            <div style="display:flex; flex-wrap:wrap; border:1px solid var(--border-color); border-radius:6px;
-                        overflow:hidden; margin-bottom:14px;">
-                <div style="flex:0 0 auto; padding:10px 20px; border-right:1px solid var(--border-color);">
-                    <div style="font-size:11px; color:var(--text-secondary); margin-bottom:2px;">Distance</div>
-                    <div id="sumDistance" style="font-size:22px; font-weight:700; color:var(--text-primary);">—</div>
-                </div>
-                <div style="flex:1; min-width:170px; padding:10px 20px; border-right:1px solid var(--border-color);">
-                    <div style="font-size:11px; color:var(--text-secondary); margin-bottom:2px;">Departure</div>
-                    <div id="sumDep" style="font-size:14px; font-weight:600; color:var(--text-primary);">—</div>
-                </div>
-                <div style="flex:1; min-width:170px; padding:10px 20px; border-right:1px solid var(--border-color);">
-                    <div style="font-size:11px; color:var(--text-secondary); margin-bottom:2px;">Arrival</div>
-                    <div id="sumArr" style="font-size:14px; font-weight:600; color:var(--text-primary);">—</div>
-                </div>
-                <div style="flex:0 0 auto; padding:10px 20px;">
-                    <div style="font-size:11px; color:var(--text-secondary); margin-bottom:2px;">Duration</div>
-                    <div id="sumDur" style="font-size:22px; font-weight:700; color:var(--text-primary);">—</div>
-                </div>
-            </div>
-
-            <!-- Sail / motor split -->
-            <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--text-secondary);
-                        margin-bottom:5px;">
-                <span>⛵ Sailing &nbsp;<strong id="sumSailPct" style="color:#48bb78;">—</strong></span>
-                <span>⚙ Motoring &nbsp;<strong id="sumMotorPct" style="color:#9ca3af;">—</strong></span>
-            </div>
-            <div style="height:8px; border-radius:4px; overflow:hidden; background:var(--bg-secondary);
-                        display:flex; margin-bottom:16px;">
-                <div id="modeBarSail"  style="background:#48bb78; transition:width 0.4s;"></div>
-                <div id="modeBarMotor" style="background:#9ca3af; transition:width 0.4s;"></div>
-            </div>
-
-            <!-- Speed chart -->
-            <div style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">Boat speed (kn)</div>
-            <div id="speedChartContainer"></div>
-
-            <!-- Step-by-step table -->
-            <div style="font-size:11px; color:var(--text-secondary); margin-top:14px; margin-bottom:4px;">
-                Step-by-step
-            </div>
-            <div class="route-report-table-wrap">
-                <table>
-                    <thead>
-                        <tr><th>Time</th><th>Boat Speed</th><th>Engine</th><th>TWS</th><th>TWD</th></tr>
-                    </thead>
-                    <tbody id="routeReportTableBody"></tbody>
-                </table>
-            </div>
-        </div>
-
     </div>
 
     <div id="altRouteModal" class="alt-route-modal">
@@ -353,8 +339,10 @@
     </div>
 
     <script>
-        document.getElementById('headerContainer').innerHTML = createHeaderBar('forecast');
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('planning');
         initializeTheme();
+
+        fetchUiMode().then(readOnly => { if (readOnly) window.location.href = '/'; });
 
         // ── State ─────────────────────────────────────────────────────────────────
         let planMap = null;
@@ -384,9 +372,71 @@
         let showGust = false;     // when true, color arrows by gust speed instead of wind speed
         let lastRouteOverlay = []; // last computed overlay — persisted across reloads
 
+        // ── Full-bleed map + floating overlay panels ────────────────────────────────
+
+        // Sizes #mapWrap to fill the viewport below the header bar. Leaflet needs the
+        // container to have a real pixel height before L.map() runs, so this is called
+        // synchronously before map creation in init(), then again on resize.
+        function sizeMapWrap() {
+            const wrap = document.getElementById('mapWrap');
+            if (!wrap) return;
+            const top = wrap.getBoundingClientRect().top;
+            const height = Math.max(window.innerHeight - top - 20, 380);
+            wrap.style.height = height + 'px';
+            if (planMap) planMap.invalidateSize();
+        }
+        window.addEventListener('resize', sizeMapWrap);
+
+        // Positions the left route-config sidebar just below the top overlay bar,
+        // whose height varies with content (day-tab wrapping, status text, collapse state).
+        function layoutOverlays() {
+            const topBar = document.getElementById('topOverlay');
+            const wrap = document.getElementById('mapWrap');
+            const routeBarEl = document.getElementById('routeBar');
+            const summaryEl = document.getElementById('routeSummary');
+            if (!topBar || !wrap) return;
+            const top = topBar.offsetHeight + 24;
+            const maxHeight = Math.max(wrap.offsetHeight - top - 12, 120);
+            if (routeBarEl) {
+                routeBarEl.style.top = top + 'px';
+                routeBarEl.style.maxHeight = maxHeight + 'px';
+            }
+            // routeSummary pins top AND bottom (set in its own CSS) so it always spans
+            // down to the bottom of the map, regardless of how much content it holds.
+            if (summaryEl) {
+                summaryEl.style.top = top + 'px';
+            }
+        }
+        window.addEventListener('resize', layoutOverlays);
+
+        // Generic collapse toggle for the three floating overlay panels — collapses to
+        // just the header row, expanded/collapsed state remembered per body element id.
+        function toggleOverlayCollapse(bodyId, chevronId) {
+            const body = document.getElementById(bodyId);
+            const chevron = document.getElementById(chevronId);
+            const collapsed = body.style.display === 'none';
+            body.style.display = collapsed ? '' : 'none';
+            chevron.textContent = collapsed ? '▾' : '▸';
+            localStorage.setItem('plan_overlay_' + bodyId + '_collapsed', collapsed ? '0' : '1');
+            layoutOverlays();
+        }
+
+        function restoreOverlayCollapse(bodyId, chevronId) {
+            if (localStorage.getItem('plan_overlay_' + bodyId + '_collapsed') === '1') {
+                document.getElementById(bodyId).style.display = 'none';
+                document.getElementById(chevronId).textContent = '▸';
+            }
+        }
+
         // ── Init ─────────────────────────────────────────────────────────────────
         async function init() {
-            planMap = L.map('planMap').setView([43.0, 9.0], 6);
+            restoreOverlayCollapse('topOverlayBody', 'topOverlayChevron');
+            restoreOverlayCollapse('routeBarBody', 'routeBarChevron');
+            restoreOverlayCollapse('routeSummaryBody', 'routeSummaryChevron');
+            sizeMapWrap();
+            layoutOverlays();
+
+            planMap = L.map('planMap', { zoomControl: false }).setView([43.0, 9.0], 6);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap', maxZoom: 16
             }).addTo(planMap);
@@ -446,7 +496,7 @@
                 if (!statusJson.data || statusJson.data.point_count === 0) {
                     document.getElementById('dayTabsContainer').innerHTML =
                         '<span style="font-size:13px; color:var(--text-secondary);">' +
-                        'No forecast data. Draw a bounding box in the Forecast Areas section below.</span>';
+                        'No forecast data. Draw a bounding box on the <a href="/navigation-areas.html">Navigation Areas</a> page.</span>';
                     return;
                 }
 
@@ -480,6 +530,7 @@
                     `<button class="day-tab${i === selectedDay ? ' active' : ''}"
                              onclick="selectDay(${i})">${d.label}</button>`)
                 .join('');
+            layoutOverlays();
         }
 
         function selectDay(i, doLoad = true) {
@@ -1370,12 +1421,12 @@
 
             drawSpeedChart(pts, depMs, totalHours);
             renderRouteReportTable(pts);
-            panel.style.display = '';
+            panel.style.display = 'flex';
         }
 
         function drawSpeedChart(pts, depMs, totalHours) {
-            const W = 900, H = 130;
-            const PAD = { top: 10, right: 16, bottom: 26, left: 40 };
+            const W = 280, H = 110;
+            const PAD = { top: 6, right: 8, bottom: 20, left: 28 };
             const plotW = W - PAD.left - PAD.right;
             const plotH = H - PAD.top  - PAD.bottom;
 
@@ -1397,7 +1448,7 @@
             }
 
             let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg"
-                            style="width:100%; display:block; max-height:130px;">`;
+                            style="width:100%; display:block; max-height:${H}px;">`;
 
             // Horizontal grid lines + y labels
             const yStep = yMax <= 8 ? 2 : yMax <= 14 ? 3 : 4;
@@ -1450,6 +1501,21 @@
             document.getElementById('speedChartContainer').innerHTML = svg;
         }
 
+        // Mirrors utilities::calculate_true_wind (Rust) in reverse: adds the boat's
+        // velocity vector to the true wind vector instead of subtracting it.
+        function trueToApparentWind(twsKn, twaDeg, boatSpeedKn) {
+            if (twsKn == null || twaDeg == null || boatSpeedKn == null) return null;
+            const twaRad = twaDeg * Math.PI / 180;
+            const twX = twsKn * Math.cos(twaRad);
+            const twY = twsKn * Math.sin(twaRad);
+            const awX = twX + boatSpeedKn;
+            const awY = twY;
+            return {
+                awsKn: Math.sqrt(awX * awX + awY * awY),
+                awaDeg: Math.atan2(awY, awX) * 180 / Math.PI
+            };
+        }
+
         function renderRouteReportTable(pts) {
             const body = document.getElementById('routeReportTableBody');
             body.innerHTML = pts.map(p => {
@@ -1460,7 +1526,12 @@
                 const eng = p.speed_kn == null ? '—' : (p.twa_deg === null ? '⚙ Motoring' : '⛵ Sailing');
                 const tws = p.wind_speed_kn != null ? p.wind_speed_kn.toFixed(1) + ' kn' : '—';
                 const twd = p.relative_wind_deg != null ? p.relative_wind_deg.toFixed(0) + '°' : '—';
-                return `<tr><td>${time}</td><td>${spd}</td><td>${eng}</td><td>${tws}</td><td>${twd}</td></tr>`;
+                const gust = p.wind_gust_kn != null ? p.wind_gust_kn.toFixed(1) + ' kn' : '—';
+                const apparent = trueToApparentWind(p.wind_speed_kn, p.relative_wind_deg, p.speed_kn);
+                const awa = apparent ? apparent.awaDeg.toFixed(0) + '°' : '—';
+                const aws = apparent ? apparent.awsKn.toFixed(1) + ' kn' : '—';
+                return `<tr><td>${time}</td><td>${spd}</td><td>${eng}</td><td>${tws}</td><td>${twd}</td>` +
+                    `<td>${gust}</td><td>${awa}</td><td>${aws}</td></tr>`;
             }).join('');
         }
 
@@ -1535,164 +1606,7 @@
 
         init();
 
-        // ── Forecast Areas collapse ───────────────────────────────────────────────────
-        function toggleForecastAreas() {
-            const body = document.getElementById('forecastAreasBody');
-            const chevron = document.getElementById('forecastAreasChevron');
-            const collapsed = body.style.display === 'none';
-            body.style.display = collapsed ? 'grid' : 'none';
-            chevron.textContent = collapsed ? '▾' : '▸';
-            localStorage.setItem('forecast_areas_collapsed', collapsed ? '0' : '1');
-            if (collapsed && forecastAreaMap) forecastAreaMap.invalidateSize();
-        }
-
-        (function restoreForecastAreasCollapse() {
-            if (localStorage.getItem('forecast_areas_collapsed') === '1') {
-                document.getElementById('forecastAreasBody').style.display = 'none';
-                document.getElementById('forecastAreasChevron').textContent = '▸';
-            }
-        })();
-
-        // ── Forecast Area Management ──────────────────────────────────────────────────
-
-        let forecastAreaMap = null;
-        let forecastAreaRectangles = [];
-        let forecastDrawOverlay = null;
-        let drawStart = null;
-        let drawRect = null;
-        let isDrawing = false;
-        let forecastStatusInterval = null;
-
-        function initForecastAreaMap() {
-            if (forecastAreaMap) { forecastAreaMap.remove(); }
-            forecastAreaMap = L.map('forecastAreaMapEl').setView([43.0, 9.0], 5);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap', maxZoom: 16
-            }).addTo(forecastAreaMap);
-            forecastDrawOverlay = document.createElement('div');
-            forecastDrawOverlay.style.cssText =
-                'position:absolute;inset:0;z-index:10000;display:none;cursor:crosshair;';
-            forecastAreaMap.getContainer().appendChild(forecastDrawOverlay);
-            forecastDrawOverlay.addEventListener('mousedown', onAreaMapMouseDown);
-        }
-
-        function startDrawArea() {
-            isDrawing = true;
-            document.getElementById('cancelDrawBtn').style.display = '';
-            document.getElementById('drawAreaBtn').style.display = 'none';
-            document.getElementById('drawAreaHint').style.display = '';
-            forecastDrawOverlay.style.display = 'block';
-        }
-
-        function cancelDrawArea() {
-            isDrawing = false;
-            drawStart = null;
-            if (drawRect) { forecastAreaMap.removeLayer(drawRect); drawRect = null; }
-            document.getElementById('cancelDrawBtn').style.display = 'none';
-            document.getElementById('drawAreaBtn').style.display = '';
-            document.getElementById('drawAreaHint').style.display = 'none';
-            forecastDrawOverlay.style.display = 'none';
-        }
-
-        function overlayLatLng(e) {
-            const r = forecastDrawOverlay.getBoundingClientRect();
-            return forecastAreaMap.containerPointToLatLng(L.point(e.clientX - r.left, e.clientY - r.top));
-        }
-
-        function onAreaMapMouseDown(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            drawStart = overlayLatLng(e);
-            if (drawRect) { forecastAreaMap.removeLayer(drawRect); }
-            drawRect = L.rectangle([drawStart, drawStart], {
-                color: '#3b82f6', weight: 2, fillOpacity: 0.15, interactive: false
-            }).addTo(forecastAreaMap);
-            document.addEventListener('mousemove', onAreaMapMouseMove);
-            document.addEventListener('mouseup', onAreaMapMouseUp);
-        }
-
-        function onAreaMapMouseMove(e) {
-            if (!drawStart || !drawRect) return;
-            drawRect.setBounds(L.latLngBounds(drawStart, overlayLatLng(e)));
-        }
-
-        async function onAreaMapMouseUp(e) {
-            document.removeEventListener('mousemove', onAreaMapMouseMove);
-            document.removeEventListener('mouseup', onAreaMapMouseUp);
-            if (!drawStart || !drawRect) return;
-            const bounds = drawRect.getBounds();
-            const lat_min = Math.min(bounds.getSouthWest().lat, bounds.getNorthEast().lat);
-            const lat_max = Math.max(bounds.getSouthWest().lat, bounds.getNorthEast().lat);
-            const lon_min = Math.min(bounds.getSouthWest().lng, bounds.getNorthEast().lng);
-            const lon_max = Math.max(bounds.getSouthWest().lng, bounds.getNorthEast().lng);
-            cancelDrawArea();
-            if (Math.abs(lat_max - lat_min) < 0.01 || Math.abs(lon_max - lon_min) < 0.01) return;
-            try {
-                await fetch('/api/forecast/areas', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ lat_min, lat_max, lon_min, lon_max }),
-                });
-                await loadForecastAreas();
-                await updateForecastStatus();
-            } catch (err) {
-                console.error('Failed to save forecast area', err);
-            }
-        }
-
-        async function deleteForecastArea(id) {
-            try {
-                await fetch('/api/forecast/areas?id=' + id, { method: 'DELETE' });
-                await loadForecastAreas();
-                await updateForecastStatus();
-            } catch (err) {
-                console.error('Failed to delete forecast area', err);
-            }
-        }
-
-        function renderForecastAreaList(areas) {
-            const container = document.getElementById('forecastAreaList');
-            if (!areas.length) {
-                container.innerHTML =
-                    '<div style="font-size:13px; color:var(--text-secondary);">No areas defined. Draw a bounding box on the map.</div>';
-                return;
-            }
-            container.innerHTML = areas.map(a => `
-                <div style="display:flex; justify-content:space-between; align-items:center;
-                            background:var(--bg-secondary); padding:6px 10px; border-radius:5px;
-                            margin-bottom:5px; font-size:13px;">
-                    <span>
-                        <strong>Area ${a.id}</strong>
-                        <span style="color:var(--text-secondary); font-size:11px; margin-left:8px;">
-                            ${a.lat_min.toFixed(2)}–${a.lat_max.toFixed(2)}°N &nbsp;
-                            ${a.lon_min.toFixed(2)}–${a.lon_max.toFixed(2)}°E
-                        </span>
-                    </span>
-                    <button onclick="deleteForecastArea(${Number(a.id)})"
-                        style="background:transparent; border:1px solid #e74c3c; color:#e74c3c;
-                               border-radius:3px; padding:1px 8px; font-size:11px; cursor:pointer;">
-                        Delete
-                    </button>
-                </div>`).join('');
-        }
-
-        function renderForecastAreasOnMap(areas) {
-            forecastAreaRectangles.forEach(r => forecastAreaMap.removeLayer(r));
-            forecastAreaRectangles = [];
-            areas.forEach(a => {
-                const r = L.rectangle(
-                    [[a.lat_min, a.lon_min], [a.lat_max, a.lon_max]],
-                    { color: '#3b82f6', weight: 2, fillOpacity: 0.1 }
-                ).addTo(forecastAreaMap);
-                forecastAreaRectangles.push(r);
-            });
-            if (areas.length) {
-                const bounds = L.latLngBounds(
-                    areas.map(a => [[a.lat_min, a.lon_min], [a.lat_max, a.lon_max]]).flat()
-                );
-                forecastAreaMap.fitBounds(bounds, { padding: [20, 20] });
-            }
-        }
+        // ── Navigation areas (wind field data) + forecast refresh ───────────────────
 
         // Adds/removes a WindParticleLayer on planMap for each area, keyed by area.id,
         // so existing layers (and their live WebGL contexts) aren't torn down and
@@ -1716,19 +1630,19 @@
             });
         }
 
-        async function loadForecastAreas() {
+        // Navigation areas are drawn/edited on navigation-areas.html; this page only
+        // needs their bounds to build wind layers and for point-in-area lookups.
+        async function loadPlanAreas() {
             try {
                 const resp = await fetch('/api/forecast/areas');
                 const json = await resp.json();
-                const areas = json.data || [];
-                renderForecastAreaList(areas);
-                renderForecastAreasOnMap(areas);
-                if (planMap) syncWindLayers(areas);
+                syncWindLayers(json.data || []);
             } catch (err) {
                 console.error('Failed to load forecast areas', err);
-                renderForecastAreaList([]);
             }
         }
+
+        let forecastStatusInterval = null;
 
         async function updateForecastStatus() {
             try {
@@ -1749,6 +1663,7 @@
                 statusEl.innerHTML =
                     onlineBadge + ' <span style="font-size:11px;color:var(--text-secondary);margin-left:8px;">' +
                     lastFetch + nextFetch + ' · ' + s.point_count + ' pts</span>';
+                layoutOverlays();
             } catch (_) {}
         }
 
@@ -1773,8 +1688,7 @@
 
         window.addEventListener('load', () => {
             requestAnimationFrame(() => {
-                initForecastAreaMap();
-                loadForecastAreas();
+                loadPlanAreas();
                 updateForecastStatus();
                 if (forecastStatusInterval) clearInterval(forecastStatusInterval);
                 forecastStatusInterval = setInterval(updateForecastStatus, 60000);

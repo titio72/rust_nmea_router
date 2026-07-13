@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Navigation Areas - NMEA Router</title>
+    <link rel="icon" type="image/png" href="/images/nmeasail.png">
+    <link rel="stylesheet" href="/shared.css">
+    <link rel="stylesheet" href="/libs/leaflet.min.css" />
+    <script src="/js/shared-theme.js?v=3"></script>
+    <script src="/libs/leaflet.min.js"></script>
+</head>
+<body>
+    <div id="headerContainer"></div>
+
+    <div style="max-width:1500px; margin:0 auto; padding:20px;">
+
+        <!-- Navigation Areas management -->
+        <div class="level-1-container" style="padding:14px 20px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                <h2 style="font-size:16px; font-weight:bold; color:var(--text-bold); margin:0;">
+                    Navigation Areas
+                </h2>
+                <div style="display:flex; align-items:center; gap:14px;">
+                    <span id="forecastPollerStatus" style="font-size:12px; color:var(--text-secondary);"></span>
+                    <button id="forecastRefreshBtn" onclick="refreshForecast()"
+                        style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
+                               border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
+                        ↻ Refresh
+                    </button>
+                </div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+                <div>
+                    <div id="forecastAreaList" style="margin-bottom:12px;"></div>
+                    <button id="drawAreaBtn" onclick="startDrawArea()"
+                        style="padding:6px 14px; background:var(--link-color); color:#fff; border:none;
+                               border-radius:4px; cursor:pointer; font-size:13px;">
+                        Draw Area
+                    </button>
+                    <button id="cancelDrawBtn" onclick="cancelDrawArea()"
+                        style="display:none; padding:6px 14px; background:#e74c3c; color:#fff; border:none;
+                               border-radius:4px; cursor:pointer; font-size:13px; margin-left:8px;">
+                        Cancel
+                    </button>
+                    <span id="drawAreaHint"
+                        style="font-size:12px; color:var(--text-secondary); margin-left:10px; display:none;">
+                        Click and drag on the map to draw a bounding box
+                    </span>
+                </div>
+                <div id="forecastAreaMapEl"
+                     style="min-height:400px; border-radius:6px; border:1px solid var(--border-color);"></div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('navigation-areas');
+        initializeTheme();
+
+        fetchUiMode().then(readOnly => { if (readOnly) window.location.href = '/'; });
+
+        // ── Navigation Area Management ──────────────────────────────────────────
+
+        let forecastAreaMap = null;
+        let forecastAreaRectangles = [];
+        let forecastDrawOverlay = null;
+        let drawStart = null;
+        let drawRect = null;
+        let isDrawing = false;
+        let forecastStatusInterval = null;
+
+        // Sizes the area map to fill the viewport below its own top edge — this page
+        // has no other content competing for space, so the map can use all of it.
+        // Leaflet needs the container to have a real pixel height before L.map() runs.
+        function sizeAreaMap() {
+            const el = document.getElementById('forecastAreaMapEl');
+            if (!el) return;
+            const top = el.getBoundingClientRect().top;
+            const height = Math.max(window.innerHeight - top - 20, 400);
+            el.style.height = height + 'px';
+            if (forecastAreaMap) forecastAreaMap.invalidateSize();
+        }
+        window.addEventListener('resize', sizeAreaMap);
+
+        function initForecastAreaMap() {
+            if (forecastAreaMap) { forecastAreaMap.remove(); }
+            sizeAreaMap();
+            forecastAreaMap = L.map('forecastAreaMapEl').setView([43.0, 9.0], 5);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap', maxZoom: 16
+            }).addTo(forecastAreaMap);
+            forecastDrawOverlay = document.createElement('div');
+            forecastDrawOverlay.style.cssText =
+                'position:absolute;inset:0;z-index:10000;display:none;cursor:crosshair;';
+            forecastAreaMap.getContainer().appendChild(forecastDrawOverlay);
+            forecastDrawOverlay.addEventListener('mousedown', onAreaMapMouseDown);
+        }
+
+        function startDrawArea() {
+            isDrawing = true;
+            document.getElementById('cancelDrawBtn').style.display = '';
+            document.getElementById('drawAreaBtn').style.display = 'none';
+            document.getElementById('drawAreaHint').style.display = '';
+            forecastDrawOverlay.style.display = 'block';
+        }
+
+        function cancelDrawArea() {
+            isDrawing = false;
+            drawStart = null;
+            if (drawRect) { forecastAreaMap.removeLayer(drawRect); drawRect = null; }
+            document.getElementById('cancelDrawBtn').style.display = 'none';
+            document.getElementById('drawAreaBtn').style.display = '';
+            document.getElementById('drawAreaHint').style.display = 'none';
+            forecastDrawOverlay.style.display = 'none';
+        }
+
+        function overlayLatLng(e) {
+            const r = forecastDrawOverlay.getBoundingClientRect();
+            return forecastAreaMap.containerPointToLatLng(L.point(e.clientX - r.left, e.clientY - r.top));
+        }
+
+        function onAreaMapMouseDown(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            drawStart = overlayLatLng(e);
+            if (drawRect) { forecastAreaMap.removeLayer(drawRect); }
+            drawRect = L.rectangle([drawStart, drawStart], {
+                color: '#3b82f6', weight: 2, fillOpacity: 0.15, interactive: false
+            }).addTo(forecastAreaMap);
+            document.addEventListener('mousemove', onAreaMapMouseMove);
+            document.addEventListener('mouseup', onAreaMapMouseUp);
+        }
+
+        function onAreaMapMouseMove(e) {
+            if (!drawStart || !drawRect) return;
+            drawRect.setBounds(L.latLngBounds(drawStart, overlayLatLng(e)));
+        }
+
+        async function onAreaMapMouseUp(e) {
+            document.removeEventListener('mousemove', onAreaMapMouseMove);
+            document.removeEventListener('mouseup', onAreaMapMouseUp);
+            if (!drawStart || !drawRect) return;
+            const bounds = drawRect.getBounds();
+            const lat_min = Math.min(bounds.getSouthWest().lat, bounds.getNorthEast().lat);
+            const lat_max = Math.max(bounds.getSouthWest().lat, bounds.getNorthEast().lat);
+            const lon_min = Math.min(bounds.getSouthWest().lng, bounds.getNorthEast().lng);
+            const lon_max = Math.max(bounds.getSouthWest().lng, bounds.getNorthEast().lng);
+            cancelDrawArea();
+            if (Math.abs(lat_max - lat_min) < 0.01 || Math.abs(lon_max - lon_min) < 0.01) return;
+            try {
+                await fetch('/api/forecast/areas', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lat_min, lat_max, lon_min, lon_max }),
+                });
+                await loadForecastAreas();
+                await updateForecastStatus();
+            } catch (err) {
+                console.error('Failed to save forecast area', err);
+            }
+        }
+
+        async function deleteForecastArea(id) {
+            try {
+                await fetch('/api/forecast/areas?id=' + id, { method: 'DELETE' });
+                await loadForecastAreas();
+                await updateForecastStatus();
+            } catch (err) {
+                console.error('Failed to delete forecast area', err);
+            }
+        }
+
+        function renderForecastAreaList(areas) {
+            const container = document.getElementById('forecastAreaList');
+            if (!areas.length) {
+                container.innerHTML =
+                    '<div style="font-size:13px; color:var(--text-secondary);">No areas defined. Draw a bounding box on the map.</div>';
+                return;
+            }
+            container.innerHTML = areas.map(a => `
+                <div style="display:flex; justify-content:space-between; align-items:center;
+                            background:var(--bg-secondary); padding:6px 10px; border-radius:5px;
+                            margin-bottom:5px; font-size:13px;">
+                    <span>
+                        <strong>Area ${a.id}</strong>
+                        <span style="color:var(--text-secondary); font-size:11px; margin-left:8px;">
+                            ${a.lat_min.toFixed(2)}–${a.lat_max.toFixed(2)}°N &nbsp;
+                            ${a.lon_min.toFixed(2)}–${a.lon_max.toFixed(2)}°E
+                        </span>
+                    </span>
+                    <button onclick="deleteForecastArea(${Number(a.id)})"
+                        style="background:transparent; border:1px solid #e74c3c; color:#e74c3c;
+                               border-radius:3px; padding:1px 8px; font-size:11px; cursor:pointer;">
+                        Delete
+                    </button>
+                </div>`).join('');
+        }
+
+        function renderForecastAreasOnMap(areas) {
+            forecastAreaRectangles.forEach(r => forecastAreaMap.removeLayer(r));
+            forecastAreaRectangles = [];
+            areas.forEach(a => {
+                const r = L.rectangle(
+                    [[a.lat_min, a.lon_min], [a.lat_max, a.lon_max]],
+                    { color: '#3b82f6', weight: 2, fillOpacity: 0.1 }
+                ).addTo(forecastAreaMap);
+                forecastAreaRectangles.push(r);
+            });
+            if (areas.length) {
+                const bounds = L.latLngBounds(
+                    areas.map(a => [[a.lat_min, a.lon_min], [a.lat_max, a.lon_max]]).flat()
+                );
+                forecastAreaMap.fitBounds(bounds, { padding: [20, 20] });
+            }
+        }
+
+        async function loadForecastAreas() {
+            try {
+                const resp = await fetch('/api/forecast/areas');
+                const json = await resp.json();
+                const areas = json.data || [];
+                renderForecastAreaList(areas);
+                renderForecastAreasOnMap(areas);
+            } catch (err) {
+                console.error('Failed to load forecast areas', err);
+                renderForecastAreaList([]);
+            }
+        }
+
+        async function updateForecastStatus() {
+            try {
+                const resp = await fetch('/api/forecast/status');
+                const json = await resp.json();
+                const s = json.data;
+                if (!s) return;
+                const statusEl = document.getElementById('forecastPollerStatus');
+                const onlineBadge = s.online
+                    ? '<span style="background:#14532d;color:#86efac;padding:2px 8px;border-radius:10px;font-size:11px;">● Fetching every 3h</span>'
+                    : '<span style="background:#7c2d12;color:#fdba74;padding:2px 8px;border-radius:10px;font-size:11px;">⚠ Offline — retrying</span>';
+                const lastFetch = s.last_fetch
+                    ? 'Last fetch: ' + new Date(s.last_fetch).toLocaleTimeString() + ' UTC'
+                    : 'No fetch yet';
+                const nextFetch = s.next_fetch
+                    ? ' · Next: ' + new Date(s.next_fetch).toLocaleTimeString()
+                    : '';
+                statusEl.innerHTML =
+                    onlineBadge + ' <span style="font-size:11px;color:var(--text-secondary);margin-left:8px;">' +
+                    lastFetch + nextFetch + ' · ' + s.point_count + ' pts</span>';
+            } catch (_) {}
+        }
+
+        async function refreshForecast() {
+            const btn = document.getElementById('forecastRefreshBtn');
+            const orig = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '↻ Fetching…';
+            try {
+                const resp = await fetch('/api/forecast/refresh', { method: 'POST' });
+                const json = await resp.json();
+                btn.textContent = json.status === 'ok' ? '✓ Done' : '✗ Error';
+                setTimeout(() => { btn.textContent = orig; btn.disabled = false; },
+                           json.status === 'ok' ? 2000 : 3000);
+            } catch (_) {
+                btn.textContent = '✗ Error';
+                setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+            }
+            await updateForecastStatus();
+        }
+
+        window.addEventListener('load', () => {
+            requestAnimationFrame(() => {
+                initForecastAreaMap();
+                loadForecastAreas();
+                updateForecastStatus();
+                if (forecastStatusInterval) clearInterval(forecastStatusInterval);
+                forecastStatusInterval = setInterval(updateForecastStatus, 60000);
+            });
+        });
+    </script>
+</body>
+</html>

@@ -693,7 +693,10 @@ impl Config {
             }
         }
         if let Ok(key) = std::env::var("SYNC_API_KEY") {
+            eprintln!("[config] SYNC_API_KEY env var found (len={})", key.len());
             self.sync.api_key = if key.is_empty() { None } else { Some(key) };
+        } else {
+            eprintln!("[config] SYNC_API_KEY env var not set");
         }
         if let Ok(val) = std::env::var("SYNC_ENABLED") {
             self.sync.enabled = matches!(val.to_lowercase().as_str(), "true" | "1" | "yes");
