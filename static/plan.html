@@ -140,6 +140,10 @@
                                        border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
                                 ↻ Refresh
                             </button>
+                            <label style="display:flex; align-items:center; gap:5px; color:var(--text-secondary); font-size:13px;">
+                                <input type="checkbox" id="windOverlayInput" checked onchange="toggleWindOverlay()">
+                                Wind overlay
+                            </label>
                             <button id="gustToggleBtn" onclick="toggleGustMode()"
                                 style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
                                        border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
@@ -370,6 +374,8 @@
 
         let lastGridPts = [];     // raw GridPointForecast[] from last API call
         let showGust = false;     // when true, color arrows by gust speed instead of wind speed
+        let windOverlayVisible = true;   // when false, wind particle/intensity layers and legend are hidden
+        let windLegendControl = null;    // L.Control instance for the wind color-scale legend
         let lastRouteOverlay = []; // last computed overlay — persisted across reloads
 
         // ── Full-bleed map + floating overlay panels ────────────────────────────────
@@ -470,7 +476,14 @@
                     return div;
                 }
             });
-            new WindLegend({ position: 'bottomleft' }).addTo(planMap);
+            windLegendControl = new WindLegend({ position: 'bottomleft' }).addTo(planMap);
+
+            const savedWindOverlay = localStorage.getItem('plan_wind_overlay_visible');
+            if (savedWindOverlay !== null) {
+                windOverlayVisible = savedWindOverlay === 'true';
+                document.getElementById('windOverlayInput').checked = windOverlayVisible;
+                if (!windOverlayVisible) windLegendControl.getContainer().style.display = 'none';
+            }
 
             const saved = localStorage.getItem('plan_speed_kn');
             if (saved) document.getElementById('speedInput').value = saved;
@@ -589,43 +602,129 @@
             return Math.sqrt(dlat * dlat + dlon * dlon) * 60;
         }
 
-        function idwInterpolate(targetLat, targetLon, sourcePts) {
-            const MAX_NM = 25;
-            const within = [];
-            for (const pt of sourcePts) {
-                const d = degDistNm(targetLat, targetLon, pt.lat, pt.lon);
-                if (d < 0.01) return pt;   // exact match
-                if (d <= MAX_NM) within.push({ pt, w: 1 / (d * d) });
-            }
-            if (!within.length) return null;
+        const IDW_MAX_NM = 25;
 
-            const sumW = within.reduce((s, x) => s + x.w, 0);
-            const scalar = key => {
-                const pairs = within.filter(x => x.pt[key] != null);
-                if (!pairs.length) return null;
-                const sw = pairs.reduce((s, x) => s + x.w, 0);
-                return pairs.reduce((s, x) => s + x.pt[key] * x.w, 0) / sw;
-            };
-            const angular = key => {
-                const pairs = within.filter(x => x.pt[key] != null);
-                if (!pairs.length) return null;
-                const sw = pairs.reduce((s, x) => s + x.w, 0);
-                const sinSum = pairs.reduce((s, x) => s + Math.sin(x.pt[key] * Math.PI / 180) * x.w, 0);
-                const cosSum = pairs.reduce((s, x) => s + Math.cos(x.pt[key] * Math.PI / 180) * x.w, 0);
-                const deg = Math.atan2(sinSum / sw, cosSum / sw) * 180 / Math.PI;
+        // Inverse-distance-weighted blend of the points in `pointArrays` (one or more
+        // arrays, e.g. the 3x3 neighborhood of spatial-index cells) at the target point.
+        // Accumulators are static named locals rather than an object keyed by field name —
+        // computed-key assignment (obj[key] = ...) forces V8 into slow dictionary-mode
+        // objects, which badly regressed this once it's called once per output texel.
+        function accumulateIdw(targetLat, targetLon, pointArrays) {
+            let sumW = 0;
+            let swSpeed = 0, svSpeed = 0;
+            let swGust = 0, svGust = 0;
+            let swWaveH = 0, svWaveH = 0;
+            let swWaveP = 0, svWaveP = 0;
+            let swCape = 0, svCape = 0;
+            let swWindDir = 0, sinWindDir = 0, cosWindDir = 0;
+            let swWaveDir = 0, sinWaveDir = 0, cosWaveDir = 0;
+
+            for (let ai = 0; ai < pointArrays.length; ai++) {
+                const arr = pointArrays[ai];
+                if (!arr) continue;
+                for (let i = 0; i < arr.length; i++) {
+                    const pt = arr[i];
+                    const d = degDistNm(targetLat, targetLon, pt.lat, pt.lon);
+                    if (d < 0.01) return pt;   // exact match
+                    if (d > IDW_MAX_NM) continue;
+                    const w = 1 / (d * d);
+                    sumW += w;
+
+                    if (pt.wind_speed_kn != null) { swSpeed += w; svSpeed += pt.wind_speed_kn * w; }
+                    if (pt.wind_gust_kn != null) { swGust += w; svGust += pt.wind_gust_kn * w; }
+                    if (pt.wave_height_m != null) { swWaveH += w; svWaveH += pt.wave_height_m * w; }
+                    if (pt.wave_period_s != null) { swWaveP += w; svWaveP += pt.wave_period_s * w; }
+                    if (pt.cape_j_kg != null) { swCape += w; svCape += pt.cape_j_kg * w; }
+                    if (pt.wind_direction_deg != null) {
+                        const rad = pt.wind_direction_deg * Math.PI / 180;
+                        swWindDir += w; sinWindDir += Math.sin(rad) * w; cosWindDir += Math.cos(rad) * w;
+                    }
+                    if (pt.wave_direction_deg != null) {
+                        const rad = pt.wave_direction_deg * Math.PI / 180;
+                        swWaveDir += w; sinWaveDir += Math.sin(rad) * w; cosWaveDir += Math.cos(rad) * w;
+                    }
+                }
+            }
+            if (sumW === 0) return null;
+
+            const angDeg = (sw, sinS, cosS) => {
+                if (!sw) return null;
+                const deg = Math.atan2(sinS / sw, cosS / sw) * 180 / Math.PI;
                 return deg < 0 ? deg + 360 : deg;
             };
 
             return {
                 lat: targetLat, lon: targetLon,
-                wind_speed_kn: scalar('wind_speed_kn'),
-                wind_direction_deg: angular('wind_direction_deg'),
-                wind_gust_kn: scalar('wind_gust_kn'),
-                wave_height_m: scalar('wave_height_m'),
-                wave_period_s: scalar('wave_period_s'),
-                wave_direction_deg: angular('wave_direction_deg'),
-                cape_j_kg: scalar('cape_j_kg'),
+                wind_speed_kn: swSpeed ? svSpeed / swSpeed : null,
+                wind_gust_kn: swGust ? svGust / swGust : null,
+                wave_height_m: swWaveH ? svWaveH / swWaveH : null,
+                wave_period_s: swWaveP ? svWaveP / swWaveP : null,
+                cape_j_kg: swCape ? svCape / swCape : null,
+                wind_direction_deg: angDeg(swWindDir, sinWindDir, cosWindDir),
+                wave_direction_deg: angDeg(swWaveDir, sinWaveDir, cosWaveDir),
             };
+        }
+
+        function idwInterpolate(targetLat, targetLon, sourcePts) {
+            return accumulateIdw(targetLat, targetLon, [sourcePts]);
+        }
+
+        // Uniform grid index over sourcePts for fast radius queries, reused across many
+        // idwInterpolateIndexed() calls against the same point set (e.g. one per output
+        // texel). A flat row-major array (not a Map keyed by string) avoids per-query
+        // hashing/string-concat overhead. Cell size matches IDW_MAX_NM so a 3x3
+        // neighborhood around the target's cell always covers every candidate within
+        // range; lon cells are scaled by the point set's mean latitude so cells stay
+        // roughly square in nm.
+        function buildSpatialIndex(sourcePts) {
+            let latSum = 0, latMin = Infinity, latMax = -Infinity, lonMin = Infinity, lonMax = -Infinity;
+            for (const p of sourcePts) {
+                latSum += p.lat;
+                if (p.lat < latMin) latMin = p.lat;
+                if (p.lat > latMax) latMax = p.lat;
+                if (p.lon < lonMin) lonMin = p.lon;
+                if (p.lon > lonMax) lonMax = p.lon;
+            }
+            const refLat = sourcePts.length ? latSum / sourcePts.length : 0;
+            const cosRef = Math.max(Math.cos(refLat * Math.PI / 180), 1e-6);
+            const cellDegLat = IDW_MAX_NM / 60;
+            const cellDegLon = IDW_MAX_NM / 60 / cosRef;
+
+            const rowMin = sourcePts.length ? Math.floor(latMin / cellDegLat) : 0;
+            const colMin = sourcePts.length ? Math.floor(lonMin / cellDegLon) : 0;
+            const numRows = sourcePts.length ? Math.floor(latMax / cellDegLat) - rowMin + 1 : 0;
+            const numCols = sourcePts.length ? Math.floor(lonMax / cellDegLon) - colMin + 1 : 0;
+
+            const cells = new Array(numRows * numCols);
+            for (const pt of sourcePts) {
+                const row = Math.floor(pt.lat / cellDegLat) - rowMin;
+                const col = Math.floor(pt.lon / cellDegLon) - colMin;
+                const idx = row * numCols + col;
+                (cells[idx] || (cells[idx] = [])).push(pt);
+            }
+            return { cells, cellDegLat, cellDegLon, rowMin, colMin, numRows, numCols };
+        }
+
+        // Reusable scratch array for the 9-cell neighborhood, to avoid an allocation
+        // per texel (this runs up to 256*256 times per rebuild).
+        const IDW_NEIGHBORHOOD = new Array(9);
+        function idwInterpolateIndexed(targetLat, targetLon, index) {
+            const row = Math.floor(targetLat / index.cellDegLat) - index.rowMin;
+            const col = Math.floor(targetLon / index.cellDegLon) - index.colMin;
+            let n = 0;
+            for (let dr = -1; dr <= 1; dr++) {
+                const r = row + dr;
+                if (r < 0 || r >= index.numRows) continue;
+                for (let dc = -1; dc <= 1; dc++) {
+                    const c = col + dc;
+                    if (c < 0 || c >= index.numCols) continue;
+                    IDW_NEIGHBORHOOD[n++] = index.cells[r * index.numCols + c];
+                }
+            }
+            IDW_NEIGHBORHOOD.length = n;
+            const result = accumulateIdw(targetLat, targetLon, IDW_NEIGHBORHOOD);
+            IDW_NEIGHBORHOOD.length = 9;
+            return result;
         }
 
         // Estimate the native grid lat and lon steps from the stored source points.
@@ -696,10 +795,11 @@
             const lonMax = Math.min(east, srcLonMax);
             if (latMin >= latMax || lonMin >= lonMax) return [];
 
+            const index = buildSpatialIndex(sourcePts);
             const result = [];
             for (let lat = latMin; lat <= latMax + 1e-9; lat += displayLatStep) {
                 for (let lon = lonMin; lon <= lonMax + 1e-9; lon += displayLonStep) {
-                    const pt = idwInterpolate(lat, lon, sourcePts);
+                    const pt = idwInterpolateIndexed(lat, lon, index);
                     if (pt) result.push(pt);
                 }
             }
@@ -798,6 +898,15 @@
                     `<b>Model:</b> ${(document.getElementById('modelBadge')?.textContent) || '—'}`
                 )
                 .openOn(planMap);
+        }
+
+        function toggleWindOverlay() {
+            windOverlayVisible = document.getElementById('windOverlayInput').checked;
+            localStorage.setItem('plan_wind_overlay_visible', windOverlayVisible);
+            windLayers.forEach(layer => layer.setEnabled(windOverlayVisible));
+            if (windLegendControl) {
+                windLegendControl.getContainer().style.display = windOverlayVisible ? '' : 'none';
+            }
         }
 
         function toggleGustMode() {
@@ -1620,6 +1729,7 @@
                     const layer = new WindParticleLayer(area);
                     windLayers.set(area.id, layer);
                     layer.onAdd(planMap);
+                    if (!windOverlayVisible) layer.setEnabled(false);
                 }
             });
             windLayers.forEach((layer, id) => {

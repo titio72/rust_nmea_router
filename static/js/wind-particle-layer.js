@@ -5,7 +5,8 @@
 // rectangle. The field is rebuilt from data already fetched by plan.html
 // (lastGridPts via /api/forecast/grid-points) — no network calls of its own.
 //
-// Depends on globals defined in plan.html: idwInterpolate, lastGridPts, showGust, windColor.
+// Depends on globals defined in plan.html: buildSpatialIndex, idwInterpolateIndexed,
+// lastGridPts, showGust, windColor.
 
 const KN_TO_MS = 0.514444;
 
@@ -51,6 +52,7 @@ function computeVisibleRect(map, area) {
 // u_lat_min/u_lat_max patch in wind-gl.js, which assumes this orientation.
 function rasterizeWindField(pts, texW, texH, bounds, useGust) {
     if (!pts.length) return null;
+    const index = buildSpatialIndex(pts);
 
     const u = new Float64Array(texW * texH);
     const v = new Float64Array(texW * texH);
@@ -65,7 +67,7 @@ function rasterizeWindField(pts, texW, texH, bounds, useGust) {
         for (let col = 0; col < texW; col++) {
             const lonT = texW > 1 ? col / (texW - 1) : 0;
             const lon = bounds.lonMin + lonT * (bounds.lonMax - bounds.lonMin);
-            const pt = idwInterpolate(lat, lon, pts);
+            const pt = idwInterpolateIndexed(lat, lon, index);
 
             const idx = row * texW + col;
             let uu = 0, vv = 0;
@@ -137,6 +139,8 @@ class WindParticleLayer {
         this.wind = null;
         this.visible = false;
         this.visibleBounds = null;
+        this.rebuildTimer = null;
+        this.enabled = true;   // false when the user has toggled the wind overlay off
     }
 
     onAdd(map) {
@@ -168,6 +172,7 @@ class WindParticleLayer {
 
     onRemove() {
         activeWindLayers.delete(this);
+        if (this.rebuildTimer) { clearTimeout(this.rebuildTimer); this.rebuildTimer = null; }
         if (this.canvas) this.canvas.remove();
         if (this.bgCanvas) this.bgCanvas.remove();
     }
@@ -182,9 +187,25 @@ class WindParticleLayer {
         canvas.style.setProperty('height', height + 'px', 'important');
     }
 
+    // Shows/hides the canvases without tearing down the WebGL context, so re-enabling
+    // doesn't need a network refetch or texture rebuild. Called from plan.html's wind
+    // overlay checkbox.
+    setEnabled(enabled) {
+        this.enabled = enabled;
+        this.reposition();
+    }
+
     // Called on moveend/zoomend and on initial add.
     reposition() {
         if (!this.gl) return;
+        if (this.rebuildTimer) { clearTimeout(this.rebuildTimer); this.rebuildTimer = null; }
+        if (!this.enabled) {
+            this.visible = false;
+            this.visibleBounds = null;
+            this.canvas.style.display = 'none';
+            this.bgCanvas.style.display = 'none';
+            return;
+        }
         const rect = computeVisibleRect(this.map, this.area);
         if (!rect) {
             this.visible = false;
@@ -208,7 +229,16 @@ class WindParticleLayer {
         this.wind.latMax = rect.latMax;
         this.wind.numParticles = Math.min(4096, Math.max(256, Math.round((rect.width * rect.height) / 200)));
 
-        this.rebuildTexture();
+        // Defer the IDW rasterization to its own task instead of running it inline here.
+        // The canvas resize/reposition above is what needs to land immediately after a
+        // zoom/pan gesture so the browser can paint it; rebuildTexture() is the expensive
+        // part (up to a few hundred ms across all visible areas) and running it in the
+        // same synchronous block delays that paint, making the overlay look like it
+        // "freezes" while the rest of the map keeps responding.
+        this.rebuildTimer = setTimeout(() => {
+            this.rebuildTimer = null;
+            this.rebuildTexture();
+        }, 0);
     }
 
     // Called after reposition(), and whenever lastGridPts/showGust changes.
