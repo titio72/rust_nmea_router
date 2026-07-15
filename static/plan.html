@@ -11,6 +11,7 @@
     <script src="/libs/leaflet.min.js"></script>
     <script src="/libs/wind-gl.js"></script>
     <script src="/js/wind-particle-layer.js"></script>
+    <script src="/js/map-lat-lon-panel.js"></script>
     <style>
         .container { max-width: 100%; margin: 0; padding: 0; }
         #mapWrap { position: relative; width: 100%; min-height: 380px; }
@@ -477,6 +478,8 @@
                 }
             });
             windLegendControl = new WindLegend({ position: 'bottomleft' }).addTo(planMap);
+
+            addLatLonPanel(planMap, 'bottomright');
 
             const savedWindOverlay = localStorage.getItem('plan_wind_overlay_visible');
             if (savedWindOverlay !== null) {

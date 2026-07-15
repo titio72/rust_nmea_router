@@ -482,4 +482,17 @@ margin-bottom: 6px;
 .styled-select:hover {
     border-color: var(--sailing-color);
 }
+
+/* Lat/lon hover panel (see js/map-lat-lon-panel.js) */
+.latLonPanel {
+    display: none;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: monospace;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
 /* ─────────────────────────── */

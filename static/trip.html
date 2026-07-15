@@ -13,6 +13,7 @@
     <script src="/libs/chartjs-adapter-date-fns.bundle.min.js"></script>
     <script src="/libs/leaflet.min.js"></script>
     <script src="/libs/leaflet.fullscreen.js"></script>
+    <script src="/js/map-lat-lon-panel.js"></script>
     <style>
         #tripDetails {
             width: 100%;
@@ -2182,6 +2183,8 @@
 
             L.control.fullscreen({ position: 'topleft' }).addTo(map);
             map.on('click', () => resetSegmentMarkers());
+
+            addLatLonPanel(map, 'bottomleft');
 
             map.fitBounds([
                 [minLat - latPadding, minLng - lngPadding],
