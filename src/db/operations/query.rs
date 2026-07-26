@@ -385,6 +385,30 @@ impl VesselDatabase {
               ORDER BY year ASC, month ASC",
         )?;
 
+        // heatmap_cache is only populated lazily (when the heatmap view is requested) and
+        // deliberately never caches "today" (see fetch_heatmap). Any day after the last
+        // cached date is therefore missing here — most importantly the still-open current
+        // day/trip. Fill that gap by summing vessel_status directly for everything after
+        // the newest cached date.
+        let last_cached_date: Option<String> = conn
+            .query_first::<Option<String>, _>(
+                r"SELECT DATE_FORMAT(MAX(`date`), '%Y-%m-%d') FROM heatmap_cache",
+            )?
+            .flatten();
+
+        let live_results: Vec<mysql::Row> = conn.exec(
+            r"SELECT YEAR(timestamp) as year,
+                     MONTH(timestamp) as month,
+                     SUM(CASE WHEN engine_on = 0 THEN COALESCE(total_distance_nm, 0) ELSE 0 END) as sailing_distance,
+                     SUM(CASE WHEN engine_on = 1 THEN COALESCE(total_distance_nm, 0) ELSE 0 END) as motoring_distance
+              FROM vessel_status
+              WHERE is_moored = 0 AND DATE(timestamp) > :since
+              GROUP BY YEAR(timestamp), MONTH(timestamp)",
+            mysql::params! {
+                "since" => last_cached_date.unwrap_or_else(|| "1970-01-01".to_string()),
+            },
+        )?;
+
         /*
         // Get all trip data grouped by year and month
         let results: Vec<mysql::Row> = conn.query(
@@ -422,6 +446,29 @@ impl VesselDatabase {
                 .unwrap_or(0.0);
 
             month_data.insert((year, month), (sailing_distance, motoring_distance));
+        }
+
+        for row in live_results {
+            let year: i32 = row
+                .get_opt("year")
+                .and_then(|v| v.ok())
+                .ok_or(AppError::Database("Missing year".to_string()))?;
+            let month: u32 = row
+                .get_opt::<u32, _>("month")
+                .and_then(|v| v.ok())
+                .ok_or(AppError::Database("Missing month".to_string()))?;
+            let sailing_distance: f64 = row
+                .get_opt::<f64, _>("sailing_distance")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let motoring_distance: f64 = row
+                .get_opt::<f64, _>("motoring_distance")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+
+            let entry = month_data.entry((year, month)).or_insert((0.0, 0.0));
+            entry.0 += sailing_distance;
+            entry.1 += motoring_distance;
         }
 
         // Generate all months from January 2020 to now
@@ -2679,5 +2726,43 @@ mod tests {
             .map(|d| d.distance_nm);
         assert!(dist12.is_some(), "2020-06-12 recomputed day should appear");
         assert_approx_equal(dist12.unwrap(), 12.0, 0.001, "2020-06-12 distance");
+    }
+
+    #[test]
+    #[ignore]
+    fn test_monthly_statistics_includes_uncached_today() {
+        let db = setup_db();
+        clear_heatmap_cache(&db);
+
+        // Add vessel_status for "today" without ever populating heatmap_cache
+        // (mirrors production: nobody has viewed the heatmap since this data arrived).
+        let now = SystemTime::now();
+        add_heatmap_status_engine(&db, now, 20.0, EngineStatus::Off);
+        add_heatmap_status_engine(&db, now, 5.0, EngineStatus::On);
+
+        let stats = db
+            .fetch_monthly_statistics()
+            .expect("fetch_monthly_statistics");
+
+        use chrono::Datelike;
+        let today = chrono::Utc::now();
+        let this_month = stats
+            .months
+            .iter()
+            .find(|m| m.year == today.year() && m.month == today.month())
+            .expect("current month should be present");
+
+        assert_approx_equal(
+            this_month.sailing_distance_nm,
+            20.0,
+            0.001,
+            "current month sailing distance should include uncached today",
+        );
+        assert_approx_equal(
+            this_month.motoring_distance_nm,
+            5.0,
+            0.001,
+            "current month motoring distance should include uncached today",
+        );
     }
 }

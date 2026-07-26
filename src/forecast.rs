@@ -329,7 +329,7 @@ pub(crate) fn nearest_forecast_wind(
     lat: f64,
     lon: f64,
     time: DateTime<Utc>,
-) -> Option<(f64, f64)> {
+) -> Option<(f64, f64, Option<f64>)> {
     let collect = |model: &str| -> Vec<(f64, f64, ForecastHourlyPoint)> {
         fetches
             .iter()
@@ -344,7 +344,7 @@ pub(crate) fn nearest_forecast_wind(
     let arome = collect("arome");
     let ecmwf = collect("ecmwf");
     let interp = interpolate_blended(lat, lon, &arome, &ecmwf)?;
-    Some((interp.wind_speed_kn?, interp.wind_direction_deg?))
+    Some((interp.wind_speed_kn?, interp.wind_direction_deg?, interp.wind_gust_kn))
 }
 
 /// Wind-aware step simulation: advances the vessel along the route, using polar performance
@@ -398,10 +398,10 @@ pub fn generate_route_track(
             // re-interpolated end-of-step sample, which could silently differ from the sample
             // that actually drove the decision).
             let wind = nearest_forecast_wind(&parsed, pos.0, pos.1, t);
-            let relative_wind_deg = wind.map(|(_, wind_dir)| compute_twa(bearing, wind_dir));
+            let relative_wind_deg = wind.map(|(_, wind_dir, _)| compute_twa(bearing, wind_dir));
 
             let (speed_kn, twa) = match (wind, polars) {
-                (Some((wind_spd, wind_dir)), Some(p)) if wind_spd > 0.0 => {
+                (Some((wind_spd, wind_dir, _)), Some(p)) if wind_spd > 0.0 => {
                     let twa = compute_twa(bearing, wind_dir);
                     if twa < min_twa_deg {
                         (motoring_speed_kn, None) // TWA below the user's minimum — motor

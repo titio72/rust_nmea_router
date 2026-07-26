@@ -240,10 +240,10 @@
                     ? '<span style="background:#14532d;color:#86efac;padding:2px 8px;border-radius:10px;font-size:11px;">● Fetching every 3h</span>'
                     : '<span style="background:#7c2d12;color:#fdba74;padding:2px 8px;border-radius:10px;font-size:11px;">⚠ Offline — retrying</span>';
                 const lastFetch = s.last_fetch
-                    ? 'Last fetch: ' + new Date(s.last_fetch).toLocaleTimeString() + ' UTC'
+                    ? 'Last fetch: ' + new Date(s.last_fetch).toLocaleTimeString('en-GB', { timeZone: 'UTC' }) + ' UTC'
                     : 'No fetch yet';
                 const nextFetch = s.next_fetch
-                    ? ' · Next: ' + new Date(s.next_fetch).toLocaleTimeString()
+                    ? ' · Next: ' + new Date(s.next_fetch).toLocaleTimeString('en-GB', { timeZone: 'UTC' }) + ' UTC'
                     : '';
                 statusEl.innerHTML =
                     onlineBadge + ' <span style="font-size:11px;color:var(--text-secondary);margin-left:8px;">' +

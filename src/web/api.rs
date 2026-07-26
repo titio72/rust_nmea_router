@@ -1884,10 +1884,10 @@ pub async fn get_optimal_route(
         // end-of-step sample, which could silently differ from the sample that actually drove
         // the decision).
         let wind = crate::forecast::nearest_forecast_wind(&parsed_fetches, prev_lat, prev_lon, prev_time);
-        let relative_wind_deg = wind.map(|(_, wd)| crate::forecast::compute_twa(bearing, wd));
+        let relative_wind_deg = wind.map(|(_, wd, _)| crate::forecast::compute_twa(bearing, wd));
         let twa_deg = wind
-            .filter(|(ws, _)| *ws > 0.0)
-            .and_then(|(ws, wd)| {
+            .filter(|(ws, _, _)| *ws > 0.0)
+            .and_then(|(ws, wd, _)| {
                 let twa = crate::forecast::compute_twa(bearing, wd);
                 if twa < params.min_twa_deg {
                     return None;

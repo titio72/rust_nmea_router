@@ -147,7 +147,6 @@ impl PositionQueue {
         )
     }
 
-    #[allow(dead_code)]
     pub fn is_stationary(
         &self,
         time_window: Duration,

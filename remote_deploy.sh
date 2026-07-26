@@ -22,6 +22,8 @@ rsync -av --delete \
     schema.sql \
     pgns.json \
     config.example.json \
+    land.geojson \
+    dufour40.csv \
     nmea_router.service \
     install.sh \
     deploy.sh \

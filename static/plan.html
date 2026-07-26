@@ -117,6 +117,13 @@
             padding: 3px 7px; color: var(--text-primary);
             border-bottom: 1px solid var(--border-color);
         }
+        .route-summary-resize-handle {
+            position: absolute; top: 0; bottom: 0; left: -4px; width: 8px;
+            cursor: ew-resize; z-index: 20; border-radius: 4px;
+        }
+        .route-summary-resize-handle:hover, .route-summary-resize-handle.dragging {
+            background: color-mix(in srgb, var(--link-color) 40%, transparent);
+        }
     </style>
 </head>
 <body>
@@ -257,6 +264,7 @@
             <div id="routeSummary" class="map-overlay-panel"
                  style="display:none; right:12px; bottom:12px; width:300px; padding:10px 12px;
                         flex-direction:column; overflow:hidden;">
+                <div id="routeSummaryResizeHandle" class="route-summary-resize-handle" title="Drag to resize"></div>
                 <div class="map-overlay-header" onclick="toggleOverlayCollapse('routeSummaryBody','routeSummaryChevron')">
                     <span id="routeSummaryChevron">▾</span> Route Summary
                 </div>
@@ -435,11 +443,61 @@
             }
         }
 
+        // Lets the user drag the Route Summary panel's left edge to widen/narrow it
+        // (it's anchored to the map's right/bottom corner, so only the left edge moves).
+        const ROUTE_SUMMARY_MIN_WIDTH = 280;
+        const ROUTE_SUMMARY_WIDTH_KEY = 'plan_routeSummary_width';
+
+        function setupRouteSummaryResize() {
+            const panel = document.getElementById('routeSummary');
+            const handle = document.getElementById('routeSummaryResizeHandle');
+            if (!panel || !handle) return;
+
+            let startX = 0;
+            let startWidth = 0;
+
+            function maxWidth() {
+                const wrap = document.getElementById('mapWrap');
+                return Math.max(wrap.offsetWidth - 40, ROUTE_SUMMARY_MIN_WIDTH);
+            }
+
+            function onMouseMove(e) {
+                const delta = startX - e.clientX;
+                const width = Math.min(Math.max(startWidth + delta, ROUTE_SUMMARY_MIN_WIDTH), maxWidth());
+                panel.style.width = width + 'px';
+            }
+
+            function onMouseUp() {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+                handle.classList.remove('dragging');
+                localStorage.setItem(ROUTE_SUMMARY_WIDTH_KEY, parseInt(panel.style.width, 10));
+            }
+
+            handle.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                startX = e.clientX;
+                startWidth = panel.offsetWidth;
+                handle.classList.add('dragging');
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
+        }
+
+        function restoreRouteSummaryWidth() {
+            const saved = parseInt(localStorage.getItem(ROUTE_SUMMARY_WIDTH_KEY), 10);
+            if (saved) {
+                document.getElementById('routeSummary').style.width = saved + 'px';
+            }
+        }
+
         // ── Init ─────────────────────────────────────────────────────────────────
         async function init() {
             restoreOverlayCollapse('topOverlayBody', 'topOverlayChevron');
             restoreOverlayCollapse('routeBarBody', 'routeBarChevron');
             restoreOverlayCollapse('routeSummaryBody', 'routeSummaryChevron');
+            restoreRouteSummaryWidth();
+            setupRouteSummaryResize();
             sizeMapWrap();
             layoutOverlays();
 
@@ -1301,20 +1359,22 @@
                     motoring: pt.motoring,
                     wind_speed_kn: pt.wind_speed_kn,
                     wind_dir_deg: pt.wind_dir_deg,
+                    wind_gust_kn: pt.wind_gust_kn,
                     relative_wind_deg: pt.relative_wind_deg
                 });
                 i = pt.parent_idx;
                 s -= 1;
             }
             rows.push({ time: new Date(lastFrontiersDeparture), speed_kn: null, motoring: null,
-                        wind_speed_kn: null, wind_dir_deg: null, relative_wind_deg: null });
+                        wind_speed_kn: null, wind_dir_deg: null, wind_gust_kn: null, relative_wind_deg: null });
             rows.reverse();
 
             const lastTime = rows[rows.length - 1].time;
             const leg = frontierDestinationLeg(clickedPt.lat, clickedPt.lon, lastTime, clickedPt.speed_kn);
             if (leg) {
                 rows.push({ time: leg.time, speed_kn: clickedPt.speed_kn, motoring: clickedPt.motoring,
-                            wind_speed_kn: null, wind_dir_deg: null, relative_wind_deg: null });
+                            wind_speed_kn: null, wind_dir_deg: null, wind_gust_kn: clickedPt.wind_gust_kn,
+                            relative_wind_deg: null });
             }
             return rows;
         }
@@ -1372,7 +1432,7 @@
                 wind_speed_kn: r.wind_speed_kn,
                 wind_direction_deg: r.wind_dir_deg,
                 relative_wind_deg: r.relative_wind_deg,
-                wind_gust_kn: null,
+                wind_gust_kn: r.wind_gust_kn,
                 wave_height_m: null,
                 wave_period_s: null
             }));
@@ -1768,10 +1828,10 @@
                     ? '<span style="background:#14532d;color:#86efac;padding:2px 8px;border-radius:10px;font-size:11px;">● Fetching every 3h</span>'
                     : '<span style="background:#7c2d12;color:#fdba74;padding:2px 8px;border-radius:10px;font-size:11px;">⚠ Offline — retrying</span>';
                 const lastFetch = s.last_fetch
-                    ? 'Last fetch: ' + new Date(s.last_fetch).toLocaleTimeString() + ' UTC'
+                    ? 'Last fetch: ' + new Date(s.last_fetch).toLocaleTimeString('en-GB', { timeZone: 'UTC' }) + ' UTC'
                     : 'No fetch yet';
                 const nextFetch = s.next_fetch
-                    ? ' · Next: ' + new Date(s.next_fetch).toLocaleTimeString()
+                    ? ' · Next: ' + new Date(s.next_fetch).toLocaleTimeString('en-GB', { timeZone: 'UTC' }) + ' UTC'
                     : '';
                 statusEl.innerHTML =
                     onlineBadge + ' <span style="font-size:11px;color:var(--text-secondary);margin-left:8px;">' +

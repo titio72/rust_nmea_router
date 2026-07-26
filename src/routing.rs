@@ -28,6 +28,7 @@ struct IsochronePoint {
     motoring: bool,
     wind_speed_kn: Option<f64>,
     wind_dir_deg: Option<f64>,
+    wind_gust_kn: Option<f64>,
     relative_wind_deg: Option<f64>,
 }
 
@@ -40,6 +41,7 @@ pub struct FrontierPoint {
     pub motoring: bool,
     pub wind_speed_kn: Option<f64>,
     pub wind_dir_deg: Option<f64>,
+    pub wind_gust_kn: Option<f64>,
     pub relative_wind_deg: Option<f64>,
 }
 
@@ -94,6 +96,7 @@ pub fn run_isochrone(
         motoring: false,
         wind_speed_kn: None,
         wind_dir_deg: None,
+        wind_gust_kn: None,
         relative_wind_deg: None,
     };
     let mut isochrones: Vec<Vec<IsochronePoint>> = vec![vec![seed]];
@@ -120,10 +123,10 @@ pub fn run_isochrone(
 
             for h in 0..SECTOR_COUNT {
                 let heading = h as f64 * HEADING_STEP_DEG;
-                let relative_wind_deg = wind.map(|(_, wind_dir)| compute_twa(heading, wind_dir));
+                let relative_wind_deg = wind.map(|(_, wind_dir, _)| compute_twa(heading, wind_dir));
 
                 let (speed_kn, was_sailing) = match wind {
-                    Some((wind_spd, wind_dir)) if wind_spd > 0.0 => {
+                    Some((wind_spd, wind_dir, _)) if wind_spd > 0.0 => {
                         let twa = compute_twa(heading, wind_dir);
                         if twa < min_twa_deg {
                             continue;
@@ -176,8 +179,9 @@ pub fn run_isochrone(
                     parent_idx: Some(parent_idx),
                     speed_kn,
                     motoring: !was_sailing,
-                    wind_speed_kn: wind.map(|(spd, _)| spd),
-                    wind_dir_deg: wind.map(|(_, dir)| dir),
+                    wind_speed_kn: wind.map(|(spd, _, _)| spd),
+                    wind_dir_deg: wind.map(|(_, dir, _)| dir),
+                    wind_gust_kn: wind.and_then(|(_, _, gust)| gust),
                     relative_wind_deg,
                 });
             }
@@ -221,6 +225,7 @@ pub fn run_isochrone(
                     motoring: p.motoring,
                     wind_speed_kn: p.wind_speed_kn,
                     wind_dir_deg: p.wind_dir_deg,
+                    wind_gust_kn: p.wind_gust_kn,
                     relative_wind_deg: p.relative_wind_deg,
                 })
                 .collect()
@@ -321,6 +326,7 @@ mod tests {
                     motoring: false,
                     wind_speed_kn: None,
                     wind_dir_deg: None,
+                    wind_gust_kn: None,
                     relative_wind_deg: None,
                 }
             })
@@ -391,6 +397,7 @@ mod tests {
             motoring: true,
             wind_speed_kn: None,
             wind_dir_deg: None,
+            wind_gust_kn: None,
             relative_wind_deg: None,
         };
         let sailing = IsochronePoint {
@@ -403,6 +410,7 @@ mod tests {
             motoring: false,
             wind_speed_kn: None,
             wind_dir_deg: None,
+            wind_gust_kn: None,
             relative_wind_deg: None,
         };
 
