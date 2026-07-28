@@ -166,6 +166,24 @@ impl VesselDatabase {
         let last_synced_at = self.get_system_status_string("last_synced_at")?;
         Ok(SyncStatus { last_synced_at })
     }
+
+    /// Returns UUIDs of trips whose end_timestamp is after `since` (RFC3339).
+    /// A trip's end_timestamp is bumped on every status report while it is
+    /// still open, so this catches the live trip even though its UUID was
+    /// already synced in a previous push.
+    pub fn get_trip_uuids_modified_since(&self, since: &str) -> Result<Vec<String>, Box<dyn Error>> {
+        let since_dt = chrono::DateTime::parse_from_rfc3339(since)
+            .map_err(|e| format!("Invalid since timestamp: {}", e))?;
+        let since_str = since_dt.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+
+        let mut conn = self.pool.get_conn()?;
+        let uuids: Vec<String> = conn.exec(
+            "SELECT uuid FROM trips WHERE uuid IS NOT NULL AND end_timestamp > :since \
+             ORDER BY end_timestamp ASC",
+            params! { "since" => since_str },
+        )?;
+        Ok(uuids)
+    }
 }
 
 fn is_valid_uuid(s: &str) -> bool {
@@ -460,6 +478,91 @@ mod tests {
             .expect("should succeed");
         let status = db.get_sync_status().expect("should succeed");
         assert_eq!(status.last_synced_at.as_deref(), Some(ts));
+    }
+
+    #[test]
+    #[ignore]
+    fn test_modified_since_excludes_trip_ended_before_cutoff() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let (_, uuid) = make_trip(&db, "Old trip", t, 2);
+        let end = t.add(Duration::from_secs(2 * ONE_HOUR_S));
+
+        // since = well after the trip ended
+        let since = chrono::DateTime::<chrono::Utc>::from(end.add(Duration::from_secs(ONE_HOUR_S)))
+            .to_rfc3339();
+
+        let modified = db
+            .get_trip_uuids_modified_since(&since)
+            .expect("should succeed");
+        assert!(
+            !modified.contains(&uuid),
+            "trip that ended before cutoff must not be reported as modified"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn test_modified_since_includes_trip_ended_after_cutoff() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let (_, uuid) = make_trip(&db, "Recent trip", t, 2);
+
+        // since = before the trip's end_timestamp
+        let since = chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339();
+
+        let modified = db
+            .get_trip_uuids_modified_since(&since)
+            .expect("should succeed");
+        assert!(
+            modified.contains(&uuid),
+            "trip ending after cutoff must be reported as modified"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn test_modified_since_catches_live_trip_updated_after_previous_sync() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let (trip_id, uuid) = make_trip(&db, "Live trip", t, 2);
+        let original_end = t.add(Duration::from_secs(2 * ONE_HOUR_S));
+
+        // Sync happened right when the trip's end_timestamp was `original_end`.
+        let previous_synced_at =
+            chrono::DateTime::<chrono::Utc>::from(original_end.add(Duration::from_secs(1)))
+                .to_rfc3339();
+
+        // Not modified yet: end_timestamp is still <= previous_synced_at.
+        let modified_before_update = db
+            .get_trip_uuids_modified_since(&previous_synced_at)
+            .expect("should succeed");
+        assert!(
+            !modified_before_update.contains(&uuid),
+            "trip with unchanged end_timestamp must not be reported as modified"
+        );
+
+        // Simulate a further status report on the still-open trip, extending it.
+        let new_end = original_end.add(Duration::from_secs(ONE_HOUR_S));
+        let new_end_str = chrono::DateTime::<chrono::Utc>::from(new_end)
+            .format("%Y-%m-%d %H:%M:%S%.3f")
+            .to_string();
+        {
+            let mut conn = db.pool.get_conn().unwrap();
+            conn.exec_drop(
+                "UPDATE trips SET end_timestamp = :end WHERE id = :id",
+                params! { "end" => new_end_str, "id" => trip_id },
+            )
+            .unwrap();
+        }
+
+        let modified_after_update = db
+            .get_trip_uuids_modified_since(&previous_synced_at)
+            .expect("should succeed");
+        assert!(
+            modified_after_update.contains(&uuid),
+            "live trip extended past previous sync time must be reported as modified"
+        );
     }
 
     #[test]

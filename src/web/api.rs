@@ -1289,6 +1289,17 @@ pub async fn post_sync_push(State(state): State<AppState>) -> Json<ApiResponse<S
         }
     };
 
+    // Capture the previous sync timestamp before it gets overwritten below, so
+    // we can detect trips already known to the viewer that changed since then
+    // (e.g. the live trip, whose end_timestamp advances with every status report).
+    let previous_synced_at = match state.db().get_sync_status() {
+        Ok(s) => s.last_synced_at,
+        Err(e) => {
+            error!(error = %e, "Sync: failed to read previous sync status");
+            None
+        }
+    };
+
     let synced_at = chrono::Utc::now().to_rfc3339();
 
     let client = match reqwest::Client::builder()
@@ -1360,8 +1371,19 @@ pub async fn post_sync_push(State(state): State<AppState>) -> Json<ApiResponse<S
         None => (0, vec![]),
     };
 
-    // Step 2: Fetch and send the trips the viewer reported as missing.
-    let updated_trips = match state.db().get_trips_by_uuids(&missing_uuids) {
+    // Step 2: Fetch and send the trips the viewer reported as missing, plus any
+    // trip already known to the viewer that changed since the previous sync
+    // (the manifest step alone only detects brand-new UUIDs).
+    let mut uuids_to_push: std::collections::HashSet<String> = missing_uuids.into_iter().collect();
+    if let Some(since) = &previous_synced_at {
+        match state.db().get_trip_uuids_modified_since(since) {
+            Ok(modified) => uuids_to_push.extend(modified),
+            Err(e) => error!(error = %e, "Sync: failed to get modified trip UUIDs"),
+        }
+    }
+    let uuids_to_push: Vec<String> = uuids_to_push.into_iter().collect();
+
+    let updated_trips = match state.db().get_trips_by_uuids(&uuids_to_push) {
         Ok(v) => v,
         Err(e) => {
             error!(error = %e, "Sync: failed to fetch trips by UUID");
