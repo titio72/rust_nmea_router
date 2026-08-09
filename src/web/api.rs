@@ -1888,6 +1888,7 @@ pub async fn get_optimal_route(
                 speed_kn: None,
                 twa_deg: None,
                 relative_wind_deg: None,
+                heading_deg: None,
             });
             continue;
         }
@@ -1926,6 +1927,7 @@ pub async fn get_optimal_route(
             speed_kn: Some(speed_kn),
             twa_deg,
             relative_wind_deg,
+            heading_deg: Some(bearing),
         });
     }
 

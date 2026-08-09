@@ -32,6 +32,7 @@ pub struct RouteOverlayPoint {
     pub twa_deg: Option<f64>,
     pub wind_model: Option<String>,
     pub relative_wind_deg: Option<f64>,
+    pub heading_deg: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +43,7 @@ pub struct RouteTrackPoint {
     pub speed_kn: Option<f64>,
     pub twa_deg: Option<f64>,
     pub relative_wind_deg: Option<f64>,
+    pub heading_deg: Option<f64>,
 }
 
 // ── Open-Meteo deserialisation types (private) ────────────────────────────────
@@ -382,7 +384,7 @@ pub fn generate_route_track(
         let mut t = leg_start_time;
 
         if track.is_empty() {
-            track.push(RouteTrackPoint { lat: pos.0, lon: pos.1, time: t, speed_kn: None, twa_deg: None, relative_wind_deg: None });
+            track.push(RouteTrackPoint { lat: pos.0, lon: pos.1, time: t, speed_kn: None, twa_deg: None, relative_wind_deg: None, heading_deg: None });
         }
 
         loop {
@@ -429,7 +431,7 @@ pub fn generate_route_track(
             pos = crate::utilities::advance_position(pos.0, pos.1, bearing, dist_nm);
             t += Duration::seconds((step_hours * 3600.0).round() as i64);
 
-            track.push(RouteTrackPoint { lat: pos.0, lon: pos.1, time: t, speed_kn: Some(speed_kn), twa_deg: twa, relative_wind_deg });
+            track.push(RouteTrackPoint { lat: pos.0, lon: pos.1, time: t, speed_kn: Some(speed_kn), twa_deg: twa, relative_wind_deg, heading_deg: Some(bearing) });
 
             if hours_to_wp <= 0.5 {
                 break;
@@ -480,6 +482,7 @@ pub fn compute_route_overlay(
                 twa_deg: pt.twa_deg,
                 wind_model: interp.wind_model,
                 relative_wind_deg: pt.relative_wind_deg,
+                heading_deg: pt.heading_deg,
             })
         })
         .collect()
@@ -986,6 +989,69 @@ mod tests {
             twa, relative,
             "relative_wind_deg must come from the exact same wind sample as the sail decision, \
              not a separately re-interpolated one"
+        );
+    }
+
+    #[test]
+    fn test_generate_route_track_heading_deg_matches_haversine_bearing() {
+        use chrono::TimeZone;
+        use crate::db::operations::forecast::{FetchWithHourly, ForecastHourlyPoint};
+
+        let dep = Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap();
+        let hourly = vec![ForecastHourlyPoint {
+            timestamp: dep.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            wind_speed_kn: Some(12.0),
+            wind_direction_deg: Some(90.0),
+            wind_gust_kn: None, wave_height_m: None, wave_period_s: None,
+            wave_direction_deg: None, cape_j_kg: None,
+        }];
+        let fetches = vec![FetchWithHourly { lat: 43.0, lon: 8.0, model: "ecmwf".to_string(), hourly }];
+
+        // No polars → always motors, but heading_deg must still be recorded regardless of
+        // the sail/motor decision (it's a property of the leg's course, not of sailing).
+        let wpts = vec![(43.0_f64, 8.0_f64), (43.12_f64, 8.15_f64)];
+        let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, 60.0, None, &fetches);
+
+        assert!(track.len() >= 2);
+        assert_eq!(track[0].heading_deg, None, "departure point has no incoming leg yet");
+
+        let expected_bearing = crate::utilities::haversine_heading(43.0, 8.0, 43.12, 8.15);
+        let heading = track[1].heading_deg.expect("heading_deg should be set once the boat has moved");
+        assert!(
+            (heading - expected_bearing).abs() < 0.01,
+            "expected heading_deg to equal haversine_heading's bearing ({}), got {}",
+            expected_bearing, heading
+        );
+    }
+
+    #[test]
+    fn test_compute_route_overlay_passes_through_heading_deg() {
+        use chrono::TimeZone;
+        use crate::db::operations::forecast::{FetchWithHourly, ForecastHourlyPoint};
+
+        let dep = Utc.with_ymd_and_hms(2026, 5, 14, 9, 0, 0).unwrap();
+        let wpts = vec![(43.5_f64, 9.0_f64), (43.5, 9.6)];
+        let ts = dep.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let hourly = vec![ForecastHourlyPoint {
+            timestamp: ts,
+            wind_speed_kn: Some(12.0),
+            wind_direction_deg: Some(180.0),
+            wind_gust_kn: None, wave_height_m: None, wave_period_s: None,
+            wave_direction_deg: None, cape_j_kg: None,
+        }];
+        let fetches = vec![
+            FetchWithHourly { lat: 43.5, lon: 9.0, model: "ecmwf".to_string(), hourly: hourly.clone() },
+            FetchWithHourly { lat: 43.5, lon: 9.6, model: "ecmwf".to_string(), hourly },
+        ];
+        let track = generate_route_track(&wpts, dep, 60.0, 1.0, 0.0, 0.0, None, &fetches);
+        assert_eq!(track.len(), 2, "leg should complete in a single fast step");
+
+        let overlay = compute_route_overlay(&track, &fetches);
+        assert!(overlay.len() >= 2);
+        assert_eq!(overlay[0].heading_deg, None);
+        assert_eq!(
+            overlay[1].heading_deg, track[1].heading_deg,
+            "compute_route_overlay must pass heading_deg through unchanged"
         );
     }
 
