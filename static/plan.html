@@ -313,7 +313,7 @@
                     <div class="route-report-table-wrap">
                         <table>
                             <thead>
-                                <tr><th>Time</th><th>Hdg</th><th>Speed</th><th>Engine</th><th>TWS</th><th>TWD</th><th>Gust</th><th>AWA</th><th>AWS</th></tr>
+                                <tr><th>Time</th><th>Hdg</th><th>Speed</th><th>Engine</th><th>TWS</th><th>TWA</th><th>Gust</th><th>AWA</th><th>AWS</th></tr>
                             </thead>
                             <tbody id="routeReportTableBody"></tbody>
                         </table>
@@ -339,7 +339,7 @@
             <div class="alt-route-modal-table-wrap">
                 <table>
                     <thead>
-                        <tr><th>Time</th><th>Boat Speed</th><th>Engine</th><th>TWS</th><th>TWD</th></tr>
+                        <tr><th>Time</th><th>Boat Speed</th><th>Engine</th><th>TWS</th><th>TWA</th></tr>
                     </thead>
                     <tbody id="altRouteTableBody"></tbody>
                 </table>
@@ -1407,8 +1407,8 @@
                 const spd = r.speed_kn != null ? r.speed_kn.toFixed(1) + ' kn' : '—';
                 const eng = r.motoring == null ? '—' : (r.motoring ? '⚙ Motoring' : '⛵ Sailing');
                 const tws = r.wind_speed_kn != null ? r.wind_speed_kn.toFixed(1) + ' kn' : '—';
-                const twd = r.relative_wind_deg != null ? r.relative_wind_deg.toFixed(0) + '°' : '—';
-                return `<tr><td>${t}</td><td>${spd}</td><td>${eng}</td><td>${tws}</td><td>${twd}</td></tr>`;
+                const twa = r.relative_wind_deg != null ? r.relative_wind_deg.toFixed(0) + '°' : '—';
+                return `<tr><td>${t}</td><td>${spd}</td><td>${eng}</td><td>${tws}</td><td>${twa}</td></tr>`;
             }).join('');
 
             document.getElementById('altRouteModal').classList.add('active');
@@ -1698,18 +1698,18 @@
                 const spd = p.speed_kn != null ? p.speed_kn.toFixed(1) + ' kn' : '—';
                 const eng = p.speed_kn == null ? '—' : (p.twa_deg === null ? '⚙ Motoring' : '⛵ Sailing');
                 const tws = p.wind_speed_kn != null ? p.wind_speed_kn.toFixed(1) + ' kn' : '—';
-                let twd = p.relative_wind_deg != null ? p.relative_wind_deg.toFixed(0) + '°' : '—';
+                let twa = p.relative_wind_deg != null ? p.relative_wind_deg.toFixed(0) + '°' : '—';
                 if (p.relative_wind_deg != null && p.wind_direction_deg != null && p.heading_deg != null) {
                     // Wind's FROM-direction clockwise of the boat's heading (0-180°) is on the
                     // starboard side; counter-clockwise (180-360°) is on the port side.
                     const diff = ((p.wind_direction_deg - p.heading_deg) % 360 + 360) % 360;
-                    twd += diff <= 180 ? ' S' : ' P';
+                    twa += diff <= 180 ? ' S' : ' P';
                 }
                 const gust = p.wind_gust_kn != null ? p.wind_gust_kn.toFixed(1) + ' kn' : '—';
                 const apparent = trueToApparentWind(p.wind_speed_kn, p.relative_wind_deg, p.speed_kn);
                 const awa = apparent ? apparent.awaDeg.toFixed(0) + '°' : '—';
                 const aws = apparent ? apparent.awsKn.toFixed(1) + ' kn' : '—';
-                return `<tr><td>${time}</td><td>${hdg}</td><td>${spd}</td><td>${eng}</td><td>${tws}</td><td>${twd}</td>` +
+                return `<tr><td>${time}</td><td>${hdg}</td><td>${spd}</td><td>${eng}</td><td>${tws}</td><td>${twa}</td>` +
                     `<td>${gust}</td><td>${awa}</td><td>${aws}</td></tr>`;
             }).join('');
         }
