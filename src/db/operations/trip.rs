@@ -6,6 +6,8 @@
 //
 use crate::db::types::VesselDatabase;
 use crate::error::AppError;
+use crate::utilities::EngineStatus;
+use chrono::{DateTime, Utc};
 use mysql::params;
 use mysql::prelude::Queryable;
 use tracing::warn;
@@ -192,6 +194,77 @@ impl VesselDatabase {
 
         Ok(())
     }
+
+    /// Overwrite `engine_on` for every `vessel_status` row between `start` and `end`
+    /// (clamped to the trip's own window), then recompute the trip's sailing/motoring
+    /// aggregates and invalidate the caches derived from vessel_status. Used to correct
+    /// misfires from the automatic RPM-based engine detection in vessel_monitor.rs.
+    pub fn correct_engine_status(
+        &self,
+        trip_id: u32,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        engine_on: EngineStatus,
+    ) -> Result<(), AppError> {
+        if engine_on.is_unknown() {
+            return Err(AppError::Parse(
+                "engine_on must be On or Off, not Unknown".to_string(),
+            ));
+        }
+        if start >= end {
+            return Err(AppError::Parse(
+                "start_timestamp must be before end_timestamp".to_string(),
+            ));
+        }
+
+        let trip = self
+            .fetch_trip(trip_id)?
+            .ok_or_else(|| AppError::Database(format!("Trip {} not found", trip_id)))?;
+        let trip_start = trip
+            .start_timestamp()
+            .map_err(|e| AppError::Parse(e.to_string()))?;
+        let trip_end = trip
+            .end_timestamp()
+            .map_err(|e| AppError::Parse(e.to_string()))?;
+        let trip_start_dt = DateTime::<Utc>::from(trip_start);
+        let trip_end_dt = DateTime::<Utc>::from(trip_end);
+
+        let clamped_start = start.max(trip_start_dt);
+        let clamped_end = end.min(trip_end_dt);
+        if clamped_start >= clamped_end {
+            return Err(AppError::Parse(
+                "Requested range does not overlap the trip".to_string(),
+            ));
+        }
+
+        let start_str = clamped_start.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+        let end_str = clamped_end.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+
+        let mut conn = self.pool.get_conn()?;
+        let mut tx = conn.start_transaction(mysql::TxOpts::default())?;
+        tx.exec_drop(
+            "UPDATE vessel_status SET engine_on = :val WHERE timestamp BETWEEN :start AND :end",
+            params! {
+                "val" => engine_on.as_u8(),
+                "start" => &start_str,
+                "end" => &end_str,
+            },
+        )?;
+        let affected = tx.affected_rows();
+        tx.commit()?;
+
+        if affected == 0 {
+            return Err(AppError::Database(
+                "No track points found in the requested range".to_string(),
+            ));
+        }
+
+        self.recalculate_and_update_trip(trip_id as i64, trip_start, trip_end)?;
+        self.invalidate_trip_legs_cache(trip_id)?;
+        self.invalidate_heatmap_cache(clamped_start.date_naive(), clamped_end.date_naive())?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -199,6 +272,7 @@ mod tests {
     use crate::db::test_helpers::{
         add_test_trip, add_test_vessel_status, fetch_vessel_status_by_id, setup_db,
     };
+    use crate::utilities::EngineStatus;
     use std::{
         ops::{Add, Sub},
         time::{Duration, SystemTime},
@@ -506,5 +580,134 @@ mod tests {
                 );
             }
         });
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_correct_engine_status() {
+        let db = setup_db();
+        let t = SystemTime::now();
+
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Engine Fix Test".to_string(),
+            t,
+            t.add(Duration::from_secs(1800)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert test trip");
+
+        // First half of the trip: sailing (engine off). Second half: also inserted as
+        // engine off, but this is the half we'll correct to "on".
+        let first_id = add_test_vessel_status(
+            &db,
+            t,
+            43.0,
+            11.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            1.0,
+            900_000,
+            None,
+            None,
+        )
+        .expect("Failed to insert first vessel status");
+
+        let mid_ts = t.add(Duration::from_secs(900));
+        let second_id = add_test_vessel_status(
+            &db,
+            mid_ts,
+            43.1,
+            11.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            1.0,
+            900_000,
+            None,
+            None,
+        )
+        .expect("Failed to insert second vessel status");
+
+        let mid_dt = chrono::DateTime::<chrono::Utc>::from(mid_ts);
+        let end_dt = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(1800)));
+
+        db.correct_engine_status(trip_id, mid_dt, end_dt, EngineStatus::On)
+            .expect("correct_engine_status should succeed");
+
+        // The first point (before the corrected range) must be untouched.
+        let first = fetch_vessel_status_by_id(&db, first_id)
+            .expect("fetch failed")
+            .expect("first record missing");
+        assert_eq!(
+            first.engine_on,
+            EngineStatus::Off,
+            "point before the corrected range must stay Off"
+        );
+
+        // The second point (inside the corrected range) must now be On.
+        let second = fetch_vessel_status_by_id(&db, second_id)
+            .expect("fetch failed")
+            .expect("second record missing");
+        assert_eq!(
+            second.engine_on,
+            EngineStatus::On,
+            "point inside the corrected range must become On"
+        );
+
+        // Trip aggregates must reflect the new split: 1.0 nm sailed, 1.0 nm motored.
+        let trip = db
+            .fetch_trip(trip_id)
+            .expect("fetch_trip failed")
+            .expect("trip missing");
+        assert!(
+            (trip.sailing_distance_nm - 1.0).abs() < 0.01,
+            "sailing distance should be 1.0 nm, got {}",
+            trip.sailing_distance_nm
+        );
+        assert!(
+            (trip.motoring_distance_nm - 1.0).abs() < 0.01,
+            "motoring distance should be 1.0 nm, got {}",
+            trip.motoring_distance_nm
+        );
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_correct_engine_status_rejects_unknown() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Reject Unknown".to_string(),
+            t,
+            t.add(Duration::from_secs(600)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert test trip");
+
+        let start_dt = chrono::DateTime::<chrono::Utc>::from(t);
+        let end_dt = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(600)));
+
+        let result = db.correct_engine_status(trip_id, start_dt, end_dt, EngineStatus::Unknown);
+        assert!(
+            result.is_err(),
+            "correct_engine_status must reject EngineStatus::Unknown"
+        );
     }
 }
