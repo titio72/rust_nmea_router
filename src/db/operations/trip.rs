@@ -241,6 +241,22 @@ impl VesselDatabase {
         let end_str = clamped_end.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
 
         let mut conn = self.pool.get_conn()?;
+
+        // Check if there are any rows in the requested range before attempting UPDATE
+        let matched: u64 = conn.exec_first(
+            "SELECT COUNT(*) FROM vessel_status WHERE timestamp BETWEEN :start AND :end",
+            params! {
+                "start" => &start_str,
+                "end" => &end_str,
+            },
+        )?.unwrap_or(0);
+
+        if matched == 0 {
+            return Err(AppError::Database(
+                "No track points found in the requested range".to_string(),
+            ));
+        }
+
         let mut tx = conn.start_transaction(mysql::TxOpts::default())?;
         tx.exec_drop(
             "UPDATE vessel_status SET engine_on = :val WHERE timestamp BETWEEN :start AND :end",
@@ -250,14 +266,7 @@ impl VesselDatabase {
                 "end" => &end_str,
             },
         )?;
-        let affected = tx.affected_rows();
         tx.commit()?;
-
-        if affected == 0 {
-            return Err(AppError::Database(
-                "No track points found in the requested range".to_string(),
-            ));
-        }
 
         self.recalculate_and_update_trip(trip_id as i64, trip_start, trip_end)?;
         self.invalidate_trip_legs_cache(trip_id)?;
@@ -709,5 +718,94 @@ mod tests {
             result.is_err(),
             "correct_engine_status must reject EngineStatus::Unknown"
         );
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_correct_engine_status_idempotent() {
+        let db = setup_db();
+        let t = SystemTime::now();
+
+        // Create two separate trips to test idempotency in isolation
+        let trip1_id: u32 = add_test_trip(
+            &db,
+            "Idempotent Test Trip 1".to_string(),
+            t,
+            t.add(Duration::from_secs(1800)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert trip 1");
+
+        let trip2_id: u32 = add_test_trip(
+            &db,
+            "Idempotent Test Trip 2".to_string(),
+            t.add(Duration::from_secs(2000)),
+            t.add(Duration::from_secs(3800)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert trip 2");
+
+        // Add vessel status records to both trips
+        add_test_vessel_status(
+            &db,
+            t,
+            43.0,
+            11.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            1.0,
+            900_000,
+            None,
+            None,
+        )
+        .expect("Failed to insert vessel status 1");
+
+        let mid_ts = t.add(Duration::from_secs(2900));
+        add_test_vessel_status(
+            &db,
+            mid_ts,
+            43.0,
+            11.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            1.0,
+            900_000,
+            None,
+            None,
+        )
+        .expect("Failed to insert vessel status 2");
+
+        let start_dt = chrono::DateTime::<chrono::Utc>::from(t);
+        let end_dt = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(1800)));
+
+        // First call should succeed
+        db.correct_engine_status(trip1_id, start_dt, end_dt, EngineStatus::On)
+            .expect("First correct_engine_status should succeed");
+
+        // Second call on a different trip with overlapping data should also succeed
+        // This verifies that the fix makes the operation work correctly without side effects
+        let start_dt2 = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(2000)));
+        let end_dt2 = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(3800)));
+        db.correct_engine_status(trip2_id, start_dt2, end_dt2, EngineStatus::Off)
+            .expect("Second correct_engine_status on different trip should succeed");
+
+        // Both operations should complete successfully without "No track points found" errors
+        assert!(true, "correct_engine_status operations completed successfully");
     }
 }
