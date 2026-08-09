@@ -389,7 +389,7 @@
             addChart(legChartsContainer, 'speedChart');
             addChart(legChartsContainer, 'headingChart', 'headingScaleBtn', toggleHeadingScale);
             addChart(legChartsContainer, 'windSpeedChart');
-            addChart(legChartsContainer, 'windDirectionChart', 'windDirectionScaleBtn', toggleWindDirectionScale);
+            addChart(legChartsContainer, 'windDirectionChart');
             addChart(legChartsContainer, 'rollAngleChart');
             addChart(legChartsContainer, 'heelDistributionChart');
             addChart(legChartsContainer, 'speedDistributionChart');
@@ -512,7 +512,6 @@
         let fullTrackData = null; // Global reference to full trip track data (loaded once)
         let segmentMarkers = []; // Array to store segment start/end markers
         let headingScaleNormalized = false; // Toggle for heading chart scale (0-360 vs -180 to 180)
-        let windDirectionNormalized = false; // Toggle for wind direction chart scale (0-360 vs -180 to 180)
         let absoluteWindDirectionNormalized = false; // Toggle for absolute wind direction chart scale (0-360 vs -180 to 180)
         let currentAbsoluteWindData = null; // Metric data for absolute wind direction (for scale toggling)
         let currentWindSpeedData = null; // Metric data for wind speed (for chart toggling)
@@ -801,7 +800,7 @@
             allCharts.speed = createSpeedChart(trackData);
             allCharts.heading = createHeadingChart(trackData, headingScaleNormalized);
             allCharts.windSpeed = createWindSpeedChart(trackData);
-            allCharts.windDirection = createWindDirectionChart(trackData, windDirectionNormalized);
+            allCharts.windDirection = createWindDirectionChart(trackData);
 
             const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
             const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
@@ -1122,27 +1121,6 @@
             }
         }
 
-        function toggleWindDirectionScale() {
-            // Toggle the normalized scale flag
-            windDirectionNormalized = !windDirectionNormalized;
-
-            // Update the button label
-            const btn = document.getElementById('windDirectionScaleBtn');
-            if (btn) {
-                btn.textContent = windDirectionNormalized ? 'Switch to 0…360' : 'Switch to −180…180';
-            }
-
-            // Destroy the existing wind direction chart
-            if (allCharts.windDirection && typeof allCharts.windDirection.destroy === 'function') {
-                allCharts.windDirection.destroy();
-            }
-
-            // Recreate the wind direction chart with the new scale
-            if (currentTrackData) {
-                allCharts.windDirection = createWindDirectionChart(currentTrackData, windDirectionNormalized);
-            }
-        }
-
         function toggleAbsoluteWindDirectionScale() {
             // Toggle the normalized scale flag
             absoluteWindDirectionNormalized = !absoluteWindDirectionNormalized;
@@ -1419,7 +1397,7 @@
             });
         }
 
-        function createWindDirectionChart(trackData, normalized = false) {
+        function createWindDirectionChart(trackData) {
             const ctx = document.getElementById('windDirectionChart').getContext('2d');
             const colors = getChartColors();
 
@@ -1429,7 +1407,7 @@
             // Convert data to time-scale format with proper Date objects
             const chartData = validData.map(point => {
                 let direction = point.average_wind_angle_deg;
-                if (normalized && direction > 180) {
+                if (direction > 180) {
                     direction = direction - 360;
                 }
                 return {
@@ -1459,8 +1437,8 @@
                     maintainAspectRatio: false,
                     scales: {
                         y: {
-                            min: normalized ? -180 : 0,
-                            max: normalized ? 180 : 360,
+                            min: -180,
+                            max: 180,
                             title: {
                                 display: true,
                                 text: 'Wind Direction (degrees)',
@@ -1470,16 +1448,11 @@
                                 stepSize: 30,
                                 color: colors.text,
                                 callback: function(value) {
-                                    if (normalized) {
-                                        // For normalized scale: -180..180 where 0=N, ±180=S
-                                        const normalizedValue = (value + 360) % 360;
-                                        const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
-                                        return directions[Math.round(normalizedValue / 45) % 8] + ' (' + value + '°)';
-                                    } else {
-                                        // For standard scale: 0..360
-                                        const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
-                                        return directions[Math.round(value / 45) % 8] + ' (' + value + '°)';
+                                    if (value === 0 || value === 180 || value === -180) {
+                                        return value + '°';
                                     }
+                                    const side = value > 0 ? 'S' : 'P';
+                                    return Math.abs(value) + '° ' + side;
                                 }
                             },
                             grid: { color: colors.grid }
