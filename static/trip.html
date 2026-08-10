@@ -407,6 +407,18 @@
             addChart(chartsContainer, 'humidityChart');
         }
 
+        // A chart can't usefully render more distinct data points than it has pixels of
+        // width — anything beyond that is fetched, parsed and thrown away by Chart.js's
+        // own decimation. The canvas is already in the DOM (and CSS-forced to
+        // width:100% of its container, see shared.css) by the time chart data is
+        // fetched, so its rendered width is a known quantity we can ask the server for
+        // directly instead of guessing a fixed point count.
+        function getChartMaxPoints(canvasId, fallback) {
+            const el = document.getElementById(canvasId);
+            const width = el ? Math.round(el.clientWidth) : 0;
+            return width > 0 ? width : fallback;
+        }
+
         function getChartColors() {
             const isDark = document.body.classList.contains('dark-theme');
             return {
@@ -517,6 +529,33 @@
         let currentAbsoluteWindData = null; // Metric data for absolute wind direction (for scale toggling)
         let currentWindSpeedData = null; // Metric data for wind speed (for chart toggling)
 
+        // --- Perf instrumentation: time from the first server call to charts/map fully populated. ---
+        // perfStart is reset in loadTripAndLegs (the actual first fetch of a page load / recalc reload).
+        // Leg-selector switches call loadTripDetails directly without going through loadTripAndLegs
+        // again, so their marks land on the same timeline as whatever load most recently reset it.
+        let perfStart = null;
+        let perfMarks = [];
+        function markTime(label, meta) {
+            if (perfStart === null) return;
+            const now = performance.now();
+            const elapsed = now - perfStart;
+            const prevElapsed = perfMarks.length ? perfMarks[perfMarks.length - 1].elapsed : 0;
+            perfMarks.push({ label, elapsed, delta: elapsed - prevElapsed, meta: meta || {} });
+            console.log(
+                '[timing] ' + label + ': +' + elapsed.toFixed(1) + 'ms (Δ' + (elapsed - prevElapsed).toFixed(1) + 'ms) ' +
+                JSON.stringify(meta || {})
+            );
+        }
+        function summarizePerf(finalLabel, meta) {
+            markTime(finalLabel, meta);
+            console.table(perfMarks.map(m => ({
+                label: m.label,
+                elapsed_ms: m.elapsed.toFixed(1),
+                delta_ms: m.delta.toFixed(1),
+                ...m.meta
+            })));
+        }
+
         if (!tripId) {
             //document.getElementById('tripDetails').innerHTML =
             //    '<div class="error">No trip ID specified</div>';
@@ -525,6 +564,9 @@
         }
 
         async function loadTripAndLegs(tripId) {
+            perfStart = performance.now();
+            perfMarks = [];
+            markTime('fetch_start');
             try {
                 const legsPromise = fetch('/api/trip_legs?id=' + tripId);
 
@@ -563,6 +605,10 @@
                 if (trackResult.status === 'ok' && trackResult.data) {
                     fullTrackData = trackResult.data;
                 }
+                markTime('initial_fetches_resolved', {
+                    track_points: fullTrackData ? fullTrackData.length : 0,
+                    legs: currentLegs.length
+                });
 
                 // Determine initial leg from URL parameter (validate against loaded legs)
                 let initialLeg = null;
@@ -723,7 +769,9 @@
                 }
 
                 // Render basic UI with map and trip info
+                markTime('before_map_render', { track_points: trackData.length });
                 displayTripInfoAndMap(tripData, trackData, isFullTrip);
+                markTime('map_render_done', { track_points: trackData.length });
 
                 // Destroy existing charts
                 Object.values(allCharts).forEach(chart => {
@@ -753,6 +801,7 @@
                     console.error('Failed to load trip charts:', error);
                 });
 
+                summarizePerf('ALL_CHARTS_AND_MAP_POPULATED', { track_points: trackData.length });
             } catch (error) {
                 console.error('Failed to load trip details:', error);
             }
@@ -801,17 +850,20 @@
         }
 
         async function renderLegCharts(trackData, startTime, endTime) {
+            markTime('leg_charts_start', { track_points: trackData.length });
             // Create time series charts
             allCharts.speed = createSpeedChart(trackData);
             allCharts.heading = createHeadingChart(trackData, headingScaleNormalized);
             allCharts.windSpeed = createWindSpeedChart(trackData);
             allCharts.windDirection = createWindDirectionChart(trackData);
+            markTime('leg_timeseries_charts_rendered', { track_points: trackData.length });
 
             const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
             const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
+            const rollChartMaxPoints = getChartMaxPoints('rollAngleChart', 1000);
             speedDistQuery = '/api/speed_distribution?start=' + formattedStart + '&end=' + formattedEnd;
             windStatsQuery = '/api/wind_statistics?start=' + formattedStart + '&end=' + formattedEnd;
-            rollQuery = '/api/metrics?metric=7&start=' + formattedStart + '&end=' + formattedEnd + '&max_points=1000';
+            rollQuery = '/api/metrics?metric=7&start=' + formattedStart + '&end=' + formattedEnd + '&max_points=' + rollChartMaxPoints;
 
             const [speedDistResponse, windStatsResponse, rollResponse] = await Promise.all([
                 fetch(speedDistQuery),
@@ -845,13 +897,21 @@
                 }
             }
 
+            markTime('leg_charts_fetch_resolved', {
+                speed_dist_buckets: speedDistData ? speedDistData.labels.length : 0,
+                wind_stats_buckets: windStatsData ? windStatsData.directions.length : 0,
+                roll_points: rollData ? rollData.length : 0
+            });
+
             allCharts.speedDistribution = createSpeedDistributionChart(speedDistData);
             allCharts.windStatistics = createWindStatisticsChart(windStatsData);
             allCharts.rollAngle = createRollAngleChart(rollData);
             allCharts.heelDistribution = createHeelDistributionChart(rollData);
+            markTime('leg_distribution_charts_rendered');
         }
 
         async function renderAnalytics(startTime, endTime) {
+            markTime('analytics_start');
             let analyticsQuery;
             const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
             const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
@@ -865,21 +925,25 @@
                         analyticsData = result.data;
                     }
                 }
+                markTime('analytics_fetch_resolved');
                 // Save analytics data globally for segment marker handling
                 currentAnalyticsData = analyticsData;
                 renderAnalyticsCards(analyticsData);
+                markTime('analytics_rendered');
             } catch (error) {
                 console.error('Failed to fetch analytics data:', error);
             }
         }
 
         async function renderTripCharts(trip, trackData, startTime, endTime, isFullTrip) {
+            markTime('trip_charts_start');
             try {
                 const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
                 const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
+                const tripChartMaxPoints = getChartMaxPoints('atmosphericPressureChart', 1000);
 
                 // Fetch all trip-level environmental metrics in a single batch request
-                const batchQuery = '/api/metrics/batch?metrics=1,2,4,5,6&start=' + formattedStart + '&end=' + formattedEnd + '&max_points=1000';
+                const batchQuery = '/api/metrics/batch?metrics=1,2,4,5,6&start=' + formattedStart + '&end=' + formattedEnd + '&max_points=' + tripChartMaxPoints;
                 const batchResponse = await fetch(batchQuery);
 
                 let pressureData = null;
@@ -898,6 +962,13 @@
                         absoluteWindData = result.data.metrics['6'] || null;
                     }
                 }
+                markTime('trip_charts_fetch_resolved', {
+                    pressure_points: pressureData ? pressureData.length : 0,
+                    wind_speed_points: windSpeedData ? windSpeedData.length : 0,
+                    abs_wind_points: absoluteWindData ? absoluteWindData.length : 0,
+                    cabin_temp_points: cabinTempData ? cabinTempData.length : 0,
+                    humidity_points: humidityData ? humidityData.length : 0
+                });
 
                 // Compute leg bands for full-trip view
                 const legBands = isFullTrip ? build_leg_bands(startTime, endTime) : [];
@@ -907,6 +978,7 @@
                 allCharts.absoluteWindDirection = createAbsoluteWindDirectionChartFromMetric(absoluteWindData, windSpeedData, absoluteWindDirectionNormalized, legBands);
                 allCharts.cabinTemperature = createCabinTemperatureChart(cabinTempData, legBands);
                 allCharts.humidity = createHumidityChart(humidityData, legBands);
+                markTime('trip_charts_rendered');
 
                 // Save absolute wind data globally for scale toggling
                 currentAbsoluteWindData = absoluteWindData;
@@ -2170,7 +2242,9 @@
             ]);
 
             const hoverPopup = L.popup({ closeButton: false, autoPan: false });
+            markTime('map_before_colored_track', { points: validTrackPoints.length });
             createColoredTrack(map, validTrackPoints, hoverPopup, isFullTrip ? 4.0 : 1.0);
+            markTime('map_after_colored_track', { points: validTrackPoints.length });
 
             if (!isFullTrip) {
                 addHourlyMarkers(map, validTrackPoints);
