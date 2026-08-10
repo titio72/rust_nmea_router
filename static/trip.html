@@ -781,9 +781,9 @@
                 });
                 allCharts = {};
 
-                renderAnalytics(startTime, endTime).catch(error => {
-                    console.error('Failed to load analytics:', error);
-                });
+                currentAnalyticsData = buildAnalyticsFromLegs(currentTrip, currentLegs, selectedLeg);
+                renderAnalyticsCards(currentAnalyticsData);
+                markTime('analytics_rendered_client_side');
 
                 // reset charts
                 initializeChartsLeg(!isFullTrip);
@@ -910,29 +910,67 @@
             markTime('leg_distribution_charts_rendered');
         }
 
-        async function renderAnalytics(startTime, endTime) {
-            markTime('analytics_start');
-            let analyticsQuery;
-            const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
-            const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
-            analyticsQuery = '/api/track_analytics?start=' + formattedStart + '&end=' + formattedEnd;
-            try {
-                const analyticsResponse = await fetch(analyticsQuery);
-                let analyticsData = null;
-                if (analyticsResponse.ok) {
-                    const result = await analyticsResponse.json();
-                    if (result.status === 'ok' && result.data) {
-                        analyticsData = result.data;
+        function averageSpeed(distanceNm, timeMs) {
+            if (!timeMs || timeMs <= 0) return null;
+            return distanceNm / (timeMs / 3600000);
+        }
+
+        // Builds the same shape /api/track_analytics used to return, from data already loaded via
+        // /api/trip and /api/trip_legs — no network request needed. selectedLeg is the TripLeg object
+        // for a single-leg view, or null for the full-trip view (best-of across all legs).
+        function buildAnalyticsFromLegs(trip, legs, selectedLeg) {
+            if (selectedLeg) {
+                const sailingMs = selectedLeg.sailing_time_ms || 0;
+                const motoringMs = selectedLeg.motoring_time_ms || 0;
+                return {
+                    max_speed_kn: selectedLeg.max_speed_kn ?? null,
+                    max_speed_timestamp: selectedLeg.max_speed_timestamp ?? null,
+                    fastest_1nm: selectedLeg.fastest_1nm ?? null,
+                    fastest_5nm: selectedLeg.fastest_5nm ?? null,
+                    fastest_10nm: selectedLeg.fastest_10nm ?? null,
+                    fastest_25nm: selectedLeg.fastest_25nm ?? null,
+                    average_speed_kn: averageSpeed(
+                        (selectedLeg.sailing_distance_nm || 0) + (selectedLeg.motoring_distance_nm || 0),
+                        sailingMs + motoringMs
+                    ),
+                    average_speed_sailing_kn: averageSpeed(selectedLeg.sailing_distance_nm || 0, sailingMs),
+                    average_speed_motoring_kn: averageSpeed(selectedLeg.motoring_distance_nm || 0, motoringMs)
+                };
+            }
+
+            let maxSpeedKn = null;
+            let maxSpeedTimestamp = null;
+            const best = { fastest_1nm: null, fastest_5nm: null, fastest_10nm: null, fastest_25nm: null };
+            for (const leg of legs) {
+                if (leg.max_speed_kn !== null && leg.max_speed_kn !== undefined &&
+                    (maxSpeedKn === null || leg.max_speed_kn > maxSpeedKn)) {
+                    maxSpeedKn = leg.max_speed_kn;
+                    maxSpeedTimestamp = leg.max_speed_timestamp;
+                }
+                for (const key of ['fastest_1nm', 'fastest_5nm', 'fastest_10nm', 'fastest_25nm']) {
+                    const candidate = leg[key];
+                    if (candidate && (!best[key] || candidate.average_speed_kn > best[key].average_speed_kn)) {
+                        best[key] = candidate;
                     }
                 }
-                markTime('analytics_fetch_resolved');
-                // Save analytics data globally for segment marker handling
-                currentAnalyticsData = analyticsData;
-                renderAnalyticsCards(analyticsData);
-                markTime('analytics_rendered');
-            } catch (error) {
-                console.error('Failed to fetch analytics data:', error);
             }
+
+            const sailingMs = trip.sailing_time_ms || 0;
+            const motoringMs = trip.motoring_time_ms || 0;
+            return {
+                max_speed_kn: maxSpeedKn,
+                max_speed_timestamp: maxSpeedTimestamp,
+                fastest_1nm: best.fastest_1nm,
+                fastest_5nm: best.fastest_5nm,
+                fastest_10nm: best.fastest_10nm,
+                fastest_25nm: best.fastest_25nm,
+                average_speed_kn: averageSpeed(
+                    (trip.sailing_distance_nm || 0) + (trip.motoring_distance_nm || 0),
+                    sailingMs + motoringMs
+                ),
+                average_speed_sailing_kn: averageSpeed(trip.sailing_distance_nm || 0, sailingMs),
+                average_speed_motoring_kn: averageSpeed(trip.motoring_distance_nm || 0, motoringMs)
+            };
         }
 
         async function renderTripCharts(trip, trackData, startTime, endTime, isFullTrip) {
