@@ -197,7 +197,7 @@ pub struct HeatmapData {
     pub total_motoring_distance: f64,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct FastestSegment {
     pub distance_nm: f64,
     pub average_speed_kn: f64,

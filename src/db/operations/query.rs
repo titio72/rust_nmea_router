@@ -745,6 +745,7 @@ impl VesselDatabase {
             metrics
         };
 
+        log_timing("fetch_metrics", "downsample", t_downsample, Some(metrics.len()));
         Ok(metrics)
     }
 
@@ -772,6 +773,7 @@ impl VesselDatabase {
 
         let mut conn = self.pool.get_conn()?;
 
+        let t_sql = Instant::now();
         // in_clause is built from &[u8] typed integers — safe to inline.
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
             conn.exec(
@@ -808,6 +810,8 @@ impl VesselDatabase {
                 "Either trip_id or both start and end timestamps are required".to_string(),
             ));
         };
+        log_timing("fetch_metrics_batch", "sql_query", t_sql, Some(results.len()));
+        let t_downsample = Instant::now();
 
         // Partition rows into per-metric Vecs
         let mut map: std::collections::HashMap<String, Vec<WebMetricData>> =
@@ -888,6 +892,12 @@ impl VesselDatabase {
             map
         };
 
+        log_timing(
+            "fetch_metrics_batch",
+            "downsample",
+            t_downsample,
+            Some(map.values().map(|v| v.len()).sum()),
+        );
         Ok(MultiMetricData { metrics: map })
     }
 
@@ -915,6 +925,7 @@ impl VesselDatabase {
 
         // Aggregate on the database side: one row per 0.5-kn speed bucket
         let mut conn = self.pool.get_conn()?;
+        let t_sql = Instant::now();
 
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
             conn.exec(
@@ -950,6 +961,12 @@ impl VesselDatabase {
                 "Either trip_id or both start and end timestamps are required".to_string(),
             ));
         };
+        log_timing(
+            "fetch_speed_distribution",
+            "sql_query",
+            t_sql,
+            Some(results.len()),
+        );
 
         for row in results {
             let speed: f64 = row
@@ -999,6 +1016,7 @@ impl VesselDatabase {
         // Aggregate on the database side: one row per 5-degree wind-angle bucket.
         // Wind distance = speed (kn) * period duration (h) = speed * total_time_ms / 3_600_000
         let mut conn = self.pool.get_conn()?;
+        let t_sql = Instant::now();
 
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
             conn.exec(
@@ -1036,6 +1054,12 @@ impl VesselDatabase {
                 "Either trip_id or both start and end timestamps are required".to_string(),
             ));
         };
+        log_timing(
+            "fetch_wind_statistics",
+            "sql_query",
+            t_sql,
+            Some(results.len()),
+        );
 
         for row in results {
             let angle: f64 = row
@@ -1068,18 +1092,34 @@ impl VesselDatabase {
     /// Results are cached in trip_legs_cache for closed trips (end_timestamp > 24h ago).
     /// User nav window overrides from trip_legs_nav_overrides are applied after computation.
     pub fn fetch_trip_legs(&self, trip_id: u32) -> Result<TripLegsData, AppError> {
+        let t_total = Instant::now();
         let mut conn = self.pool.get_conn()?;
 
+        let t_cache_check = Instant::now();
         let is_closed = self.trip_is_closed(&mut conn, trip_id)?;
 
         if is_closed {
-            if let Some(mut cached) = self.get_cached_trip_legs(&mut conn, trip_id)? {
+            let cached = self.get_cached_trip_legs(&mut conn, trip_id)?;
+            log_timing(
+                "fetch_trip_legs",
+                "cache_lookup",
+                t_cache_check,
+                Some(cached.as_ref().map(|c| c.legs.len()).unwrap_or(0)),
+            );
+            if let Some(mut cached) = cached {
+                let t_nav = Instant::now();
                 self.apply_nav_overrides(&mut conn, trip_id, &mut cached.legs)?;
+                log_timing("fetch_trip_legs", "nav_overrides", t_nav, Some(cached.legs.len()));
+                log_timing("fetch_trip_legs", "total_cache_hit", t_total, Some(cached.legs.len()));
                 return Ok(cached);
             }
+        } else {
+            log_timing("fetch_trip_legs", "cache_lookup", t_cache_check, Some(0));
         }
 
+        let t_compute = Instant::now();
         let mut legs_data = self.compute_trip_legs(&mut conn, trip_id)?;
+        log_timing("fetch_trip_legs", "compute", t_compute, Some(legs_data.legs.len()));
 
         if is_closed {
             if let Err(e) = self.save_trip_legs_to_cache(&mut conn, trip_id, &legs_data.legs) {
@@ -1090,7 +1130,10 @@ impl VesselDatabase {
             }
         }
 
+        let t_nav = Instant::now();
         self.apply_nav_overrides(&mut conn, trip_id, &mut legs_data.legs)?;
+        log_timing("fetch_trip_legs", "nav_overrides", t_nav, Some(legs_data.legs.len()));
+        log_timing("fetch_trip_legs", "total_computed", t_total, Some(legs_data.legs.len()));
         Ok(legs_data)
     }
 
@@ -1590,6 +1633,8 @@ impl VesselDatabase {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<TrackAnalytics, AppError> {
+        let t_total = Instant::now();
+        let t_sql = Instant::now();
         let mut conn = self.pool.get_conn()?;
 
         let results: Vec<mysql::Row> = conn.exec(
@@ -1611,8 +1656,10 @@ impl VesselDatabase {
                 "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
             },
         )?;
+        log_timing("fetch_track_analytics", "sql_query", t_sql, Some(results.len()));
 
         if results.is_empty() {
+            log_timing("fetch_track_analytics", "total", t_total, Some(0));
             return Ok(TrackAnalytics {
                 max_speed_kn: None,
                 max_speed_timestamp: None,
@@ -1626,6 +1673,7 @@ impl VesselDatabase {
             });
         }
 
+        let t_aggregate = Instant::now();
         let mut distance = 0.0;
         let mut time_h = 0.0;
         let mut distance_engine = 0.0;
@@ -1684,13 +1732,34 @@ impl VesselDatabase {
                 track_points.push((timestamp, lat, lon, spd, engine_on));
             }
         }
+        log_timing(
+            "fetch_track_analytics",
+            "aggregate_loop",
+            t_aggregate,
+            Some(track_points.len()),
+        );
 
-        // Calculate fastest segments for 1NM, 5NM, and 10NM
+        // Calculate fastest segments for 1NM, 5NM, and 10NM.
+        // Each call is O(n^2) worst-case (sliding window with an inner scan that only
+        // breaks early once the target distance is covered) — timed individually since
+        // a becalmed/no-engine stretch in one trip can make one target far slower than another.
+        let t_fastest = Instant::now();
         let fastest_1nm = find_fastest_segment(&track_points, 1.0);
-        let fastest_5nm = find_fastest_segment(&track_points, 5.0);
-        let fastest_10nm = find_fastest_segment(&track_points, 10.0);
-        let fastest_25nm = find_fastest_segment(&track_points, 25.0);
+        log_timing("fetch_track_analytics", "fastest_segment_1nm", t_fastest, Some(track_points.len()));
 
+        let t_fastest = Instant::now();
+        let fastest_5nm = find_fastest_segment(&track_points, 5.0);
+        log_timing("fetch_track_analytics", "fastest_segment_5nm", t_fastest, Some(track_points.len()));
+
+        let t_fastest = Instant::now();
+        let fastest_10nm = find_fastest_segment(&track_points, 10.0);
+        log_timing("fetch_track_analytics", "fastest_segment_10nm", t_fastest, Some(track_points.len()));
+
+        let t_fastest = Instant::now();
+        let fastest_25nm = find_fastest_segment(&track_points, 25.0);
+        log_timing("fetch_track_analytics", "fastest_segment_25nm", t_fastest, Some(track_points.len()));
+
+        log_timing("fetch_track_analytics", "total", t_total, Some(track_points.len()));
         Ok(TrackAnalytics {
             max_speed_kn: max_speed,
             max_speed_timestamp,
@@ -2099,6 +2168,110 @@ fn find_fastest_segment(
     fastest
 }
 
+/// Find the fastest continuous segment of at least `target_distance_nm` within a single leg's
+/// records, considering only maximal runs where `engine_on` is false — a segment can never
+/// include a motoring point, matching the semantics of the original per-trip algorithm. O(leg
+/// length) per target distance via a monotonic two-pointer within each run: the window's start
+/// and end indices only ever advance, never reset backward.
+fn fastest_segment_in_leg(records: &[LegRecord], target_distance_nm: f64) -> Option<FastestSegment> {
+    let mut best: Option<FastestSegment> = None;
+    let mut run_start = 0;
+    while run_start < records.len() {
+        if records[run_start].engine_on {
+            run_start += 1;
+            continue;
+        }
+        let mut run_end = run_start;
+        while run_end < records.len() && !records[run_end].engine_on {
+            run_end += 1;
+        }
+        if let Some(candidate) = fastest_in_run(&records[run_start..run_end], target_distance_nm) {
+            let better = best
+                .as_ref()
+                .map(|b| candidate.average_speed_kn > b.average_speed_kn)
+                .unwrap_or(true);
+            if better {
+                best = Some(candidate);
+            }
+        }
+        run_start = run_end;
+    }
+    best
+}
+
+/// Two-pointer scan within a single engine-off run: for each `right`, shrink `left` as far as
+/// possible while the window still covers `target_distance_nm`. `left` only ever advances across
+/// the whole run, so this is O(run length), not O(run length^2).
+fn fastest_in_run(run: &[LegRecord], target_distance_nm: f64) -> Option<FastestSegment> {
+    if run.len() < 2 {
+        return None;
+    }
+    let edge_dist: Vec<f64> = (0..run.len() - 1)
+        .map(|i| {
+            haversine_distance_nm(
+                run[i].lat.unwrap_or(0.0),
+                run[i].lon.unwrap_or(0.0),
+                run[i + 1].lat.unwrap_or(0.0),
+                run[i + 1].lon.unwrap_or(0.0),
+            )
+        })
+        .collect();
+
+    let mut best: Option<FastestSegment> = None;
+    let mut left = 0usize;
+    let mut window_dist = 0.0;
+
+    for right in 1..run.len() {
+        window_dist += edge_dist[right - 1];
+        while left < right && window_dist - edge_dist[left] >= target_distance_nm {
+            window_dist -= edge_dist[left];
+            left += 1;
+        }
+        if window_dist >= target_distance_nm {
+            if let Some(candidate) = segment_from_window(run, left, right, window_dist) {
+                let better = best
+                    .as_ref()
+                    .map(|b| candidate.average_speed_kn > b.average_speed_kn)
+                    .unwrap_or(true);
+                if better {
+                    best = Some(candidate);
+                }
+            }
+        }
+    }
+    best
+}
+
+fn segment_from_window(
+    run: &[LegRecord],
+    left: usize,
+    right: usize,
+    distance_nm: f64,
+) -> Option<FastestSegment> {
+    let start_time = chrono::NaiveDateTime::parse_from_str(
+        &run[left].timestamp.replace('Z', ""),
+        "%Y-%m-%dT%H:%M:%S%.f",
+    )
+    .ok()?;
+    let end_time = chrono::NaiveDateTime::parse_from_str(
+        &run[right].timestamp.replace('Z', ""),
+        "%Y-%m-%dT%H:%M:%S%.f",
+    )
+    .ok()?;
+    let duration_ms = (end_time - start_time).num_milliseconds().max(0) as u64;
+    if duration_ms == 0 {
+        return None;
+    }
+    let average_speed_kn = distance_nm / (duration_ms as f64 / 1000.0 / 3600.0);
+    Some(FastestSegment {
+        distance_nm,
+        average_speed_kn,
+        duration_ms,
+        start_timestamp: run[left].timestamp.clone(),
+        end_timestamp: run[right].timestamp.clone(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2113,6 +2286,137 @@ mod tests {
     };
     #[cfg(test)]
     use crate::utilities::EngineStatus;
+
+    fn synthetic_leg_constant_speed(n: usize, speed_kn: f64) -> Vec<LegRecord> {
+        let interval_s: f64 = 10.0;
+        let dist_per_point = speed_kn * interval_s / 3600.0; // nm per 10s interval
+        let deg_per_nm = 1.0 / 60.0; // ~1 nm per 1/60 degree of latitude
+        let base = chrono::NaiveDate::from_ymd_opt(2026, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        (0..n)
+            .map(|i| LegRecord {
+                timestamp: (base + chrono::Duration::seconds(i as i64 * interval_s as i64))
+                    .format("%Y-%m-%dT%H:%M:%S.000Z")
+                    .to_string(),
+                speed_kn,
+                distance_nm: dist_per_point,
+                time_ms: (interval_s * 1000.0) as u64,
+                engine_on: false,
+                lat: Some(40.0 + i as f64 * dist_per_point * deg_per_nm),
+                lon: Some(2.0),
+            })
+            .collect()
+    }
+
+    fn synthetic_leg_with_engine_gap(
+        n: usize,
+        speed_kn: f64,
+        gap_start: usize,
+        gap_end: usize,
+    ) -> Vec<LegRecord> {
+        let mut records = synthetic_leg_constant_speed(n, speed_kn);
+        for r in records.iter_mut().take(gap_end).skip(gap_start) {
+            r.engine_on = true;
+        }
+        records
+    }
+
+    fn synthetic_leg_becalmed_stretch(
+        n: usize,
+        speed_kn: f64,
+        becalm_start: usize,
+        becalm_end: usize,
+    ) -> Vec<LegRecord> {
+        let mut records = synthetic_leg_constant_speed(n, speed_kn);
+        let interval_s: f64 = 10.0;
+        let dist_per_point = speed_kn * interval_s / 3600.0;
+        let deg_per_nm = 1.0 / 60.0;
+        let frozen_lat = records[becalm_start].lat;
+        let missed_distance = (becalm_end - becalm_start) as f64 * dist_per_point * deg_per_nm;
+        for (i, r) in records.iter_mut().enumerate() {
+            if i >= becalm_start && i < becalm_end {
+                // Freeze position and distance during becalmed stretch
+                r.lat = frozen_lat;
+                r.distance_nm = 0.0;
+            } else if i >= becalm_end {
+                // Offset post-becalmed positions by the distance not traveled during the stretch
+                if let Some(lat) = r.lat {
+                    r.lat = Some(lat - missed_distance);
+                }
+            }
+        }
+        records
+    }
+
+    #[test]
+    fn fastest_segment_in_leg_matches_old_algorithm_on_synthetic_data() {
+        // Cross-check the two-pointer rewrite against the pre-existing O(n^2) algorithm across
+        // constant-speed, engine-gap, and becalmed-stretch cases. Disagreement means the rewrite
+        // has a bug — this is the safety net for a hand-derived algorithm change.
+        let cases: Vec<Vec<LegRecord>> = vec![
+            synthetic_leg_constant_speed(200, 6.0),
+            synthetic_leg_with_engine_gap(200, 6.0, 50, 70),
+            synthetic_leg_becalmed_stretch(300, 6.0, 100, 250),
+        ];
+        for (i, records) in cases.iter().enumerate() {
+            for target in [1.0, 5.0, 10.0, 25.0] {
+                let old_points: Vec<(String, f64, f64, f64, bool)> = records
+                    .iter()
+                    .map(|r| {
+                        (
+                            r.timestamp.clone(),
+                            r.lat.unwrap_or(0.0),
+                            r.lon.unwrap_or(0.0),
+                            r.speed_kn,
+                            r.engine_on,
+                        )
+                    })
+                    .collect();
+                let expected = find_fastest_segment(&old_points, target);
+                let actual = fastest_segment_in_leg(records, target);
+                match (actual, expected) {
+                    (Some(a), Some(e)) => {
+                        let epsilon = 1e-6;
+                        assert!(
+                            (a.average_speed_kn - e.average_speed_kn).abs() < epsilon,
+                            "case {} target {}nm: two-pointer disagrees with reference algorithm\
+                             \nactual: {}\nexpected: {}",
+                            i,
+                            target,
+                            a.average_speed_kn,
+                            e.average_speed_kn
+                        );
+                    }
+                    (None, None) => {}
+                    (actual_opt, expected_opt) => {
+                        panic!(
+                            "case {} target {}nm: actual and expected differ in presence\
+                             \nactual: {:?}\nexpected: {:?}",
+                            i, target, actual_opt, expected_opt
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fastest_segment_in_leg_is_linear_not_quadratic_on_becalmed_stretch() {
+        // Regression test for the original O(n^2) blowup: a long becalmed (near-zero-distance,
+        // engine-off) stretch must complete near-instantly now that the algorithm is a genuine
+        // two-pointer. An accidental revert to nested-loop behavior makes this test visibly slow.
+        let records = synthetic_leg_becalmed_stretch(20_000, 6.0, 100, 19_900);
+        let start = std::time::Instant::now();
+        let _ = fastest_segment_in_leg(&records, 25.0);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.as_millis() < 500,
+            "fastest_segment_in_leg took {:?} on 20k becalmed points — looks quadratic",
+            elapsed
+        );
+    }
 
     fn setup_db() -> VesselDatabase {
         let config = Config::load_for_context(None)
@@ -2213,6 +2517,42 @@ mod tests {
             0.1,
             "Last point longitude",
         );
+    }
+
+    #[test]
+    fn decimate_caps_total_count_even_when_source_is_already_sparse() {
+        // Regression test: vessel_status rows can already be spaced further apart (e.g.
+        // 10s underway) than the max_points-implied sampling rate (e.g. 600 points/hour
+        // = one every 6s), so a rate-based filter lets every row through unfiltered.
+        // decimate() must still cap the *total* output length regardless of input spacing.
+        let items: Vec<u32> = (0..32_257).collect();
+        let result = decimate(items, Some(600));
+        assert!(
+            result.len() <= 600,
+            "expected at most 600 points, got {}",
+            result.len()
+        );
+    }
+
+    #[test]
+    fn decimate_preserves_order_with_even_stride() {
+        let items: Vec<u32> = (0..12).collect();
+        let result = decimate(items, Some(4));
+        assert_eq!(result, vec![0, 3, 6, 9]);
+    }
+
+    #[test]
+    fn decimate_is_noop_when_under_the_limit() {
+        let items: Vec<u32> = (0..5).collect();
+        let result = decimate(items.clone(), Some(600));
+        assert_eq!(result, items);
+    }
+
+    #[test]
+    fn decimate_is_noop_when_max_points_is_none() {
+        let items: Vec<u32> = (0..10_000).collect();
+        let result = decimate(items.clone(), None);
+        assert_eq!(result, items);
     }
 
     #[test]
