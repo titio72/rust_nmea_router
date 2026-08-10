@@ -1817,7 +1817,6 @@ impl VesselDatabase {
         Ok(TripLegsData { legs })
     }
 
-    /// Fetch track analytics for a time range - calculates max speed and fastest segments
     /// Fetch heatmap data - distance traveled grouped by day for 365 days before the given date.
     /// Uses a per-day database cache (heatmap_cache) to avoid recomputing past days.
     /// Today is always recomputed fresh since vessel_status data for it is still being written.
@@ -2124,7 +2123,6 @@ impl VesselDatabase {
     }
 }
 
-/// Helper function to find fastest segment for a given target distance
 /// Find the fastest continuous segment of at least `target_distance_nm` within a single leg's
 /// records, considering only maximal runs where `engine_on` is false — a segment can never
 /// include a motoring point, matching the semantics of the original per-trip algorithm. O(leg
