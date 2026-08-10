@@ -155,6 +155,13 @@ pub struct TripLeg {
     pub nav_time_ms: u64,
     /// How the nav window was detected: "engine_transition", "speed_fallback", or null
     pub nav_detection_method: Option<String>,
+    /// Highest recorded speed while sailing (engine off) within this leg.
+    pub max_speed_kn: Option<f64>,
+    pub max_speed_timestamp: Option<String>,
+    pub fastest_1nm: Option<FastestSegment>,
+    pub fastest_5nm: Option<FastestSegment>,
+    pub fastest_10nm: Option<FastestSegment>,
+    pub fastest_25nm: Option<FastestSegment>,
 }
 
 #[derive(Debug, serde::Serialize)]

@@ -190,6 +190,23 @@ fn finalize_leg(
         .map(|r| r.timestamp.clone())
         .unwrap_or_default();
 
+    // Every record in `records` already belongs to a non-moored stretch (compute_trip_legs only
+    // pushes here when !is_moored), so no separate moored filter is needed — unlike the old
+    // whole-trip algorithm, which only excluded moored points from the distance/time sums, not
+    // from max-speed tracking.
+    let mut max_speed_kn: Option<f64> = None;
+    let mut max_speed_timestamp: Option<String> = None;
+    for r in records {
+        if !r.engine_on && (max_speed_kn.is_none() || r.speed_kn > max_speed_kn.unwrap()) {
+            max_speed_kn = Some(r.speed_kn);
+            max_speed_timestamp = Some(r.timestamp.clone());
+        }
+    }
+    let fastest_1nm = fastest_segment_in_leg(records, 1.0);
+    let fastest_5nm = fastest_segment_in_leg(records, 5.0);
+    let fastest_10nm = fastest_segment_in_leg(records, 10.0);
+    let fastest_25nm = fastest_segment_in_leg(records, 25.0);
+
     Some(TripLeg {
         leg_number,
         start_timestamp,
@@ -210,6 +227,12 @@ fn finalize_leg(
         nav_distance_nm,
         nav_time_ms,
         nav_detection_method,
+        max_speed_kn,
+        max_speed_timestamp,
+        fastest_1nm,
+        fastest_5nm,
+        fastest_10nm,
+        fastest_25nm,
     })
 }
 
@@ -1320,6 +1343,12 @@ impl VesselDatabase {
                         .get_opt("nav_detection_method")
                         .and_then(|v: Result<Option<String>, _>| v.ok())
                         .flatten(),
+                    max_speed_kn: None,
+                    max_speed_timestamp: None,
+                    fastest_1nm: None,
+                    fastest_5nm: None,
+                    fastest_10nm: None,
+                    fastest_25nm: None,
                 }
             })
             .collect();
@@ -2416,6 +2445,24 @@ mod tests {
             "fastest_segment_in_leg took {:?} on 20k becalmed points — looks quadratic",
             elapsed
         );
+    }
+
+    #[test]
+    fn finalize_leg_populates_speed_records() {
+        let records = synthetic_leg_constant_speed(400, 6.0); // 400 * 10s = ~1.1h, ~2.5nm total
+        let leg = finalize_leg(&records, 1, records[0].lat, records[0].lon)
+            .expect("leg should finalize — total distance exceeds the 0.5nm minimum");
+
+        assert!(leg.max_speed_kn.is_some());
+        assert!((leg.max_speed_kn.unwrap() - 6.0).abs() < 0.01);
+        assert!(leg.max_speed_timestamp.is_some());
+
+        // Total leg distance is ~2.5nm (400 * 6.0 * 10/3600), so a 1nm segment must exist...
+        assert!(leg.fastest_1nm.is_some());
+        let seg = leg.fastest_1nm.as_ref().unwrap();
+        assert!((seg.average_speed_kn - 6.0).abs() < 0.1);
+        // ...but 25nm never fits in a 2.5nm leg.
+        assert!(leg.fastest_25nm.is_none());
     }
 
     fn setup_db() -> VesselDatabase {
