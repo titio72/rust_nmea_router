@@ -163,6 +163,11 @@
         }
 
         function renderTrack() {
+            // loadTrack() runs before the Leaflet map exists (init() needs the track's
+            // bounds to create it). Draw nothing until then — init() calls renderTrack()
+            // again once the map is ready.
+            if (!map) return;
+
             trackLayers.forEach(l => l.remove());
             trackLayers = [];
             if (trackData.length < 2) return;
