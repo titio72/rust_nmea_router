@@ -9,7 +9,20 @@ use crate::utilities::haversine_distance_nm;
 use chrono::{DateTime, NaiveDate, Utc};
 use mysql::params;
 use mysql::prelude::Queryable;
-use tracing::warn;
+use std::time::Instant;
+use tracing::{info, warn};
+
+/// Log the elapsed time of a operation/phase pair, with an optional row count.
+/// Used to break down where server time goes within a single request, independent
+/// of how algorithmically complex the phase is (a tight SQL query and an O(n^2)
+/// in-memory loop are both just "elapsed_ms" here).
+fn log_timing(operation: &str, phase: &str, start: Instant, rows: Option<usize>) {
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+    match rows {
+        Some(rows) => info!(operation, phase, rows, elapsed_ms, "timing"),
+        None => info!(operation, phase, elapsed_ms, "timing"),
+    }
+}
 
 /// Get a value from a database row, logging a warning if the default is used.
 /// This provides observability for NULL/missing columns without breaking API contracts.
@@ -37,6 +50,22 @@ where
 }
 
 const NAV_SPEED_THRESHOLD_KN: f64 = 4.0;
+
+/// Downsample a chronologically-ordered sequence to at most `max_points` entries by
+/// stride decimation (keep every Nth element, N = ceil(len / max_points)).
+/// Unlike a fixed time-interval filter, this caps the *total* output count regardless
+/// of how densely or sparsely the input is already sampled — a filter that drops points
+/// closer than some interval does nothing when the source is already coarser than that.
+fn decimate<T>(items: Vec<T>, max_points: Option<usize>) -> Vec<T> {
+    let Some(max_points) = max_points.filter(|&m| m > 0) else {
+        return items;
+    };
+    if items.len() <= max_points {
+        return items;
+    }
+    let stride = items.len().div_ceil(max_points);
+    items.into_iter().step_by(stride).collect()
+}
 
 /// Parse two ISO-8601 timestamps and return the millisecond difference (b - a).
 /// Returns 0 if either is None or unparseable.
@@ -186,6 +215,7 @@ fn finalize_leg(
 
 impl VesselDatabase {
     pub fn fetch_trip(&self, trip_id: u32) -> Result<Option<TripSummary>, AppError> {
+        let t0 = Instant::now();
         let mut conn = self.pool.get_conn()?;
 
         let row: Option<mysql::Row> = conn.exec_first(
@@ -231,8 +261,10 @@ impl VesselDatabase {
                     "fetch_trip",
                 ),
             };
+            log_timing("fetch_trip", "total", t0, Some(1));
             Ok(Some(trip))
         } else {
+            log_timing("fetch_trip", "total", t0, Some(0));
             Ok(None)
         }
     }
@@ -516,6 +548,7 @@ impl VesselDatabase {
         end: Option<DateTime<Utc>>,
         max_points: Option<usize>,
     ) -> Result<Vec<TrackPoint>, AppError> {
+        let t_sql = Instant::now();
         let mut conn = self.pool.get_conn()?;
 
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
@@ -550,83 +583,55 @@ impl VesselDatabase {
                 "Either trip_id or both start and end timestamps are required".to_string(),
             ));
         };
+        log_timing("fetch_track", "sql_query", t_sql, Some(results.len()));
+        let t_downsample = Instant::now();
 
-        // min_interval_ms derived from max_points interpreted as max samples per hour.
-        // e.g. max_points=60 → one sample per minute (3_600_000ms / 60 = 60_000ms).
-        // 0 or None means no filtering.
-        let min_interval_ms: Option<i64> = max_points
-            .filter(|&m| m > 0)
-            .map(|m| 3_600_000_i64 / m as i64);
+        let track: Vec<TrackPoint> = results
+            .iter()
+            .map(|row| TrackPoint {
+                timestamp: row
+                    .get_opt::<String, _>("timestamp")
+                    .and_then(|v| v.ok())
+                    .unwrap_or_default(),
+                latitude: row.get_opt::<f64, _>("latitude").and_then(|v| v.ok()),
+                longitude: row.get_opt::<f64, _>("longitude").and_then(|v| v.ok()),
+                avg_speed_kn: row
+                    .get_opt::<f64, _>("average_speed_kn")
+                    .and_then(|v| v.ok()),
+                max_speed_kn: row.get_opt::<f64, _>("max_speed_kn").and_then(|v| v.ok()),
+                moored: row
+                    .get_opt::<i32, _>("is_moored")
+                    .and_then(|v| v.ok())
+                    .map(|v| v != 0)
+                    .unwrap_or(false),
+                engine_on: row
+                    .get_opt::<u8, _>("engine_on")
+                    .and_then(|v| v.ok())
+                    .unwrap_or(2), // Default to unknown if not available
+                total_distance_nm: row
+                    .get_opt::<f64, _>("total_distance_nm")
+                    .and_then(|v| v.ok()),
+                total_time_ms: row
+                    .get_opt::<u64, _>("total_time_ms")
+                    .and_then(|v| v.ok())
+                    .unwrap_or(0),
+                average_wind_speed_kn: row
+                    .get_opt::<f64, _>("average_wind_speed_kn")
+                    .and_then(|v| v.ok()),
+                average_wind_angle_deg: row
+                    .get_opt::<f64, _>("average_wind_angle_deg")
+                    .and_then(|v| v.ok()),
+                cog_deg: row.get_opt::<f64, _>("cog_deg").and_then(|v| v.ok()),
+                average_heading_deg: row
+                    .get_opt::<f64, _>("average_heading_deg")
+                    .and_then(|v| v.ok()),
+                polar_speed_kn: None,
+                polar_ratio: None,
+            })
+            .collect();
+        let track = decimate(track, max_points);
 
-        let mut track: Vec<TrackPoint> = Vec::new();
-        let mut last_included_ts: Option<DateTime<Utc>> = None;
-
-        for row in &results {
-            let timestamp_str = row
-                .get_opt::<String, _>("timestamp")
-                .and_then(|v| v.ok())
-                .unwrap_or_default();
-
-            // Apply time-based filter when max_points_per_hour is set
-            let include = if let Some(min_ms) = min_interval_ms {
-                match chrono::DateTime::parse_from_rfc3339(&timestamp_str) {
-                    Ok(parsed_ts) => {
-                        let parsed_utc = parsed_ts.with_timezone(&Utc);
-                        let include = last_included_ts
-                            .map(|last| (parsed_utc - last).num_milliseconds() >= min_ms)
-                            .unwrap_or(true);
-                        if include {
-                            last_included_ts = Some(parsed_utc);
-                        }
-                        include
-                    }
-                    Err(_) => true, // Unparseable timestamp: include to avoid data loss
-                }
-            } else {
-                true
-            };
-
-            if include {
-                track.push(TrackPoint {
-                    timestamp: timestamp_str,
-                    latitude: row.get_opt::<f64, _>("latitude").and_then(|v| v.ok()),
-                    longitude: row.get_opt::<f64, _>("longitude").and_then(|v| v.ok()),
-                    avg_speed_kn: row
-                        .get_opt::<f64, _>("average_speed_kn")
-                        .and_then(|v| v.ok()),
-                    max_speed_kn: row.get_opt::<f64, _>("max_speed_kn").and_then(|v| v.ok()),
-                    moored: row
-                        .get_opt::<i32, _>("is_moored")
-                        .and_then(|v| v.ok())
-                        .map(|v| v != 0)
-                        .unwrap_or(false),
-                    engine_on: row
-                        .get_opt::<u8, _>("engine_on")
-                        .and_then(|v| v.ok())
-                        .unwrap_or(2), // Default to unknown if not available
-                    total_distance_nm: row
-                        .get_opt::<f64, _>("total_distance_nm")
-                        .and_then(|v| v.ok()),
-                    total_time_ms: row
-                        .get_opt::<u64, _>("total_time_ms")
-                        .and_then(|v| v.ok())
-                        .unwrap_or(0),
-                    average_wind_speed_kn: row
-                        .get_opt::<f64, _>("average_wind_speed_kn")
-                        .and_then(|v| v.ok()),
-                    average_wind_angle_deg: row
-                        .get_opt::<f64, _>("average_wind_angle_deg")
-                        .and_then(|v| v.ok()),
-                    cog_deg: row.get_opt::<f64, _>("cog_deg").and_then(|v| v.ok()),
-                    average_heading_deg: row
-                        .get_opt::<f64, _>("average_heading_deg")
-                        .and_then(|v| v.ok()),
-                    polar_speed_kn: None,
-                    polar_ratio: None,
-                });
-            }
-        }
-
+        log_timing("fetch_track", "downsample", t_downsample, Some(track.len()));
         Ok(track)
     }
 
@@ -639,6 +644,7 @@ impl VesselDatabase {
         end: Option<DateTime<Utc>>,
         max_points: Option<usize>,
     ) -> Result<Vec<WebMetricData>, AppError> {
+        let t_sql = Instant::now();
         let mut conn = self.pool.get_conn()?;
 
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
@@ -670,6 +676,8 @@ impl VesselDatabase {
                 "Either trip_id or both start and end timestamps are required".to_string(),
             ));
         };
+        log_timing("fetch_metrics", "sql_query", t_sql, Some(results.len()));
+        let t_downsample = Instant::now();
 
         let metrics: Vec<WebMetricData> = results
             .iter()
