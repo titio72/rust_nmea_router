@@ -221,6 +221,7 @@
                                 <div id="legDisplay" class="legDisplay"></div>
                                 <button class="app-btn" onclick="nextLeg()" title="Next">&gt;&gt;</button>
                                 <button class="app-btn" data-ro-hidden onclick="recalculateLegs(event)" title="Recalculate Legs">&#x21BA;</button>
+                                <button class="app-btn" data-ro-hidden onclick="goToFixEngineStatus()" title="Fix Engine Status">&#x1F527;</button>
                             </div>
                         </div>
                     </div>
@@ -602,6 +603,10 @@
                 btn.disabled = false;
                 btn.textContent = original;
             }
+        }
+
+        function goToFixEngineStatus() {
+            window.location.href = '/fix-engine-status.html?id=' + tripId;
         }
 
         function updateLegSelector(initialLegNumber) {

@@ -123,6 +123,14 @@ pub struct TripDescriptionQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct CorrectEngineStatusQuery {
+    pub trip_id: u32,
+    pub start_timestamp: String,
+    pub end_timestamp: String,
+    pub engine_on: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TrackQuery {
     pub trip_id: Option<u32>,
     pub start: Option<String>,
@@ -636,6 +644,42 @@ pub async fn trim_trip(
         }
         Err(e) => {
             error!(error = %e, trip_id = params.id, "Failed to trim trip");
+            {
+                let bt = Backtrace::force_capture();
+                error!(?bt, "Backtrace for error");
+                Ok(Json(ApiResponse::error(e.to_string())))
+            }
+        }
+    }
+}
+
+pub async fn correct_engine_status(
+    State(state): State<AppState>,
+    Json(params): Json<CorrectEngineStatusQuery>,
+) -> Result<Json<ApiResponse<()>>, StatusCode> {
+    info!(?params, "POST /api/correct_engine_status called");
+
+    let start = parse_required_datetime(&params.start_timestamp)?;
+    let end = parse_required_datetime(&params.end_timestamp)?;
+    let engine_on = if params.engine_on {
+        crate::utilities::EngineStatus::On
+    } else {
+        crate::utilities::EngineStatus::Off
+    };
+
+    match state
+        .db()
+        .correct_engine_status(params.trip_id, start, end, engine_on)
+    {
+        Ok(()) => {
+            info!(
+                trip_id = params.trip_id,
+                "Engine status corrected successfully"
+            );
+            Ok(Json(ApiResponse::ok(())))
+        }
+        Err(e) => {
+            error!(error = %e, trip_id = params.trip_id, "Failed to correct engine status");
             {
                 let bt = Backtrace::force_capture();
                 error!(?bt, "Backtrace for error");
@@ -1969,6 +2013,7 @@ pub fn create_api_router(state: AppState) -> Router {
             .route("/trip_description", post(update_trip_description))
             .route("/delete_trip", delete(delete_trip))
             .route("/trim_trip", post(trim_trip))
+            .route("/correct_engine_status", post(correct_engine_status))
             .route("/invalidate_trip_legs", post(invalidate_trip_legs))
             .route("/nav_window", put(set_nav_window))
             .route("/export_trip", get(export_trip))
@@ -3268,6 +3313,84 @@ mod tests {
         assert_eq!(
             json2["data"]["description"].as_str().unwrap(),
             "Updated Description"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_correct_engine_status_seeded() {
+        use crate::db::test_helpers::{add_test_trip, add_test_vessel_status};
+        use crate::utilities::EngineStatus;
+        use std::ops::Add;
+        use std::time::{Duration, SystemTime};
+
+        let (app, db) = create_clean_test_app();
+        let now = SystemTime::now();
+        let (trip_id, mid_ts, trip_end) = {
+            let db = db.read().unwrap();
+            let trip_end = now.add(Duration::from_secs(1800));
+            let trip_id = add_test_trip(
+                &db,
+                "API Engine Fix Test".to_string(),
+                now,
+                trip_end,
+                0.0,
+                0.0,
+                0,
+                0,
+                0,
+            )
+            .unwrap();
+            add_test_vessel_status(
+                &db, now, 43.0, 11.0, 5.0, 6.0, None, None, false, EngineStatus::Off, 1.0,
+                900_000, None, None,
+            )
+            .unwrap();
+            let mid = now.add(Duration::from_secs(900));
+            add_test_vessel_status(
+                &db, mid, 43.1, 11.0, 5.0, 6.0, None, None, false, EngineStatus::Off, 1.0,
+                900_000, None, None,
+            )
+            .unwrap();
+            (trip_id, mid, trip_end)
+        };
+
+        let mid_dt = chrono::DateTime::<chrono::Utc>::from(mid_ts);
+        let end_dt = chrono::DateTime::<chrono::Utc>::from(trip_end);
+        let body = json!({
+            "trip_id": trip_id,
+            "start_timestamp": mid_dt.to_rfc3339(),
+            "end_timestamp": end_dt.to_rfc3339(),
+            "engine_on": true
+        })
+        .to_string();
+
+        let (status, json) = call_api(
+            app.clone(),
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/correct_engine_status")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+
+        let (_, trip_json) = call_api(
+            app,
+            axum::http::Request::builder()
+                .uri(format!("/trip?id={}", trip_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert!(
+            (trip_json["data"]["motoring_distance_nm"].as_f64().unwrap() - 1.0).abs() < 0.01
+        );
+        assert!(
+            (trip_json["data"]["sailing_distance_nm"].as_f64().unwrap() - 1.0).abs() < 0.01
         );
     }
 

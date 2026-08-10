@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fix Engine Status - NMEA Router</title>
+    <link rel="icon" type="image/png" href="/images/nmeasail.png">
+    <link rel="stylesheet" href="/shared.css">
+    <link rel="stylesheet" href="/libs/leaflet.min.css" />
+    <script src="/my-icons.js"></script>
+    <script src="/js/shared-theme.js?v=3"></script>
+    <script src="/libs/leaflet.min.js"></script>
+    <script src="/js/map-lat-lon-panel.js"></script>
+
+    <style>
+        .fix-engine-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+        .fix-engine-help {
+            color: var(--text-secondary);
+            font-size: 13px;
+            margin: 8px 0;
+        }
+        #map {
+            height: 520px;
+            border-radius: 8px;
+        }
+        .selection-panel {
+            display: none;
+            margin-top: 16px;
+            padding: 14px 16px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+        }
+        .selection-panel.visible {
+            display: block;
+        }
+        .selection-range {
+            font-size: 14px;
+            color: var(--text-primary);
+            margin-bottom: 10px;
+        }
+        .engine-choice {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .engine-choice-btn {
+            flex: 1;
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            cursor: pointer;
+        }
+        .engine-choice-btn.selected {
+            background: var(--link-color);
+            color: #fff;
+            border-color: var(--link-color);
+        }
+        .selection-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .status-bar {
+            margin-top: 16px;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-size: 14px;
+            display: none;
+        }
+        .status-bar.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        body.dark-theme .status-bar.success {
+            background: #1a3d2b;
+            color: #7bcea0;
+            border-color: #2d6a4f;
+        }
+        .status-bar.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        body.dark-theme .status-bar.error {
+            background: #3d1a1e;
+            color: #f1a8ad;
+            border-color: #6a2d32;
+        }
+    </style>
+</head>
+<body>
+    <div id="headerContainer"></div>
+
+    <div class="level-1-container">
+        <div class="app-card">
+            <div class="fix-engine-header">
+                <div>
+                    <h2 id="tripTitle" style="margin: 0;">Fix Engine Status</h2>
+                    <div id="tripSubtitle" style="color: var(--text-secondary); font-size: 13px;"></div>
+                </div>
+                <a class="app-btn" id="backLink" href="/trip.html">&larr; Back to Trip</a>
+            </div>
+            <div class="fix-engine-help">
+                Click a start point and an end point on the track, choose Engine ON or OFF, then Apply.
+                Grey segments are currently marked engine-on; gold segments are unknown.
+            </div>
+            <div id="map"></div>
+            <div class="selection-panel" id="selectionPanel">
+                <div class="selection-range" id="selectionRange"></div>
+                <div class="engine-choice">
+                    <button class="engine-choice-btn" id="choiceOn" onclick="chooseEngineState(true)">Engine ON</button>
+                    <button class="engine-choice-btn" id="choiceOff" onclick="chooseEngineState(false)">Engine OFF</button>
+                </div>
+                <div class="selection-actions">
+                    <button class="app-btn" id="applyBtn" onclick="applyCorrection()" disabled>Apply</button>
+                    <button class="app-btn" onclick="clearSelection()">Cancel</button>
+                </div>
+            </div>
+            <div id="statusBar" class="status-bar"></div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('trips');
+        initializeTheme();
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const tripId = urlParams.get('id');
+        document.getElementById('backLink').href = tripId ? ('/trip.html?id=' + tripId) : '/trip.html';
+
+        let map = null;
+        let trackData = [];
+        let trackLayers = [];
+        let highlightLayer = null;
+        let markerA = null;
+        let markerB = null;
+        let selectedA = null;
+        let selectedB = null;
+        let pendingEngineOn = null; // true/false once chosen, null before
+
+        function showStatus(message, type) {
+            const bar = document.getElementById('statusBar');
+            bar.textContent = message;
+            bar.className = 'status-bar ' + type;
+            bar.style.display = 'block';
+            if (type === 'success') {
+                setTimeout(() => { bar.style.display = 'none'; }, 4000);
+            }
+        }
+
+        function segmentColor(point) {
+            if (point.engine_on === 1) return '#888888';
+            if (point.engine_on === 2) return '#FFD700';
+            return '#2ecc71';
+        }
+
+        function renderTrack() {
+            // loadTrack() runs before the Leaflet map exists (init() needs the track's
+            // bounds to create it). Draw nothing until then — init() calls renderTrack()
+            // again once the map is ready.
+            if (!map) return;
+
+            trackLayers.forEach(l => l.remove());
+            trackLayers = [];
+            if (trackData.length < 2) return;
+
+            const flush = (color, latlngs) => {
+                if (latlngs.length < 2) return;
+                const line = L.polyline(latlngs, { color, weight: 4, opacity: 1.0 }).addTo(map);
+                trackLayers.push(line);
+            };
+
+            let groupColor = segmentColor(trackData[1]);
+            let groupLatLngs = [
+                [trackData[0].latitude, trackData[0].longitude],
+                [trackData[1].latitude, trackData[1].longitude]
+            ];
+            for (let i = 1; i < trackData.length - 1; i++) {
+                const c = segmentColor(trackData[i + 1]);
+                if (c !== groupColor) {
+                    flush(groupColor, groupLatLngs);
+                    groupColor = c;
+                    groupLatLngs = [[trackData[i].latitude, trackData[i].longitude]];
+                }
+                groupLatLngs.push([trackData[i + 1].latitude, trackData[i + 1].longitude]);
+            }
+            flush(groupColor, groupLatLngs);
+        }
+
+        function findNearestPoint(latlng) {
+            let nearest = null, minD = Infinity;
+            for (const p of trackData) {
+                if (p.latitude == null || p.longitude == null) continue;
+                const d = (p.latitude - latlng.lat) ** 2 + (p.longitude - latlng.lng) ** 2;
+                if (d < minD) { minD = d; nearest = p; }
+            }
+            return nearest;
+        }
+
+        function pointMarker(point, color) {
+            return L.circleMarker([point.latitude, point.longitude], {
+                radius: 8, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1
+            }).addTo(map);
+        }
+
+        function clearSelection() {
+            if (markerA) { markerA.remove(); markerA = null; }
+            if (markerB) { markerB.remove(); markerB = null; }
+            if (highlightLayer) { highlightLayer.remove(); highlightLayer = null; }
+            selectedA = null;
+            selectedB = null;
+            pendingEngineOn = null;
+            document.getElementById('selectionPanel').classList.remove('visible');
+            document.getElementById('choiceOn').classList.remove('selected');
+            document.getElementById('choiceOff').classList.remove('selected');
+            document.getElementById('applyBtn').disabled = true;
+        }
+
+        function showSelectionPanel() {
+            document.getElementById('selectionPanel').classList.add('visible');
+            const count = trackData.filter(
+                p => p.timestamp >= selectedA.timestamp && p.timestamp <= selectedB.timestamp
+            ).length;
+            document.getElementById('selectionRange').textContent =
+                formatDateTime(selectedA.timestamp) + '  →  ' + formatDateTime(selectedB.timestamp) +
+                '  (' + count + ' points)';
+        }
+
+        function onMapClick(e) {
+            const point = findNearestPoint(e.latlng);
+            if (!point) return;
+
+            if (selectedA && selectedB) {
+                clearSelection();
+            }
+
+            if (!selectedA) {
+                selectedA = point;
+                markerA = pointMarker(point, '#3388ff');
+                return;
+            }
+
+            if (point.timestamp === selectedA.timestamp) return;
+
+            if (point.timestamp < selectedA.timestamp) {
+                selectedB = selectedA;
+                markerB = markerA;
+                selectedA = point;
+                markerA = pointMarker(point, '#3388ff');
+            } else {
+                selectedB = point;
+                markerB = pointMarker(point, '#e74c3c');
+            }
+
+            const rangeLatLngs = trackData
+                .filter(p => p.timestamp >= selectedA.timestamp && p.timestamp <= selectedB.timestamp)
+                .map(p => [p.latitude, p.longitude]);
+            highlightLayer = L.polyline(rangeLatLngs, { color: '#3388ff', weight: 6, opacity: 0.5 }).addTo(map);
+
+            showSelectionPanel();
+        }
+
+        function chooseEngineState(isOn) {
+            pendingEngineOn = isOn;
+            document.getElementById('choiceOn').classList.toggle('selected', isOn);
+            document.getElementById('choiceOff').classList.toggle('selected', !isOn);
+            document.getElementById('applyBtn').disabled = false;
+        }
+
+        async function applyCorrection() {
+            if (!selectedA || !selectedB || pendingEngineOn === null) return;
+            const applyBtn = document.getElementById('applyBtn');
+            applyBtn.disabled = true;
+            try {
+                const resp = await fetch('/api/correct_engine_status', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                        trip_id: parseInt(tripId, 10),
+                        start_timestamp: selectedA.timestamp,
+                        end_timestamp: selectedB.timestamp,
+                        engine_on: pendingEngineOn
+                    })
+                });
+                const result = await resp.json();
+                if (result.status !== 'ok') throw new Error(result.error || 'Failed');
+                clearSelection();
+                await loadTrack();
+                showStatus('Engine status updated.', 'success');
+            } catch (err) {
+                showStatus('Failed to update engine status: ' + err.message, 'error');
+                applyBtn.disabled = false;
+            }
+        }
+
+        async function loadTrack() {
+            const resp = await fetch('/api/track?trip_id=' + tripId);
+            const result = await resp.json();
+            if (result.status !== 'ok' || !result.data) {
+                throw new Error(result.error || 'Failed to load track');
+            }
+            trackData = result.data.filter(p => p.latitude != null && p.longitude != null);
+            renderTrack();
+        }
+
+        async function init() {
+            if (!tripId) {
+                showStatus('No trip ID specified.', 'error');
+                return;
+            }
+            try {
+                const tripResp = await fetch('/api/trip?id=' + tripId);
+                const tripResult = await tripResp.json();
+                if (tripResult.status === 'ok' && tripResult.data) {
+                    document.getElementById('tripTitle').textContent =
+                        'Fix Engine Status: ' + tripResult.data.description;
+                    document.getElementById('tripSubtitle').textContent =
+                        formatDate(tripResult.data.start_date) + ' – ' + formatDate(tripResult.data.end_date);
+                }
+
+                await loadTrack();
+                if (trackData.length === 0) {
+                    showStatus('No track points found for this trip.', 'error');
+                    return;
+                }
+
+                let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+                trackData.forEach(p => {
+                    minLat = Math.min(minLat, p.latitude);
+                    maxLat = Math.max(maxLat, p.latitude);
+                    minLng = Math.min(minLng, p.longitude);
+                    maxLng = Math.max(maxLng, p.longitude);
+                });
+                const latPadding = (maxLat - minLat) * 0.1 || 0.01;
+                const lngPadding = (maxLng - minLng) * 0.1 || 0.01;
+
+                map = L.map('map').setView([(minLat + maxLat) / 2, (minLng + maxLng) / 2], 12);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; OpenStreetMap contributors',
+                    maxZoom: 19
+                }).addTo(map);
+                map.fitBounds([
+                    [minLat - latPadding, minLng - lngPadding],
+                    [maxLat + latPadding, maxLng + lngPadding]
+                ]);
+                map.on('click', onMapClick);
+                addLatLonPanel(map, 'bottomleft');
+
+                renderTrack();
+            } catch (err) {
+                showStatus('Failed to load trip track: ' + err.message, 'error');
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
