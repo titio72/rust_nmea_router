@@ -409,6 +409,7 @@ pub async fn get_track(
     ) {
         Ok(mut track) => {
             if let Some(polars) = state.polars() {
+                let t_polar = std::time::Instant::now();
                 for point in &mut track {
                     if let (Some(tws), Some(twa_360), Some(actual)) = (
                         point.average_wind_speed_kn,
@@ -424,6 +425,13 @@ pub async fn get_track(
                         }
                     }
                 }
+                info!(
+                    operation = "get_track",
+                    phase = "polar_enrichment",
+                    rows = track.len(),
+                    elapsed_ms = t_polar.elapsed().as_secs_f64() * 1000.0,
+                    "timing"
+                );
             }
             Ok(Json(ApiResponse::ok(track)))
         }
