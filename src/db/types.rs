@@ -214,19 +214,6 @@ pub struct FastestSegment {
 }
 
 #[derive(Debug, serde::Serialize)]
-pub struct TrackAnalytics {
-    pub max_speed_kn: Option<f64>,
-    pub max_speed_timestamp: Option<String>,
-    pub average_speed_kn: Option<f64>,
-    pub average_speed_sailing_kn: Option<f64>,
-    pub average_speed_motoring_kn: Option<f64>,
-    pub fastest_1nm: Option<FastestSegment>,
-    pub fastest_5nm: Option<FastestSegment>,
-    pub fastest_10nm: Option<FastestSegment>,
-    pub fastest_25nm: Option<FastestSegment>,
-}
-
-#[derive(Debug, serde::Serialize)]
 pub struct MonthlyStatistic {
     pub year: i32,
     pub month: u32,

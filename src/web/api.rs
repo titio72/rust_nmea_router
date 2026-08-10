@@ -24,7 +24,7 @@ use crate::ais_target_cache::{AisTargetCache, AisTargetData};
 use crate::config::Config;
 use crate::db::operations::sync::{SyncManifestPayload, SyncManifestResult, SyncResult};
 use crate::db::{
-    HeatmapData, MultiMetricData, NavAnalysisRow, SpeedDistributionData, TrackAnalytics,
+    HeatmapData, MultiMetricData, NavAnalysisRow, SpeedDistributionData,
     TrackPoint, TripLegsData, TripSummary, VesselDatabase, WebMetricData, WindStatisticsData,
 };
 use crate::web::auth::JwtSecret;
@@ -173,12 +173,6 @@ pub struct TimeRangeQuery {
 pub struct ExportTripQuery {
     pub id: u32,
     pub path: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct TimeRangeRequiredQuery {
-    pub start: String,
-    pub end: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -552,25 +546,6 @@ pub async fn get_trip_legs(
         Ok(legs_data) => Ok(Json(ApiResponse::ok(legs_data))),
         Err(e) => {
             error!(error = %e, "Failed to fetch trip legs");
-            {
-                let bt = Backtrace::force_capture();
-                error!(?bt, "Backtrace for error");
-                Ok(Json(ApiResponse::error(e.to_string())))
-            }
-        }
-    }
-}
-
-pub async fn get_track_analytics(
-    State(state): State<AppState>,
-    Query(params): Query<TimeRangeRequiredQuery>,
-) -> Result<Json<ApiResponse<TrackAnalytics>>, StatusCode> {
-    let start = parse_required_datetime(&params.start)?;
-    let end = parse_required_datetime(&params.end)?;
-    match state.db().fetch_track_analytics(start, end) {
-        Ok(analytics) => Ok(Json(ApiResponse::ok(analytics))),
-        Err(e) => {
-            error!(error = %e, "Failed to fetch track analytics");
             {
                 let bt = Backtrace::force_capture();
                 error!(?bt, "Backtrace for error");
@@ -2003,7 +1978,6 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/speed_distribution", get(get_speed_distribution))
         .route("/wind_statistics", get(get_wind_statistics))
         .route("/trip_legs", get(get_trip_legs))
-        .route("/track_analytics", get(get_track_analytics))
         .route("/monthly_statistics", get(get_monthly_statistics))
         .route("/heatmap", get(get_heatmap))
         .route("/nav_analysis", get(get_nav_analysis))
@@ -2659,48 +2633,6 @@ mod tests {
         assert!(json["status"] == "ok" || json["status"] == "error");
         if json["status"] == "ok" {
             assert!(json["data"].is_array());
-        }
-    }
-
-    #[tokio::test]
-    async fn test_track_analytics() {
-        let app = create_test_app();
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/track_analytics?start=2026-02-02%2006:00:00&end=2026-02-02%2012:00:00")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(json["status"], "ok");
-        assert!(json["data"].is_object());
-
-        // Verify structure
-        let data = &json["data"];
-        assert!(data["max_speed_kn"].is_number() || data["max_speed_kn"].is_null());
-        assert!(data["max_speed_timestamp"].is_string() || data["max_speed_timestamp"].is_null());
-        assert!(data["fastest_1nm"].is_object() || data["fastest_1nm"].is_null());
-        assert!(data["fastest_5nm"].is_object() || data["fastest_5nm"].is_null());
-        assert!(data["fastest_10nm"].is_object() || data["fastest_10nm"].is_null());
-
-        // If fastest segments exist, verify their structure
-        if let Some(segment) = data["fastest_1nm"].as_object() {
-            assert!(segment.contains_key("distance_nm"));
-            assert!(segment.contains_key("average_speed_kn"));
-            assert!(segment.contains_key("duration_ms"));
-            assert!(segment.contains_key("start_timestamp"));
-            assert!(segment.contains_key("end_timestamp"));
         }
     }
 

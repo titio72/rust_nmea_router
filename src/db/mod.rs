@@ -18,7 +18,7 @@ pub use types::{
     is_connection_error,
     // Response types
     TripSummary, TrackPoint, WebMetricData, MultiMetricData, SpeedDistributionData, WindStatisticsData,
-    TripLegsData, HeatmapData, TrackAnalytics, MonthlyStatistics, NavAnalysisRow,
+    TripLegsData, HeatmapData, MonthlyStatistics, NavAnalysisRow,
 };
 
 // Operations are available through the operations module if needed
