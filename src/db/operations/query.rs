@@ -49,6 +49,41 @@ where
     }
 }
 
+/// Reconstruct an `Option<FastestSegment>` from a `trip_legs_cache` row's `{prefix}_*` columns.
+/// All five columns are written together (see `save_trip_legs_to_cache`) so partial-NULL rows
+/// only occur pre-migration; treat any missing field as "no segment" rather than panicking.
+fn fastest_segment_from_row(row: &mysql::Row, prefix: &str) -> Option<FastestSegment> {
+    let distance_nm: Option<f64> = row
+        .get_opt(format!("{prefix}_distance_nm").as_str())
+        .and_then(|v| v.ok());
+    let average_speed_kn: Option<f64> = row
+        .get_opt(format!("{prefix}_avg_speed_kn").as_str())
+        .and_then(|v| v.ok());
+    let duration_ms: Option<u64> = row
+        .get_opt(format!("{prefix}_duration_ms").as_str())
+        .and_then(|v| v.ok());
+    let start_timestamp: Option<String> = row
+        .get_opt(format!("{prefix}_start_timestamp").as_str())
+        .and_then(|v: Result<Option<String>, _>| v.ok())
+        .flatten();
+    let end_timestamp: Option<String> = row
+        .get_opt(format!("{prefix}_end_timestamp").as_str())
+        .and_then(|v: Result<Option<String>, _>| v.ok())
+        .flatten();
+    match (distance_nm, average_speed_kn, duration_ms, start_timestamp, end_timestamp) {
+        (Some(distance_nm), Some(average_speed_kn), Some(duration_ms), Some(start_timestamp), Some(end_timestamp)) => {
+            Some(FastestSegment {
+                distance_nm,
+                average_speed_kn,
+                duration_ms,
+                start_timestamp,
+                end_timestamp,
+            })
+        }
+        _ => None,
+    }
+}
+
 const NAV_SPEED_THRESHOLD_KN: f64 = 4.0;
 
 /// Downsample a chronologically-ordered sequence to at most `max_points` entries by
@@ -237,6 +272,25 @@ fn finalize_leg(
 }
 
 impl VesselDatabase {
+    #[cfg(test)]
+    pub fn save_trip_legs_to_cache_for_test(
+        &self,
+        trip_id: u32,
+        legs: &[crate::db::types::TripLeg],
+    ) -> Result<(), AppError> {
+        let mut conn = self.pool.get_conn()?;
+        self.save_trip_legs_to_cache(&mut conn, trip_id, legs)
+    }
+
+    #[cfg(test)]
+    pub fn get_cached_trip_legs_for_test(
+        &self,
+        trip_id: u32,
+    ) -> Result<Option<crate::db::types::TripLegsData>, AppError> {
+        let mut conn = self.pool.get_conn()?;
+        self.get_cached_trip_legs(&mut conn, trip_id)
+    }
+
     pub fn fetch_trip(&self, trip_id: u32) -> Result<Option<TripSummary>, AppError> {
         let t0 = Instant::now();
         let mut conn = self.pool.get_conn()?;
@@ -1241,6 +1295,28 @@ impl VesselDatabase {
                 nav_distance_nm      DOUBLE          NOT NULL DEFAULT 0,
                 nav_time_ms          BIGINT UNSIGNED NOT NULL DEFAULT 0,
                 nav_detection_method VARCHAR(20)     NULL,
+                max_speed_kn                 DOUBLE          NULL,
+                max_speed_timestamp          VARCHAR(30)     NULL,
+                fastest_1nm_distance_nm      DOUBLE          NULL,
+                fastest_1nm_avg_speed_kn     DOUBLE          NULL,
+                fastest_1nm_duration_ms      BIGINT UNSIGNED NULL,
+                fastest_1nm_start_timestamp  VARCHAR(30)     NULL,
+                fastest_1nm_end_timestamp    VARCHAR(30)     NULL,
+                fastest_5nm_distance_nm      DOUBLE          NULL,
+                fastest_5nm_avg_speed_kn     DOUBLE          NULL,
+                fastest_5nm_duration_ms      BIGINT UNSIGNED NULL,
+                fastest_5nm_start_timestamp  VARCHAR(30)     NULL,
+                fastest_5nm_end_timestamp    VARCHAR(30)     NULL,
+                fastest_10nm_distance_nm     DOUBLE          NULL,
+                fastest_10nm_avg_speed_kn    DOUBLE          NULL,
+                fastest_10nm_duration_ms     BIGINT UNSIGNED NULL,
+                fastest_10nm_start_timestamp VARCHAR(30)     NULL,
+                fastest_10nm_end_timestamp   VARCHAR(30)     NULL,
+                fastest_25nm_distance_nm     DOUBLE          NULL,
+                fastest_25nm_avg_speed_kn    DOUBLE          NULL,
+                fastest_25nm_duration_ms     BIGINT UNSIGNED NULL,
+                fastest_25nm_start_timestamp VARCHAR(30)     NULL,
+                fastest_25nm_end_timestamp   VARCHAR(30)     NULL,
                 PRIMARY KEY (trip_id, leg_number)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         )?;
@@ -1256,6 +1332,28 @@ impl VesselDatabase {
             "ALTER TABLE trip_legs_cache ADD COLUMN nav_distance_nm DOUBLE NOT NULL DEFAULT 0",
             "ALTER TABLE trip_legs_cache ADD COLUMN nav_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0",
             "ALTER TABLE trip_legs_cache ADD COLUMN nav_detection_method VARCHAR(20) NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN max_speed_kn DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN max_speed_timestamp VARCHAR(30) NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_1nm_distance_nm DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_1nm_avg_speed_kn DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_1nm_duration_ms BIGINT UNSIGNED NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_1nm_start_timestamp VARCHAR(30) NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_1nm_end_timestamp VARCHAR(30) NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_5nm_distance_nm DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_5nm_avg_speed_kn DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_5nm_duration_ms BIGINT UNSIGNED NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_5nm_start_timestamp VARCHAR(30) NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_5nm_end_timestamp VARCHAR(30) NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_10nm_distance_nm DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_10nm_avg_speed_kn DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_10nm_duration_ms BIGINT UNSIGNED NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_10nm_start_timestamp VARCHAR(30) NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_10nm_end_timestamp VARCHAR(30) NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_25nm_distance_nm DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_25nm_avg_speed_kn DOUBLE NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_25nm_duration_ms BIGINT UNSIGNED NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_25nm_start_timestamp VARCHAR(30) NULL",
+            "ALTER TABLE trip_legs_cache ADD COLUMN fastest_25nm_end_timestamp VARCHAR(30) NULL",
         ] {
             let _ = conn.query_drop(sql);
         }
@@ -1266,7 +1364,16 @@ impl VesselDatabase {
                          sailing_time_ms, motoring_time_ms,
                          start_lat, start_lon, end_lat, end_lon,
                          nav_start_timestamp, nav_end_timestamp,
-                         nav_distance_nm, nav_time_ms, nav_detection_method
+                         nav_distance_nm, nav_time_ms, nav_detection_method,
+                         max_speed_kn, max_speed_timestamp,
+                         fastest_1nm_distance_nm, fastest_1nm_avg_speed_kn, fastest_1nm_duration_ms,
+                         fastest_1nm_start_timestamp, fastest_1nm_end_timestamp,
+                         fastest_5nm_distance_nm, fastest_5nm_avg_speed_kn, fastest_5nm_duration_ms,
+                         fastest_5nm_start_timestamp, fastest_5nm_end_timestamp,
+                         fastest_10nm_distance_nm, fastest_10nm_avg_speed_kn, fastest_10nm_duration_ms,
+                         fastest_10nm_start_timestamp, fastest_10nm_end_timestamp,
+                         fastest_25nm_distance_nm, fastest_25nm_avg_speed_kn, fastest_25nm_duration_ms,
+                         fastest_25nm_start_timestamp, fastest_25nm_end_timestamp
                   FROM trip_legs_cache
                   WHERE trip_id = :trip_id
                   ORDER BY leg_number",
@@ -1343,12 +1450,15 @@ impl VesselDatabase {
                         .get_opt("nav_detection_method")
                         .and_then(|v: Result<Option<String>, _>| v.ok())
                         .flatten(),
-                    max_speed_kn: None,
-                    max_speed_timestamp: None,
-                    fastest_1nm: None,
-                    fastest_5nm: None,
-                    fastest_10nm: None,
-                    fastest_25nm: None,
+                    max_speed_kn: row.get_opt("max_speed_kn").and_then(|v| v.ok()),
+                    max_speed_timestamp: row
+                        .get_opt("max_speed_timestamp")
+                        .and_then(|v: Result<Option<String>, _>| v.ok())
+                        .flatten(),
+                    fastest_1nm: fastest_segment_from_row(row, "fastest_1nm"),
+                    fastest_5nm: fastest_segment_from_row(row, "fastest_5nm"),
+                    fastest_10nm: fastest_segment_from_row(row, "fastest_10nm"),
+                    fastest_25nm: fastest_segment_from_row(row, "fastest_25nm"),
                 }
             })
             .collect();
@@ -1372,10 +1482,20 @@ impl VesselDatabase {
                  sailing_time_ms, motoring_time_ms,
                  start_lat, start_lon, end_lat, end_lon,
                  nav_start_timestamp, nav_end_timestamp,
-                 nav_distance_nm, nav_time_ms, nav_detection_method)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 nav_distance_nm, nav_time_ms, nav_detection_method,
+                 max_speed_kn, max_speed_timestamp,
+                 fastest_1nm_distance_nm, fastest_1nm_avg_speed_kn, fastest_1nm_duration_ms,
+                 fastest_1nm_start_timestamp, fastest_1nm_end_timestamp,
+                 fastest_5nm_distance_nm, fastest_5nm_avg_speed_kn, fastest_5nm_duration_ms,
+                 fastest_5nm_start_timestamp, fastest_5nm_end_timestamp,
+                 fastest_10nm_distance_nm, fastest_10nm_avg_speed_kn, fastest_10nm_duration_ms,
+                 fastest_10nm_start_timestamp, fastest_10nm_end_timestamp,
+                 fastest_25nm_distance_nm, fastest_25nm_avg_speed_kn, fastest_25nm_duration_ms,
+                 fastest_25nm_start_timestamp, fastest_25nm_end_timestamp)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             legs.iter().map(|leg| -> Vec<mysql::Value> {
-                vec![
+                let mut values: Vec<mysql::Value> = vec![
                     trip_id.into(),
                     leg.leg_number.into(),
                     leg.start_timestamp.as_str().into(),
@@ -1394,7 +1514,26 @@ impl VesselDatabase {
                     leg.nav_distance_nm.into(),
                     leg.nav_time_ms.into(),
                     leg.nav_detection_method.as_deref().into(),
-                ]
+                    leg.max_speed_kn.into(),
+                    leg.max_speed_timestamp.as_deref().into(),
+                ];
+                for segment in [&leg.fastest_1nm, &leg.fastest_5nm, &leg.fastest_10nm, &leg.fastest_25nm] {
+                    match segment {
+                        Some(s) => {
+                            values.push(s.distance_nm.into());
+                            values.push(s.average_speed_kn.into());
+                            values.push(s.duration_ms.into());
+                            values.push(s.start_timestamp.as_str().into());
+                            values.push(s.end_timestamp.as_str().into());
+                        }
+                        None => {
+                            for _ in 0..5 {
+                                values.push(mysql::Value::NULL);
+                            }
+                        }
+                    }
+                }
+                values
             }),
         )?;
         Ok(())
@@ -1417,6 +1556,28 @@ impl VesselDatabase {
                 start_lon            DOUBLE          NULL,
                 end_lat              DOUBLE          NULL,
                 end_lon              DOUBLE          NULL,
+                max_speed_kn                 DOUBLE          NULL,
+                max_speed_timestamp          VARCHAR(30)     NULL,
+                fastest_1nm_distance_nm      DOUBLE          NULL,
+                fastest_1nm_avg_speed_kn     DOUBLE          NULL,
+                fastest_1nm_duration_ms      BIGINT UNSIGNED NULL,
+                fastest_1nm_start_timestamp  VARCHAR(30)     NULL,
+                fastest_1nm_end_timestamp    VARCHAR(30)     NULL,
+                fastest_5nm_distance_nm      DOUBLE          NULL,
+                fastest_5nm_avg_speed_kn     DOUBLE          NULL,
+                fastest_5nm_duration_ms      BIGINT UNSIGNED NULL,
+                fastest_5nm_start_timestamp  VARCHAR(30)     NULL,
+                fastest_5nm_end_timestamp    VARCHAR(30)     NULL,
+                fastest_10nm_distance_nm     DOUBLE          NULL,
+                fastest_10nm_avg_speed_kn    DOUBLE          NULL,
+                fastest_10nm_duration_ms     BIGINT UNSIGNED NULL,
+                fastest_10nm_start_timestamp VARCHAR(30)     NULL,
+                fastest_10nm_end_timestamp   VARCHAR(30)     NULL,
+                fastest_25nm_distance_nm     DOUBLE          NULL,
+                fastest_25nm_avg_speed_kn    DOUBLE          NULL,
+                fastest_25nm_duration_ms     BIGINT UNSIGNED NULL,
+                fastest_25nm_start_timestamp VARCHAR(30)     NULL,
+                fastest_25nm_end_timestamp   VARCHAR(30)     NULL,
                 PRIMARY KEY (trip_id, leg_number)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         )?;
@@ -2463,6 +2624,93 @@ mod tests {
         assert!((seg.average_speed_kn - 6.0).abs() < 0.1);
         // ...but 25nm never fits in a 2.5nm leg.
         assert!(leg.fastest_25nm.is_none());
+    }
+
+    #[test]
+    #[ignore]
+    fn test_trip_legs_cache_round_trips_speed_records() {
+        let db = setup_db();
+        const ONE_HOUR_S: u64 = 3600;
+
+        let start_time = SystemTime::now().add(Duration::from_secs(48 * ONE_HOUR_S));
+        let end_time = start_time.add(Duration::from_secs(2 * ONE_HOUR_S));
+
+        let trip_id = add_test_trip(
+            &db,
+            "Speed Record Cache Test".to_string(),
+            start_time,
+            end_time,
+            10.5,
+            2.3,
+            3600000,
+            600000,
+            0,
+        )
+        .expect("Failed to insert test trip");
+
+        // A steady 6kn run for 2 hours (~12nm) — long enough that fastest_1nm/5nm/10nm all exist,
+        // fastest_25nm does not. add_test_vessel_status's own signature: (db, timestamp, latitude,
+        // longitude, average_speed_kn, max_speed_kn, average_wind_speed_kn, average_wind_angle_deg,
+        // is_moored, engine_on, total_distance_nm, total_time_ms, cog_deg, average_heading_deg).
+        let mut current_time = start_time;
+        let mut lat = 41.0;
+        let interval_s = 30u64;
+        let dist_per_interval_nm = 6.0 * interval_s as f64 / 3600.0; // 0.05nm per 30s at 6kn
+        while current_time < end_time {
+            add_test_vessel_status(
+                &db,
+                current_time,
+                lat,
+                2.0,
+                6.0,
+                6.0,
+                None,
+                None,
+                false,
+                EngineStatus::Off,
+                dist_per_interval_nm,
+                interval_s * 1000,
+                None,
+                None,
+            )
+            .expect("Failed to insert vessel status");
+            current_time = current_time.add(Duration::from_secs(interval_s));
+            lat += dist_per_interval_nm / 60.0; // ~1 nm per 1/60 degree of latitude
+        }
+
+        // fetch_trip_legs always computes fresh regardless of is_closed — only the caching step is
+        // conditional — so this exercises finalize_leg's new fields without depending on wall-clock
+        // trip closure timing.
+        let legs_data = db.fetch_trip_legs(trip_id).expect("fetch_trip_legs failed");
+        assert!(!legs_data.legs.is_empty(), "expected at least one leg");
+        let leg = &legs_data.legs[0];
+        assert!(leg.max_speed_kn.is_some(), "max_speed_kn should be populated");
+        assert!(leg.fastest_1nm.is_some(), "fastest_1nm should be populated for a 12nm run");
+        assert!(leg.fastest_5nm.is_some(), "fastest_5nm should be populated for a 12nm run");
+        assert!(leg.fastest_25nm.is_none(), "fastest_25nm should be absent for a 12nm run");
+
+        let fastest_1nm_before = leg.fastest_1nm.clone();
+        let max_speed_before = leg.max_speed_kn;
+
+        // Exercise the cache write/read path directly (mirrors how get_cached_trip_legs is reached
+        // for closed trips) via the #[cfg(test)] wrappers added below. invalidate_trip_legs_cache
+        // both ensures the table (with all current columns) exists — a fresh DB has never run
+        // get_cached_trip_legs's CREATE/ALTER, which is otherwise the only thing that does so
+        // before save_trip_legs_to_cache — and clears any stale row for this trip_id. The latter
+        // matters because reset_test_db() doesn't truncate trip_legs_cache, and TRUNCATE TABLE
+        // trips resets AUTO_INCREMENT, so a fresh test run can reissue a trip_id a previous run
+        // already cached legs under; without this, save's INSERT IGNORE would silently keep that
+        // stale row and the round-trip assertions below would compare against old data.
+        db.invalidate_trip_legs_cache(trip_id)
+            .expect("invalidate_trip_legs_cache failed (pre-save cleanup)");
+        db.save_trip_legs_to_cache_for_test(trip_id, &legs_data.legs)
+            .expect("save_trip_legs_to_cache failed");
+        let cached = db
+            .get_cached_trip_legs_for_test(trip_id)
+            .expect("get_cached_trip_legs failed")
+            .expect("expected a cached row");
+        assert_eq!(cached.legs[0].fastest_1nm, fastest_1nm_before);
+        assert_eq!(cached.legs[0].max_speed_kn, max_speed_before);
     }
 
     fn setup_db() -> VesselDatabase {
