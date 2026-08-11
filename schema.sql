@@ -143,6 +143,28 @@ CREATE TABLE IF NOT EXISTS trip_legs_cache (
     nav_distance_nm      DOUBLE          NOT NULL DEFAULT 0 COMMENT 'Distance within the nav window',
     nav_time_ms          BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Duration of the nav window in ms',
     nav_detection_method VARCHAR(20)     NULL COMMENT 'engine_transition | speed_fallback',
+    max_speed_kn                 DOUBLE          NULL COMMENT 'Fastest speed recorded while engine off',
+    max_speed_timestamp          VARCHAR(30)     NULL COMMENT 'Timestamp of max_speed_kn',
+    fastest_1nm_distance_nm      DOUBLE          NULL COMMENT 'Distance of fastest >=1nm segment',
+    fastest_1nm_avg_speed_kn     DOUBLE          NULL COMMENT 'Average speed of fastest >=1nm segment',
+    fastest_1nm_duration_ms      BIGINT UNSIGNED NULL COMMENT 'Duration of fastest >=1nm segment',
+    fastest_1nm_start_timestamp  VARCHAR(30)     NULL COMMENT 'Start of fastest >=1nm segment',
+    fastest_1nm_end_timestamp    VARCHAR(30)     NULL COMMENT 'End of fastest >=1nm segment',
+    fastest_5nm_distance_nm      DOUBLE          NULL COMMENT 'Distance of fastest >=5nm segment',
+    fastest_5nm_avg_speed_kn     DOUBLE          NULL COMMENT 'Average speed of fastest >=5nm segment',
+    fastest_5nm_duration_ms      BIGINT UNSIGNED NULL COMMENT 'Duration of fastest >=5nm segment',
+    fastest_5nm_start_timestamp  VARCHAR(30)     NULL COMMENT 'Start of fastest >=5nm segment',
+    fastest_5nm_end_timestamp    VARCHAR(30)     NULL COMMENT 'End of fastest >=5nm segment',
+    fastest_10nm_distance_nm     DOUBLE          NULL COMMENT 'Distance of fastest >=10nm segment',
+    fastest_10nm_avg_speed_kn    DOUBLE          NULL COMMENT 'Average speed of fastest >=10nm segment',
+    fastest_10nm_duration_ms     BIGINT UNSIGNED NULL COMMENT 'Duration of fastest >=10nm segment',
+    fastest_10nm_start_timestamp VARCHAR(30)     NULL COMMENT 'Start of fastest >=10nm segment',
+    fastest_10nm_end_timestamp   VARCHAR(30)     NULL COMMENT 'End of fastest >=10nm segment',
+    fastest_25nm_distance_nm     DOUBLE          NULL COMMENT 'Distance of fastest >=25nm segment',
+    fastest_25nm_avg_speed_kn    DOUBLE          NULL COMMENT 'Average speed of fastest >=25nm segment',
+    fastest_25nm_duration_ms     BIGINT UNSIGNED NULL COMMENT 'Duration of fastest >=25nm segment',
+    fastest_25nm_start_timestamp VARCHAR(30)     NULL COMMENT 'Start of fastest >=25nm segment',
+    fastest_25nm_end_timestamp   VARCHAR(30)     NULL COMMENT 'End of fastest >=25nm segment',
     PRIMARY KEY (trip_id, leg_number)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Cached trip leg analysis; invalidated on trim/delete, recomputed on next fetch';
@@ -158,6 +180,28 @@ COMMENT='Cached trip leg analysis; invalidated on trim/delete, recomputed on nex
 -- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_distance_nm DOUBLE NOT NULL DEFAULT 0;
 -- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0;
 -- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_detection_method VARCHAR(20) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS max_speed_kn DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS max_speed_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_1nm_distance_nm DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_1nm_avg_speed_kn DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_1nm_duration_ms BIGINT UNSIGNED NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_1nm_start_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_1nm_end_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_5nm_distance_nm DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_5nm_avg_speed_kn DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_5nm_duration_ms BIGINT UNSIGNED NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_5nm_start_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_5nm_end_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_10nm_distance_nm DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_10nm_avg_speed_kn DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_10nm_duration_ms BIGINT UNSIGNED NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_10nm_start_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_10nm_end_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_25nm_distance_nm DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_25nm_avg_speed_kn DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_25nm_duration_ms BIGINT UNSIGNED NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_25nm_start_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_25nm_end_timestamp VARCHAR(30) NULL;
 
 CREATE TABLE IF NOT EXISTS trip_legs_nav_overrides (
     trip_id          INT UNSIGNED NOT NULL COMMENT 'Trip ID (mirrors trips.id, no FK)',

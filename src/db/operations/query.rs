@@ -2340,6 +2340,34 @@ mod tests {
     }
 
     #[test]
+    fn fastest_segment_in_leg_never_spans_an_engine_on_gap() {
+        // 500 points at 6kn, 10s interval => ~0.0167nm/point. Engine on for indices
+        // [200, 250) splits the leg into a leading engine-off run [0, 200) (~3.3nm) and a
+        // trailing engine-off run [250, 500) (~4.2nm). fastest_segment_in_leg scopes its
+        // two-pointer search to each engine-off run independently; a regression that ignored
+        // engine_on and scanned the whole leg as one run could stitch together a "segment"
+        // that silently skips over the motoring gap in the middle.
+        let records = synthetic_leg_with_engine_gap(500, 6.0, 200, 250);
+
+        for target_nm in [1.0, 2.0, 3.0] {
+            if let Some(seg) = fastest_segment_in_leg(&records, target_nm) {
+                let start_idx = records
+                    .iter()
+                    .position(|r| r.timestamp == seg.start_timestamp)
+                    .expect("segment start_timestamp must match a record");
+                let end_idx = records
+                    .iter()
+                    .position(|r| r.timestamp == seg.end_timestamp)
+                    .expect("segment end_timestamp must match a record");
+                assert!(
+                    end_idx < 200 || start_idx >= 250,
+                    "segment [{start_idx}, {end_idx}] for target {target_nm}nm straddles the engine-on gap [200, 250)"
+                );
+            }
+        }
+    }
+
+    #[test]
     #[ignore]
     fn test_trip_legs_cache_round_trips_speed_records() {
         let db = setup_db();
@@ -2406,14 +2434,21 @@ mod tests {
         let max_speed_before = leg.max_speed_kn;
 
         // Exercise the cache write/read path directly (mirrors how get_cached_trip_legs is reached
-        // for closed trips) via the #[cfg(test)] wrappers added below. invalidate_trip_legs_cache
-        // both ensures the table (with all current columns) exists — a fresh DB has never run
-        // get_cached_trip_legs's CREATE/ALTER, which is otherwise the only thing that does so
-        // before save_trip_legs_to_cache — and clears any stale row for this trip_id. The latter
-        // matters because reset_test_db() doesn't truncate trip_legs_cache, and TRUNCATE TABLE
-        // trips resets AUTO_INCREMENT, so a fresh test run can reissue a trip_id a previous run
-        // already cached legs under; without this, save's INSERT IGNORE would silently keep that
-        // stale row and the round-trip assertions below would compare against old data.
+        // for closed trips) via the #[cfg(test)] wrappers added below. get_cached_trip_legs_for_test
+        // is called first purely for its CREATE TABLE/ALTER TABLE side effects: invalidate_trip_legs_cache
+        // only runs CREATE TABLE IF NOT EXISTS, which is a no-op when the table already exists in an
+        // older shape, so on a database whose trip_legs_cache predates the fastest-segment columns
+        // (e.g. freshly created from schema.sql without applying the "For existing databases, run:"
+        // ALTER block), get_cached_trip_legs's CREATE+ALTER is the only thing that actually adds
+        // them — it must run at least once before save_trip_legs_to_cache, otherwise the INSERT
+        // below could target a table still missing those columns. invalidate_trip_legs_cache then
+        // clears any stale row for this trip_id — this matters because reset_test_db() doesn't
+        // truncate trip_legs_cache, and TRUNCATE TABLE trips resets AUTO_INCREMENT, so a fresh
+        // test run can reissue a trip_id a previous run already cached legs under; without this,
+        // save's INSERT IGNORE would silently keep that stale row and the round-trip assertions
+        // below would compare against old data.
+        db.get_cached_trip_legs_for_test(trip_id)
+            .expect("get_cached_trip_legs failed (pre-save schema migration)");
         db.invalidate_trip_legs_cache(trip_id)
             .expect("invalidate_trip_legs_cache failed (pre-save cleanup)");
         db.save_trip_legs_to_cache_for_test(trip_id, &legs_data.legs)

@@ -781,8 +781,12 @@
                 });
                 allCharts = {};
 
-                currentAnalyticsData = buildAnalyticsFromLegs(currentTrip, currentLegs, selectedLeg);
-                renderAnalyticsCards(currentAnalyticsData);
+                try {
+                    currentAnalyticsData = buildAnalyticsFromLegs(currentTrip, currentLegs, selectedLeg);
+                    renderAnalyticsCards(currentAnalyticsData);
+                } catch (error) {
+                    console.error('Failed to render analytics cards:', error);
+                }
                 markTime('analytics_rendered_client_side');
 
                 // reset charts
@@ -1091,8 +1095,8 @@
                 html += '<div class="analyticsCard">' +
                     '<div class="analyticsCardTitle">Average Speed</div>' +
                     '<div class="analyticsValue">' + analyticsData.average_speed_kn.toFixed(2) + ' knots</div>' +
-                    '<div class="analyticsDetail">' + analyticsData.average_speed_sailing_kn.toFixed(2) + ' knots <span class="analyticsLabel">Sailing</span></div>' +
-                    '<div class="analyticsDetail">' + analyticsData.average_speed_motoring_kn.toFixed(2) + ' knots <span class="analyticsLabel">Motoring</span></div>' +
+                    '<div class="analyticsDetail">' + (analyticsData.average_speed_sailing_kn ?? 0).toFixed(2) + ' knots <span class="analyticsLabel">Sailing</span></div>' +
+                    '<div class="analyticsDetail">' + (analyticsData.average_speed_motoring_kn ?? 0).toFixed(2) + ' knots <span class="analyticsLabel">Motoring</span></div>' +
                     '</div>';
             }
 
