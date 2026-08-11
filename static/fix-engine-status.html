@@ -134,9 +134,17 @@
 
         const urlParams = new URLSearchParams(window.location.search);
         const tripId = urlParams.get('id');
-        document.getElementById('backLink').href = tripId ? ('/trip.html?id=' + tripId) : '/trip.html';
+        const urlLegParam = urlParams.get('leg');
+        const legNumber = urlLegParam !== null ? parseInt(urlLegParam, 10) : null;
+
+        let backHref = tripId ? ('/trip.html?id=' + tripId) : '/trip.html';
+        if (tripId && legNumber !== null && !isNaN(legNumber)) {
+            backHref += '&leg=' + legNumber;
+        }
+        document.getElementById('backLink').href = backHref;
 
         let map = null;
+        let legRange = null; // { start_timestamp, end_timestamp } when scoped to a leg
         let trackData = [];
         let trackLayers = [];
         let highlightLayer = null;
@@ -303,7 +311,12 @@
         }
 
         async function loadTrack() {
-            const resp = await fetch('/api/track?trip_id=' + tripId);
+            let url = '/api/track?trip_id=' + tripId;
+            if (legRange) {
+                url += '&start=' + encodeURIComponent(legRange.start_timestamp) +
+                    '&end=' + encodeURIComponent(legRange.end_timestamp);
+            }
+            const resp = await fetch(url);
             const result = await resp.json();
             if (result.status !== 'ok' || !result.data) {
                 throw new Error(result.error || 'Failed to load track');
@@ -320,12 +333,27 @@
             try {
                 const tripResp = await fetch('/api/trip?id=' + tripId);
                 const tripResult = await tripResp.json();
+                let tripDescription = tripId;
                 if (tripResult.status === 'ok' && tripResult.data) {
-                    document.getElementById('tripTitle').textContent =
-                        'Fix Engine Status: ' + tripResult.data.description;
+                    tripDescription = tripResult.data.description;
                     document.getElementById('tripSubtitle').textContent =
                         formatDate(tripResult.data.start_date) + ' – ' + formatDate(tripResult.data.end_date);
                 }
+
+                if (legNumber !== null && !isNaN(legNumber)) {
+                    const legsResp = await fetch('/api/trip_legs?id=' + tripId);
+                    const legsResult = await legsResp.json();
+                    if (legsResult.status === 'ok' && legsResult.data) {
+                        const leg = legsResult.data.legs.find(l => l.leg_number === legNumber);
+                        if (leg) {
+                            legRange = { start_timestamp: leg.start_timestamp, end_timestamp: leg.end_timestamp };
+                        }
+                    }
+                }
+
+                document.getElementById('tripTitle').textContent = legRange
+                    ? 'Fix Engine Status: ' + tripDescription + ' — Leg ' + legNumber
+                    : 'Fix Engine Status: ' + tripDescription;
 
                 await loadTrack();
                 if (trackData.length === 0) {

@@ -570,12 +570,13 @@
             try {
                 const legsPromise = fetch('/api/trip_legs?id=' + tripId);
 
-                // Load trip summary and full track in parallel; use max_points=600 for
+                // Load trip summary and full track in parallel; use max_points=1800 for
                 // the full-trip view — the map polyline does not need 1-second resolution
                 const [tripResponse, legsResponse, trackResponse] = await Promise.all([
                     fetch('/api/trip?id=' + tripId),
                     legsPromise,
-                    fetch('/api/track?trip_id=' + tripId + '&max_points=600', { priority: 'high' })
+//                    fetch('/api/track?trip_id=' + tripId + '&max_points=1800', { priority: 'high' })
+                    fetch('/api/track?trip_id=' + tripId, { priority: 'high' })
                 ]);
 
                 if (!tripResponse.ok) {
@@ -652,7 +653,11 @@
         }
 
         function goToFixEngineStatus() {
-            window.location.href = '/fix-engine-status.html?id=' + tripId;
+            let url = '/fix-engine-status.html?id=' + tripId;
+            if (selectedLeg !== null) {
+                url += '&leg=' + selectedLeg;
+            }
+            window.location.href = url;
         }
 
         function updateLegSelector(initialLegNumber) {

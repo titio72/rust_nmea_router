@@ -637,10 +637,14 @@ impl VesselDatabase {
                         cog_deg, average_heading_deg
                  FROM vessel_status
                  WHERE timestamp BETWEEN
-                     (SELECT start_timestamp FROM trips WHERE id = :trip_id)
-                     AND COALESCE((SELECT end_timestamp FROM trips WHERE id = :trip_id), NOW())
+                     COALESCE(:start, (SELECT start_timestamp FROM trips WHERE id = :trip_id))
+                     AND COALESCE(:end, (SELECT end_timestamp FROM trips WHERE id = :trip_id), NOW())
                  ORDER BY timestamp",
-                mysql::params! { "trip_id" => trip_id },
+                mysql::params! {
+                    "trip_id" => trip_id,
+                    "start" => start.map(|s| s.format("%Y-%m-%d %H:%M:%S").to_string()),
+                    "end" => end.map(|s| s.format("%Y-%m-%d %H:%M:%S").to_string()),
+                },
             )?
         } else if let (Some(start), Some(end)) = (start, end) {
             conn.exec(
