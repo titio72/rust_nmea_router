@@ -13,6 +13,10 @@
     <script src="/js/map-lat-lon-panel.js"></script>
 
     <style>
+        .fix-engine-topbar {
+            max-width: 1500px;
+            margin: 0 auto 12px auto;
+        }
         .fix-engine-header {
             display: flex;
             justify-content: space-between;
@@ -24,23 +28,126 @@
             font-size: 13px;
             margin: 8px 0;
         }
+        .fix-engine-filter-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin: 0 0 8px 0;
+        }
+        .fix-engine-filter-bar label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+        .fix-engine-filter-bar input[type="datetime-local"] {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 4px 8px;
+            color: var(--text-primary);
+            font-size: 13px;
+        }
+        #mapTableWrap {
+            display: flex;
+            gap: 16px;
+            width: 100%;
+            min-height: 380px;
+        }
         #map {
-            height: 520px;
+            flex: 1;
             border-radius: 8px;
+        }
+        #statusPanel {
+            width: 340px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-secondary);
+            overflow: hidden;
+            position: relative;
+        }
+        .status-panel-resize-handle {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: -4px;
+            width: 8px;
+            cursor: ew-resize;
+            z-index: 20;
+            border-radius: 4px;
+        }
+        .status-panel-resize-handle:hover, .status-panel-resize-handle.dragging {
+            background: color-mix(in srgb, var(--link-color) 40%, transparent);
+        }
+        #statusTableWrap {
+            flex: 1;
+            overflow-y: auto;
+        }
+        .status-table-placeholder {
+            padding: 16px 14px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        #statusTable {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            display: none;
+        }
+        #statusTable th {
+            position: sticky;
+            top: 0;
+            background: var(--bg-secondary);
+            text-align: left;
+            padding: 6px 8px;
+            color: var(--text-secondary);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        #statusTable td {
+            padding: 5px 8px;
+            color: var(--text-primary);
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        #statusTable tbody tr:hover {
+            background: var(--bg-hover);
+        }
+        #statusTable tbody tr.row-selected-a {
+            background: color-mix(in srgb, #3388ff 25%, transparent);
+        }
+        #statusTable tbody tr.row-selected-b {
+            background: color-mix(in srgb, #e74c3c 25%, transparent);
+        }
+        .engine-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 5px;
         }
         .selection-panel {
             display: none;
-            margin-top: 16px;
-            padding: 14px 16px;
-            border-radius: 8px;
+            margin: 12px;
+            padding: 12px 14px;
+            border-radius: 6px;
             border: 1px solid var(--border-color);
-            background: var(--bg-secondary);
+            background: var(--bg-tertiary);
+            flex-shrink: 0;
         }
         .selection-panel.visible {
             display: block;
         }
         .selection-range {
-            font-size: 14px;
+            font-size: 13px;
             color: var(--text-primary);
             margin-bottom: 10px;
         }
@@ -51,28 +158,30 @@
         }
         .engine-choice-btn {
             flex: 1;
-            padding: 8px 12px;
+            padding: 8px 10px;
             border-radius: 6px;
             border: 1px solid var(--border-color);
             background: var(--bg-tertiary);
             color: var(--text-primary);
             cursor: pointer;
+            font-size: 13px;
         }
         .engine-choice-btn.selected {
             background: var(--link-color);
             color: #fff;
             border-color: var(--link-color);
         }
-        .selection-actions {
-            display: flex;
-            gap: 8px;
+        .engine-choice-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
         }
         .status-bar {
-            margin-top: 16px;
+            margin: 0 12px 12px 12px;
             padding: 10px 14px;
             border-radius: 6px;
-            font-size: 14px;
+            font-size: 13px;
             display: none;
+            flex-shrink: 0;
         }
         .status-bar.success {
             background: #d4edda;
@@ -99,29 +208,48 @@
 <body>
     <div id="headerContainer"></div>
 
-    <div class="level-1-container">
-        <div class="app-card">
-            <div class="fix-engine-header">
-                <div>
-                    <h2 id="tripTitle" style="margin: 0;">Fix Engine Status</h2>
-                    <div id="tripSubtitle" style="color: var(--text-secondary); font-size: 13px;"></div>
+    <div class="fix-engine-topbar">
+        <div class="fix-engine-header">
+            <div>
+                <h2 id="tripTitle" style="margin: 0;">Fix Engine Status</h2>
+                <div id="tripSubtitle" style="color: var(--text-secondary); font-size: 13px;"></div>
+            </div>
+            <a class="theme-toggle" id="backLink" href="/trip.html">&larr; Back to Trip</a>
+        </div>
+        <div class="fix-engine-help">
+            Click a start point and an end point on the track, choose Engine ON or OFF, then Apply.
+            Grey segments are currently marked engine-on; gold segments are unknown. The panel on the
+            right shows vessel status data near your first click — the second point can be picked
+            there too.
+        </div>
+        <div class="fix-engine-filter-bar">
+            <label>From <input type="datetime-local" id="filterFrom" step="1"></label>
+            <label>To <input type="datetime-local" id="filterTo" step="1"></label>
+            <button class="theme-toggle" onclick="applyTimestampFilter()">Apply Filter</button>
+            <button class="theme-toggle" onclick="resetTimestampFilter()">Reset</button>
+        </div>
+    </div>
+
+    <div id="mapTableWrap">
+        <div id="map"></div>
+        <div id="statusPanel">
+            <div id="statusPanelResizeHandle" class="status-panel-resize-handle" title="Drag to resize"></div>
+            <div id="statusTableWrap">
+                <div id="statusTablePlaceholder" class="status-table-placeholder">
+                    Click a point on the track to see nearby vessel status data.
                 </div>
-                <a class="app-btn" id="backLink" href="/trip.html">&larr; Back to Trip</a>
+                <table id="statusTable">
+                    <thead>
+                        <tr><th>Time</th><th>Lat</th><th>Lon</th><th>Spd (kn)</th><th>Engine</th><th>Status</th></tr>
+                    </thead>
+                    <tbody id="statusTableBody"></tbody>
+                </table>
             </div>
-            <div class="fix-engine-help">
-                Click a start point and an end point on the track, choose Engine ON or OFF, then Apply.
-                Grey segments are currently marked engine-on; gold segments are unknown.
-            </div>
-            <div id="map"></div>
             <div class="selection-panel" id="selectionPanel">
                 <div class="selection-range" id="selectionRange"></div>
                 <div class="engine-choice">
                     <button class="engine-choice-btn" id="choiceOn" onclick="chooseEngineState(true)">Engine ON</button>
                     <button class="engine-choice-btn" id="choiceOff" onclick="chooseEngineState(false)">Engine OFF</button>
-                </div>
-                <div class="selection-actions">
-                    <button class="app-btn" id="applyBtn" onclick="applyCorrection()" disabled>Apply</button>
-                    <button class="app-btn" onclick="clearSelection()">Cancel</button>
                 </div>
             </div>
             <div id="statusBar" class="status-bar"></div>
@@ -145,6 +273,7 @@
 
         let map = null;
         let legRange = null; // { start_timestamp, end_timestamp } when scoped to a leg
+        let fullTrackData = []; // unfiltered track as loaded (respecting legRange); trackData is filtered from this
         let trackData = [];
         let trackLayers = [];
         let highlightLayer = null;
@@ -152,7 +281,71 @@
         let markerB = null;
         let selectedA = null;
         let selectedB = null;
-        let pendingEngineOn = null; // true/false once chosen, null before
+
+        // Sizes #mapTableWrap to fill the viewport below the topbar. Leaflet needs the
+        // container to have a real pixel height before L.map() runs, so this is called
+        // synchronously before map creation in init(), then again on resize.
+        function sizeMapWrap() {
+            const wrap = document.getElementById('mapTableWrap');
+            if (!wrap) return;
+            const top = wrap.getBoundingClientRect().top;
+            const height = Math.max(window.innerHeight - top - 20, 380);
+            wrap.style.height = height + 'px';
+            if (map) map.invalidateSize();
+        }
+        window.addEventListener('resize', sizeMapWrap);
+
+        // Lets the user drag #statusPanel's left edge to widen/narrow it, mirroring
+        // plan.html's Route Summary resize handle. Width persists across reloads.
+        const STATUS_PANEL_MIN_WIDTH = 260;
+        const STATUS_PANEL_WIDTH_KEY = 'fixEngineStatusPanelWidth';
+
+        function setupStatusPanelResize() {
+            const panel = document.getElementById('statusPanel');
+            const handle = document.getElementById('statusPanelResizeHandle');
+            if (!panel || !handle) return;
+
+            let startX = 0;
+            let startWidth = 0;
+
+            function maxWidth() {
+                const wrap = document.getElementById('mapTableWrap');
+                return Math.max(wrap.offsetWidth - 16 - 300, STATUS_PANEL_MIN_WIDTH);
+            }
+
+            function onMouseMove(e) {
+                const delta = startX - e.clientX;
+                const width = Math.min(Math.max(startWidth + delta, STATUS_PANEL_MIN_WIDTH), maxWidth());
+                panel.style.width = width + 'px';
+                if (map) map.invalidateSize();
+            }
+
+            function onMouseUp() {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+                handle.classList.remove('dragging');
+                localStorage.setItem(STATUS_PANEL_WIDTH_KEY, parseInt(panel.style.width, 10));
+            }
+
+            handle.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                startX = e.clientX;
+                startWidth = panel.offsetWidth;
+                handle.classList.add('dragging');
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
+        }
+
+        function restoreStatusPanelWidth() {
+            const saved = parseInt(localStorage.getItem(STATUS_PANEL_WIDTH_KEY), 10);
+            if (saved) {
+                document.getElementById('statusPanel').style.width = saved + 'px';
+            }
+        }
+
+        restoreStatusPanelWidth();
+        setupStatusPanelResize();
 
         function showStatus(message, type) {
             const bar = document.getElementById('statusBar');
@@ -168,6 +361,66 @@
             if (point.engine_on === 1) return '#888888';
             if (point.engine_on === 2) return '#FFD700';
             return '#2ecc71';
+        }
+
+        const STATUS_WINDOW_MS = 60 * 60 * 1000;
+
+        function computeStatusWindow(centerTimestamp) {
+            const centerMs = new Date(centerTimestamp).getTime();
+            return trackData.filter(p => {
+                const ms = new Date(p.timestamp).getTime();
+                return ms >= centerMs - STATUS_WINDOW_MS && ms <= centerMs + STATUS_WINDOW_MS;
+            });
+        }
+
+        function engineLabel(engineOn) {
+            if (engineOn === 1) return 'On';
+            if (engineOn === 2) return 'Unknown';
+            return 'Off';
+        }
+
+        function formatRowTime(ts) {
+            try {
+                return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            } catch (e) {
+                return ts;
+            }
+        }
+
+        function renderStatusTable(centerPoint) {
+            const windowPoints = computeStatusWindow(centerPoint.timestamp);
+            const tbody = document.getElementById('statusTableBody');
+            tbody.innerHTML = '';
+            windowPoints.forEach(p => {
+                const tr = document.createElement('tr');
+                tr.dataset.timestamp = p.timestamp;
+                tr.innerHTML =
+                    '<td>' + formatRowTime(p.timestamp) + '</td>' +
+                    '<td>' + (p.latitude != null ? p.latitude.toFixed(5) : '—') + '</td>' +
+                    '<td>' + (p.longitude != null ? p.longitude.toFixed(5) : '—') + '</td>' +
+                    '<td>' + (p.avg_speed_kn != null ? p.avg_speed_kn.toFixed(1) : '—') + '</td>' +
+                    '<td><span class="engine-dot" style="background:' + segmentColor(p) + ';"></span>' + engineLabel(p.engine_on) + '</td>' +
+                    '<td>' + (p.moored ? 'Moored' : 'Underway') + '</td>';
+                tr.addEventListener('click', () => selectPoint(p));
+                tbody.appendChild(tr);
+            });
+            document.getElementById('statusTablePlaceholder').style.display = 'none';
+            document.getElementById('statusTable').style.display = 'table';
+            highlightTableRows();
+        }
+
+        function clearStatusTable() {
+            document.getElementById('statusTableBody').innerHTML = '';
+            document.getElementById('statusTable').style.display = 'none';
+            document.getElementById('statusTablePlaceholder').style.display = '';
+        }
+
+        function highlightTableRows() {
+            document.querySelectorAll('#statusTableBody tr').forEach(row => {
+                row.classList.remove('row-selected-a', 'row-selected-b');
+                if (selectedA && row.dataset.timestamp === selectedA.timestamp) row.classList.add('row-selected-a');
+                if (selectedB && row.dataset.timestamp === selectedB.timestamp) row.classList.add('row-selected-b');
+            });
         }
 
         function renderTrack() {
@@ -225,11 +478,10 @@
             if (highlightLayer) { highlightLayer.remove(); highlightLayer = null; }
             selectedA = null;
             selectedB = null;
-            pendingEngineOn = null;
             document.getElementById('selectionPanel').classList.remove('visible');
             document.getElementById('choiceOn').classList.remove('selected');
             document.getElementById('choiceOff').classList.remove('selected');
-            document.getElementById('applyBtn').disabled = true;
+            clearStatusTable();
         }
 
         function showSelectionPanel() {
@@ -242,8 +494,7 @@
                 '  (' + count + ' points)';
         }
 
-        function onMapClick(e) {
-            const point = findNearestPoint(e.latlng);
+        function selectPoint(point) {
             if (!point) return;
 
             if (selectedA && selectedB) {
@@ -253,6 +504,7 @@
             if (!selectedA) {
                 selectedA = point;
                 markerA = pointMarker(point, '#3388ff');
+                renderStatusTable(point);
                 return;
             }
 
@@ -260,6 +512,7 @@
 
             if (point.timestamp < selectedA.timestamp) {
                 selectedB = selectedA;
+                markerA.setStyle({ fillColor: '#e74c3c' });
                 markerB = markerA;
                 selectedA = point;
                 markerA = pointMarker(point, '#3388ff');
@@ -274,19 +527,21 @@
             highlightLayer = L.polyline(rangeLatLngs, { color: '#3388ff', weight: 6, opacity: 0.5 }).addTo(map);
 
             showSelectionPanel();
+            highlightTableRows();
         }
 
-        function chooseEngineState(isOn) {
-            pendingEngineOn = isOn;
-            document.getElementById('choiceOn').classList.toggle('selected', isOn);
-            document.getElementById('choiceOff').classList.toggle('selected', !isOn);
-            document.getElementById('applyBtn').disabled = false;
+        function onMapClick(e) {
+            selectPoint(findNearestPoint(e.latlng));
         }
 
-        async function applyCorrection() {
-            if (!selectedA || !selectedB || pendingEngineOn === null) return;
-            const applyBtn = document.getElementById('applyBtn');
-            applyBtn.disabled = true;
+        async function chooseEngineState(isOn) {
+            if (!selectedA || !selectedB) return;
+            const choiceOn = document.getElementById('choiceOn');
+            const choiceOff = document.getElementById('choiceOff');
+            choiceOn.classList.toggle('selected', isOn);
+            choiceOff.classList.toggle('selected', !isOn);
+            choiceOn.disabled = true;
+            choiceOff.disabled = true;
             try {
                 const resp = await fetch('/api/correct_engine_status', {
                     method: 'POST',
@@ -296,7 +551,7 @@
                         trip_id: parseInt(tripId, 10),
                         start_timestamp: selectedA.timestamp,
                         end_timestamp: selectedB.timestamp,
-                        engine_on: pendingEngineOn
+                        engine_on: isOn
                     })
                 });
                 const result = await resp.json();
@@ -306,7 +561,9 @@
                 showStatus('Engine status updated.', 'success');
             } catch (err) {
                 showStatus('Failed to update engine status: ' + err.message, 'error');
-                applyBtn.disabled = false;
+            } finally {
+                choiceOn.disabled = false;
+                choiceOff.disabled = false;
             }
         }
 
@@ -321,8 +578,84 @@
             if (result.status !== 'ok' || !result.data) {
                 throw new Error(result.error || 'Failed to load track');
             }
-            trackData = result.data.filter(p => p.latitude != null && p.longitude != null);
+            fullTrackData = result.data.filter(p => p.latitude != null && p.longitude != null);
+            trackData = fullTrackData;
             renderTrack();
+        }
+
+        function computeBounds(data) {
+            if (!data.length) return null;
+            let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+            data.forEach(p => {
+                minLat = Math.min(minLat, p.latitude);
+                maxLat = Math.max(maxLat, p.latitude);
+                minLng = Math.min(minLng, p.longitude);
+                maxLng = Math.max(maxLng, p.longitude);
+            });
+            return { minLat, maxLat, minLng, maxLng };
+        }
+
+        function fitMapToTrack(data) {
+            if (!map) return;
+            const bounds = computeBounds(data);
+            if (!bounds) return;
+            const latPadding = (bounds.maxLat - bounds.minLat) * 0.1 || 0.01;
+            const lngPadding = (bounds.maxLng - bounds.minLng) * 0.1 || 0.01;
+            map.fitBounds([
+                [bounds.minLat - latPadding, bounds.minLng - lngPadding],
+                [bounds.maxLat + latPadding, bounds.maxLng + lngPadding]
+            ]);
+        }
+
+        // trackData timestamps and datetime-local input values are both parsed by
+        // `new Date()` as local time (see computeStatusWindow), so filtering compares
+        // them the same way rather than treating either side as UTC.
+        function toDatetimeLocalValue(ts) {
+            const d = new Date(ts);
+            const pad = n => String(n).padStart(2, '0');
+            return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+                'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+        }
+
+        function populateFilterInputs(data) {
+            if (!data.length) return;
+            document.getElementById('filterFrom').value = toDatetimeLocalValue(data[0].timestamp);
+            document.getElementById('filterTo').value = toDatetimeLocalValue(data[data.length - 1].timestamp);
+        }
+
+        function applyTimestampFilter() {
+            const fromVal = document.getElementById('filterFrom').value;
+            const toVal = document.getElementById('filterTo').value;
+            if (!fromVal || !toVal) {
+                showStatus('Enter both a from and to timestamp.', 'error');
+                return;
+            }
+            const fromMs = new Date(fromVal).getTime();
+            const toMs = new Date(toVal).getTime();
+            if (fromMs > toMs) {
+                showStatus('The "from" timestamp must be before the "to" timestamp.', 'error');
+                return;
+            }
+            const filtered = fullTrackData.filter(p => {
+                const ms = new Date(p.timestamp).getTime();
+                return ms >= fromMs && ms <= toMs;
+            });
+            if (filtered.length === 0) {
+                showStatus('No track points found in that range.', 'error');
+                return;
+            }
+            trackData = filtered;
+            clearSelection();
+            renderTrack();
+            fitMapToTrack(trackData);
+        }
+
+        function resetTimestampFilter() {
+            trackData = fullTrackData;
+            populateFilterInputs(fullTrackData);
+            clearSelection();
+            renderTrack();
+            fitMapToTrack(trackData);
         }
 
         async function init() {
@@ -361,27 +694,18 @@
                     return;
                 }
 
-                let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
-                trackData.forEach(p => {
-                    minLat = Math.min(minLat, p.latitude);
-                    maxLat = Math.max(maxLat, p.latitude);
-                    minLng = Math.min(minLng, p.longitude);
-                    maxLng = Math.max(maxLng, p.longitude);
-                });
-                const latPadding = (maxLat - minLat) * 0.1 || 0.01;
-                const lngPadding = (maxLng - minLng) * 0.1 || 0.01;
+                const bounds = computeBounds(trackData);
 
-                map = L.map('map').setView([(minLat + maxLat) / 2, (minLng + maxLng) / 2], 12);
+                sizeMapWrap();
+                map = L.map('map').setView([(bounds.minLat + bounds.maxLat) / 2, (bounds.minLng + bounds.maxLng) / 2], 12);
                 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                     attribution: '&copy; OpenStreetMap contributors',
                     maxZoom: 19
                 }).addTo(map);
-                map.fitBounds([
-                    [minLat - latPadding, minLng - lngPadding],
-                    [maxLat + latPadding, maxLng + lngPadding]
-                ]);
+                fitMapToTrack(trackData);
                 map.on('click', onMapClick);
                 addLatLonPanel(map, 'bottomleft');
+                populateFilterInputs(trackData);
 
                 renderTrack();
             } catch (err) {

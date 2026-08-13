@@ -136,12 +136,18 @@ DELETE FROM environmental_data
   AND (timestamp < '<new_start>' OR timestamp > '<new_end>');
 
 -- 8. Recompute trip aggregates from remaining rows
+-- is_moored takes priority: a row with is_moored=1 counts as moored even if
+-- engine_on=1 (e.g. engine idling at anchor). engine_on only splits the
+-- non-moored rows into sailing vs motoring. This mirrors the app's own
+-- recalculate_and_update_trip (src/db/operations/gap_fill.rs) — do not use
+-- `engine_on = 1` alone for the motored bucket, it double-counts rows that
+-- are both moored and engine-on.
 SELECT
-  SUM(CASE WHEN engine_on = 0 AND is_moored = 0 THEN total_distance_nm ELSE 0 END) AS sailed,
-  SUM(CASE WHEN engine_on = 1                   THEN total_distance_nm ELSE 0 END) AS motored,
-  SUM(CASE WHEN engine_on = 0 AND is_moored = 0 THEN total_time_ms ELSE 0 END) AS time_sailing,
-  SUM(CASE WHEN engine_on = 1                   THEN total_time_ms ELSE 0 END) AS time_motoring,
-  SUM(CASE WHEN is_moored = 1                   THEN total_time_ms ELSE 0 END) AS time_moored
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 THEN total_distance_nm ELSE 0 END) AS sailed,
+  SUM(CASE WHEN is_moored = 0 AND engine_on = 1  THEN total_distance_nm ELSE 0 END) AS motored,
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 THEN total_time_ms ELSE 0 END) AS time_sailing,
+  SUM(CASE WHEN is_moored = 0 AND engine_on = 1  THEN total_time_ms ELSE 0 END) AS time_motoring,
+  SUM(CASE WHEN is_moored = 1                    THEN total_time_ms ELSE 0 END) AS time_moored
 FROM vessel_status WHERE timestamp BETWEEN '<new_start>' AND '<new_end>';
 
 -- 9. Update the trip record
