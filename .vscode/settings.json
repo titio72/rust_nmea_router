@@ -3,5 +3,10 @@
         "pkill": true,
         "cargo test": true,
         "awk": true
-    }
+    },
+    "cSpell.words": [
+        "Itaca",
+        "NMEA",
+        "signalk"
+    ]
 }

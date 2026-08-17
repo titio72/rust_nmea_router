@@ -100,6 +100,18 @@ to vessel_status and environmental_data manually.
 4. Verify with a follow-up SELECT
 5. For large deletes (>1000 rows): suggest mysqldump backup first
 
+### Remote sync scope
+`trips.updated_at` is bumped automatically by MariaDB (`ON UPDATE CURRENT_TIMESTAMP`)
+on any `UPDATE trips ...`, and the boat's push sync uses it to decide which trips to
+re-send to the remote viewer. Any protocol below that ends with an `UPDATE trips SET
+...` (totals recompute, description, uuid backfill) is automatically re-queued for
+the next sync push — no extra step needed.
+
+Edits that touch only `vessel_status` / `environmental_data` and never update the
+trips row itself (e.g. NULLing an anomalous sensor reading) do **not** trigger
+re-sync. If a correction needs to reach the remote viewer, follow it with a totals
+recompute against the trip (see Trim a Trip, steps 8–9) so the trips row is touched.
+
 ---
 
 ### Trim a Trip

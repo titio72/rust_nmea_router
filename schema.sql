@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS trips (
     total_time_motoring BIGINT NOT NULL DEFAULT 0 COMMENT 'Time spent motoring in milliseconds',
     total_time_moored BIGINT NOT NULL DEFAULT 0 COMMENT 'Time spent moored in milliseconds',
     uuid CHAR(36) NULL COMMENT 'UUID v4 for portable trip identification (used for import deduplication)',
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'Bumped by MariaDB on any UPDATE to this row; drives remote sync change-detection',
     INDEX idx_end_timestamp (end_timestamp),
     INDEX idx_start_timestamp (start_timestamp),
     INDEX idx_trips_time_range (start_timestamp, end_timestamp),
@@ -101,6 +102,8 @@ COMMENT='Stores vessel trips with sailing vs motoring breakdown';
 -- ALTER TABLE trips ADD COLUMN uuid CHAR(36) NULL COMMENT 'UUID v4 for portable trip identification';
 -- ALTER TABLE trips ADD UNIQUE INDEX idx_trips_uuid (uuid);
 -- ALTER TABLE trips ADD INDEX idx_trips_time_range (start_timestamp, end_timestamp);
+-- ALTER TABLE trips ADD COLUMN updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'Bumped by MariaDB on any UPDATE to this row; drives remote sync change-detection';
+-- UPDATE trips SET updated_at = end_timestamp; -- backfill so only edits made after this migration trigger a re-sync
 
 -- ============================================================================
 -- HEATMAP CACHE TABLE

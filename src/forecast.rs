@@ -165,11 +165,14 @@ pub(crate) fn build_marine_bbox_url(lat_min: f64, lat_max: f64, lon_min: f64, lo
 }
 
 pub(crate) fn build_arome_bbox_url(lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) -> String {
-    // AROME France HD (~1.5 km via Open-Meteo) — short-term, wind only, no waves.
+    // AROME France (~2.5 km via Open-Meteo) — short-term, wind only, no waves.
+    // The 1.5 km "_hd" variant hits Open-Meteo's 1000-location cap on our configured
+    // forecast areas (a 0.7°×0.5° box already yields ~1900 HD grid points); this 2.5 km
+    // variant covers the same area in ~600 points, comfortably under the cap.
     format!(
         "https://api.open-meteo.com/v1/forecast\
          ?bounding_box={lat_min},{lon_min},{lat_max},{lon_max}\
-         &models=meteofrance_arome_france_hd\
+         &models=meteofrance_arome_france\
          &hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,cape\
          &wind_speed_unit=kn&forecast_days=2&timezone=UTC",
     )
@@ -684,7 +687,8 @@ mod tests {
     fn test_arome_bbox_url_contains_expected_params() {
         let url = build_arome_bbox_url(43.0, 43.5, 8.0, 8.5);
         assert!(url.contains("bounding_box=43,8,43.5,8.5"), "url: {}", url);
-        assert!(url.contains("models=meteofrance_arome_france_hd"), "url: {}", url);
+        assert!(url.contains("models=meteofrance_arome_france"), "url: {}", url);
+        assert!(!url.contains("models=meteofrance_arome_france_hd"), "url: {}", url);
         assert!(url.contains("forecast_days=2"), "url: {}", url);
         assert!(url.contains("wind_speed_unit=kn"), "url: {}", url);
     }

@@ -167,10 +167,13 @@ impl VesselDatabase {
         Ok(SyncStatus { last_synced_at })
     }
 
-    /// Returns UUIDs of trips whose end_timestamp is after `since` (RFC3339).
-    /// A trip's end_timestamp is bumped on every status report while it is
-    /// still open, so this catches the live trip even though its UUID was
-    /// already synced in a previous push.
+    /// Returns UUIDs of trips whose row was written to after `since` (RFC3339).
+    /// Keyed on `updated_at`, which MariaDB bumps automatically (ON UPDATE
+    /// CURRENT_TIMESTAMP) on any UPDATE to the trips row — status reports on
+    /// a still-open trip (which advance end_timestamp), trim_trip, description
+    /// edits, and manual totals/uuid corrections all count. Edits that only
+    /// touch vessel_status/environmental_data without updating the trips row
+    /// itself are not detected; see DB_ANALYST.md.
     pub fn get_trip_uuids_modified_since(&self, since: &str) -> Result<Vec<String>, Box<dyn Error>> {
         let since_dt = chrono::DateTime::parse_from_rfc3339(since)
             .map_err(|e| format!("Invalid since timestamp: {}", e))?;
@@ -178,7 +181,7 @@ impl VesselDatabase {
 
         let mut conn = self.pool.get_conn()?;
         let uuids: Vec<String> = conn.exec(
-            "SELECT uuid FROM trips WHERE uuid IS NOT NULL AND end_timestamp > :since \
+            "SELECT uuid FROM trips WHERE uuid IS NOT NULL AND updated_at > :since \
              ORDER BY end_timestamp ASC",
             params! { "since" => since_str },
         )?;
@@ -480,70 +483,72 @@ mod tests {
         assert_eq!(status.last_synced_at.as_deref(), Some(ts));
     }
 
+    // Change-detection is driven by `trips.updated_at`, which MariaDB bumps
+    // automatically (ON UPDATE CURRENT_TIMESTAMP) on any UPDATE to the row —
+    // not by application-supplied timestamps. These tests order events with
+    // real wall-clock sleeps rather than synthetic future SystemTimes.
+
     #[test]
     #[ignore]
-    fn test_modified_since_excludes_trip_ended_before_cutoff() {
+    fn test_modified_since_excludes_trip_not_touched_after_cutoff() {
         let db = setup_db();
         let t = SystemTime::now();
         let (_, uuid) = make_trip(&db, "Old trip", t, 2);
-        let end = t.add(Duration::from_secs(2 * ONE_HOUR_S));
 
-        // since = well after the trip ended
-        let since = chrono::DateTime::<chrono::Utc>::from(end.add(Duration::from_secs(ONE_HOUR_S)))
-            .to_rfc3339();
+        std::thread::sleep(Duration::from_millis(50));
+        let since = chrono::Utc::now().to_rfc3339();
 
         let modified = db
             .get_trip_uuids_modified_since(&since)
             .expect("should succeed");
         assert!(
             !modified.contains(&uuid),
-            "trip that ended before cutoff must not be reported as modified"
+            "trip not touched since cutoff must not be reported as modified"
         );
     }
 
     #[test]
     #[ignore]
-    fn test_modified_since_includes_trip_ended_after_cutoff() {
+    fn test_modified_since_includes_trip_touched_after_cutoff() {
         let db = setup_db();
         let t = SystemTime::now();
-        let (_, uuid) = make_trip(&db, "Recent trip", t, 2);
+        let since = chrono::Utc::now().to_rfc3339();
 
-        // since = before the trip's end_timestamp
-        let since = chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339();
+        std::thread::sleep(Duration::from_millis(50));
+        let (_, uuid) = make_trip(&db, "Recent trip", t, 2);
 
         let modified = db
             .get_trip_uuids_modified_since(&since)
             .expect("should succeed");
         assert!(
             modified.contains(&uuid),
-            "trip ending after cutoff must be reported as modified"
+            "trip created after cutoff must be reported as modified"
         );
     }
 
     #[test]
     #[ignore]
-    fn test_modified_since_catches_live_trip_updated_after_previous_sync() {
+    fn test_modified_since_catches_live_trip_end_timestamp_update() {
         let db = setup_db();
         let t = SystemTime::now();
         let (trip_id, uuid) = make_trip(&db, "Live trip", t, 2);
-        let original_end = t.add(Duration::from_secs(2 * ONE_HOUR_S));
 
-        // Sync happened right when the trip's end_timestamp was `original_end`.
-        let previous_synced_at =
-            chrono::DateTime::<chrono::Utc>::from(original_end.add(Duration::from_secs(1)))
-                .to_rfc3339();
+        std::thread::sleep(Duration::from_millis(50));
+        let previous_synced_at = chrono::Utc::now().to_rfc3339();
 
-        // Not modified yet: end_timestamp is still <= previous_synced_at.
+        // Not modified yet: row untouched since previous_synced_at.
         let modified_before_update = db
             .get_trip_uuids_modified_since(&previous_synced_at)
             .expect("should succeed");
         assert!(
             !modified_before_update.contains(&uuid),
-            "trip with unchanged end_timestamp must not be reported as modified"
+            "trip untouched since previous sync must not be reported as modified"
         );
 
+        std::thread::sleep(Duration::from_millis(50));
+
         // Simulate a further status report on the still-open trip, extending it.
-        let new_end = original_end.add(Duration::from_secs(ONE_HOUR_S));
+        let new_end = t.add(Duration::from_secs(3 * ONE_HOUR_S));
         let new_end_str = chrono::DateTime::<chrono::Utc>::from(new_end)
             .format("%Y-%m-%d %H:%M:%S%.3f")
             .to_string();
@@ -561,7 +566,40 @@ mod tests {
             .expect("should succeed");
         assert!(
             modified_after_update.contains(&uuid),
-            "live trip extended past previous sync time must be reported as modified"
+            "live trip extended past previous sync time must be reported as modified \
+             (end_timestamp update auto-bumps updated_at)"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn test_modified_since_detects_totals_only_edit_with_unchanged_end_timestamp() {
+        // Regression test: a manual DB cleanup that only rewrites totals (per
+        // DB_ANALYST.md protocols) must still be picked up for sync even
+        // though end_timestamp never changes.
+        let db = setup_db();
+        let t = SystemTime::now();
+        let (trip_id, uuid) = make_trip(&db, "Amended trip", t, 2);
+
+        std::thread::sleep(Duration::from_millis(50));
+        let previous_synced_at = chrono::Utc::now().to_rfc3339();
+        std::thread::sleep(Duration::from_millis(50));
+
+        {
+            let mut conn = db.pool.get_conn().unwrap();
+            conn.exec_drop(
+                "UPDATE trips SET total_distance_sailed = 42.0 WHERE id = :id",
+                params! { "id" => trip_id },
+            )
+            .unwrap();
+        }
+
+        let modified = db
+            .get_trip_uuids_modified_since(&previous_synced_at)
+            .expect("should succeed");
+        assert!(
+            modified.contains(&uuid),
+            "totals edit with unchanged end_timestamp must still be reported as modified"
         );
     }
 

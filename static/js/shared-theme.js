@@ -72,7 +72,7 @@ function updateBrandLogo(isDark) {
 function updateThemeButton(isDark) {
     const themeIcon = document.getElementById('theme-icon');
     const themeText = document.getElementById('theme-text');
-    
+
     if (themeIcon) {
         themeIcon.innerHTML = isDark ? ICON_MAP['moon'] : ICON_MAP['sun'];
     }
@@ -310,19 +310,19 @@ function formatDurationLong(startDateStr, endDateStr) {
         const startDate = new Date(startDateStr);
         const endDate = new Date(endDateStr);
         const durationMs = endDate - startDate;
-        
+
         if (durationMs < 0) return 'N/A';
-        
+
         const totalSeconds = Math.floor(durationMs / 1000);
         const days = Math.floor(totalSeconds / 86400);
         const hours = Math.floor((totalSeconds % 86400) / 3600);
         const minutes = Math.floor((totalSeconds % 3600) / 60);
-        
+
         const parts = [];
         if (days > 0) parts.push(days + 'd');
         if (hours > 0) parts.push(hours + 'h');
         if (minutes > 0) parts.push(minutes + 'm');
-        
+
         return parts.length > 0 ? parts.join(' ') : '0m';
     } catch (e) {
         return 'N/A';
