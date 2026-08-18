@@ -21,6 +21,7 @@ COPY --from=builder /app/target/release/nmea_router /usr/local/bin/nmea_router
 COPY static/ ./static/
 COPY --from=builder /app/static/libs/ ./static/libs/
 COPY pgns.json .
+COPY dufour40.csv .
 COPY deploy_trips_viewer/config.template.json /etc/nmea_router/config.json
 
 CMD ["nmea_router"]
