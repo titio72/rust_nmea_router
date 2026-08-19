@@ -262,6 +262,25 @@
                         </div>
                     </div>
                     <div class="card-stats">
+                        <div class="card-stat" id="upwindTimeStat">
+                            <div class="card-stat-label">Upwind</div>
+                            <div id="upwindTimeValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="upwindTimePercentageValue" class="sailing-percentage"></span></div>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="card-stat" id="reachingTimeStat">
+                            <div class="card-stat-label">Reaching</div>
+                            <div id="reachingTimeValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="reachingTimePercentageValue" class="sailing-percentage"></span></div>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="card-stat" id="runningTimeStat">
+                            <div class="card-stat-label">Running</div>
+                            <div id="runningTimeValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="runningTimePercentageValue" class="sailing-percentage"></span></div>
+                        </div>
+                    </div>
+                    <div class="card-stats">
                         <div class="card-stat" id="totalDistanceStat">
                             <div class="card-stat-label">Total Distance</div>
                             <div id="totalDistanceValue" class="card-stat-value"></div>
@@ -277,6 +296,25 @@
                             <div class="card-stat-label">Motoring</div>
                             <div id="motoringDistanceValue" class="card-stat-value"></div>
                             <div class="card-stat-detail"><span id="motoringDistancePercentageValue" class="motoring-percentage"></span></div>
+                        </div>
+                    </div>
+                    <div class="card-stats">
+                        <div class="card-stat" id="upwindDistanceStat">
+                            <div class="card-stat-label">Upwind</div>
+                            <div id="upwindDistanceValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="upwindDistancePercentageValue" class="sailing-percentage"></span></div>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="card-stat" id="reachingDistanceStat">
+                            <div class="card-stat-label">Reaching</div>
+                            <div id="reachingDistanceValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="reachingDistancePercentageValue" class="sailing-percentage"></span></div>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="card-stat" id="runningDistanceStat">
+                            <div class="card-stat-label">Running</div>
+                            <div id="runningDistanceValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="runningDistancePercentageValue" class="sailing-percentage"></span></div>
                         </div>
                     </div>
                     <voyage-bar id="voyageBar"></voyage-bar>
@@ -798,6 +836,12 @@
                         motoring_distance_nm: selectedLeg.motoring_distance_nm,
                         sailing_time_ms: selectedLeg.sailing_time_ms,
                         motoring_time_ms: selectedLeg.motoring_time_ms,
+                        upwind_distance_nm: selectedLeg.upwind_distance_nm,
+                        reaching_distance_nm: selectedLeg.reaching_distance_nm,
+                        running_distance_nm: selectedLeg.running_distance_nm,
+                        upwind_time_ms: selectedLeg.upwind_time_ms,
+                        reaching_time_ms: selectedLeg.reaching_time_ms,
+                        running_time_ms: selectedLeg.running_time_ms,
                         total_time_ms: selectedLeg.sailing_time_ms + selectedLeg.motoring_time_ms,
                         nav_start_timestamp: selectedLeg.nav_start_timestamp || null,
                         nav_end_timestamp: selectedLeg.nav_end_timestamp || null
@@ -889,6 +933,33 @@
             document.getElementById('sailingDistancePercentageValue').textContent = sailingPercent.toFixed(1) + '%';
             document.getElementById('motoringDistanceValue').textContent = motoringDistance.toFixed(1) + ' NM';
             document.getElementById('motoringDistancePercentageValue').textContent = (100 - sailingPercent).toFixed(1) + '%';
+            const upwindTime = trip.upwind_time_ms || 0;
+            const reachingTime = trip.reaching_time_ms || 0;
+            const runningTime = trip.running_time_ms || 0;
+            const upwindDistance = trip.upwind_distance_nm || 0;
+            const reachingDistance = trip.reaching_distance_nm || 0;
+            const runningDistance = trip.running_distance_nm || 0;
+            // Point-of-sail is a subdivision of sailing, so percentages are relative to
+            // sailing time/distance, not total trip time/distance.
+            const upwindTimePercent = sailingTime > 0 ? (upwindTime / sailingTime * 100) : 0;
+            const reachingTimePercent = sailingTime > 0 ? (reachingTime / sailingTime * 100) : 0;
+            const runningTimePercent = sailingTime > 0 ? (runningTime / sailingTime * 100) : 0;
+            const upwindDistancePercent = sailingDistance > 0 ? (upwindDistance / sailingDistance * 100) : 0;
+            const reachingDistancePercent = sailingDistance > 0 ? (reachingDistance / sailingDistance * 100) : 0;
+            const runningDistancePercent = sailingDistance > 0 ? (runningDistance / sailingDistance * 100) : 0;
+
+            document.getElementById('upwindTimeValue').textContent = formatDuration(upwindTime);
+            document.getElementById('upwindTimePercentageValue').textContent = upwindTimePercent.toFixed(1) + '%';
+            document.getElementById('reachingTimeValue').textContent = formatDuration(reachingTime);
+            document.getElementById('reachingTimePercentageValue').textContent = reachingTimePercent.toFixed(1) + '%';
+            document.getElementById('runningTimeValue').textContent = formatDuration(runningTime);
+            document.getElementById('runningTimePercentageValue').textContent = runningTimePercent.toFixed(1) + '%';
+            document.getElementById('upwindDistanceValue').textContent = upwindDistance.toFixed(1) + ' NM';
+            document.getElementById('upwindDistancePercentageValue').textContent = upwindDistancePercent.toFixed(1) + '%';
+            document.getElementById('reachingDistanceValue').textContent = reachingDistance.toFixed(1) + ' NM';
+            document.getElementById('reachingDistancePercentageValue').textContent = reachingDistancePercent.toFixed(1) + '%';
+            document.getElementById('runningDistanceValue').textContent = runningDistance.toFixed(1) + ' NM';
+            document.getElementById('runningDistancePercentageValue').textContent = runningDistancePercent.toFixed(1) + '%';
             const voyageBarEl = document.getElementById('voyageBar');
             voyageBarEl.setAttribute('sailing-distance', sailingDistance.toFixed(1));
             voyageBarEl.setAttribute('motoring-distance', motoringDistance.toFixed(1));

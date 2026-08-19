@@ -13,6 +13,12 @@ pub struct Trip {
     pub total_time_sailing: u64,      // milliseconds
     pub total_time_motoring: u64,     // milliseconds
     pub total_time_moored: u64,       // milliseconds
+    pub total_distance_upwind: f64,   // nautical miles, subset of total_distance_sailed
+    pub total_distance_reaching: f64, // nautical miles, subset of total_distance_sailed
+    pub total_distance_running: f64,  // nautical miles, subset of total_distance_sailed
+    pub total_time_upwind: u64,       // milliseconds, subset of total_time_sailing
+    pub total_time_reaching: u64,     // milliseconds, subset of total_time_sailing
+    pub total_time_running: u64,      // milliseconds, subset of total_time_sailing
 }
 
 impl Trip {
@@ -29,6 +35,12 @@ impl Trip {
             total_time_sailing: 0,
             total_time_motoring: 0,
             total_time_moored: 0,
+            total_distance_upwind: 0.0,
+            total_distance_reaching: 0.0,
+            total_distance_running: 0.0,
+            total_time_upwind: 0,
+            total_time_reaching: 0,
+            total_time_running: 0,
         }
     }
 
@@ -41,6 +53,7 @@ impl Trip {
         time_ms: u64,
         engine_on: EngineStatus,
         is_moored: bool,
+        wind_angle_deg: Option<f64>,
     ) {
         self.end_timestamp = end_timestamp;
 
@@ -53,6 +66,24 @@ impl Trip {
             // Both Off and Unknown are treated as sailing
             self.total_distance_sailed += distance;
             self.total_time_sailing += time_ms;
+
+            if let Some(angle) = wind_angle_deg {
+                use crate::utilities::{point_of_sail_from_twa, PointOfSail};
+                match point_of_sail_from_twa(angle) {
+                    PointOfSail::Upwind => {
+                        self.total_distance_upwind += distance;
+                        self.total_time_upwind += time_ms;
+                    }
+                    PointOfSail::Reaching => {
+                        self.total_distance_reaching += distance;
+                        self.total_time_reaching += time_ms;
+                    }
+                    PointOfSail::Running => {
+                        self.total_distance_running += distance;
+                        self.total_time_running += time_ms;
+                    }
+                }
+            }
         }
     }
 
@@ -93,6 +124,12 @@ mod tests {
         assert_eq!(trip.total_time_sailing, 0);
         assert_eq!(trip.total_time_motoring, 0);
         assert_eq!(trip.total_time_moored, 0);
+        assert_eq!(trip.total_distance_upwind, 0.0);
+        assert_eq!(trip.total_distance_reaching, 0.0);
+        assert_eq!(trip.total_distance_running, 0.0);
+        assert_eq!(trip.total_time_upwind, 0);
+        assert_eq!(trip.total_time_reaching, 0);
+        assert_eq!(trip.total_time_running, 0);
     }
 
     #[test]
@@ -119,7 +156,7 @@ mod tests {
         let mut trip = Trip::new(now, "Test Trip".to_string());
 
         let later = now + Duration::from_secs(100);
-        trip.update(later, 1000.0, 100000, EngineStatus::Off, false);
+        trip.update(later, 1000.0, 100000, EngineStatus::Off, false, None);
 
         assert_eq!(trip.total_distance_sailed, 1000.0);
         assert_eq!(trip.total_time_sailing, 100000);
@@ -134,13 +171,16 @@ mod tests {
         let mut trip = Trip::new(now, "Test Trip".to_string());
 
         let later = now + Duration::from_secs(100);
-        trip.update(later, 2000.0, 100000, EngineStatus::On, false);
+        trip.update(later, 2000.0, 100000, EngineStatus::On, false, Some(30.0));
 
         assert_eq!(trip.total_distance_motoring, 2000.0);
         assert_eq!(trip.total_time_motoring, 100000);
         assert_eq!(trip.total_distance_sailed, 0.0);
         assert_eq!(trip.total_time_sailing, 0);
         assert_eq!(trip.total_time_moored, 0);
+        // Motoring never contributes to point-of-sail buckets, even with a wind angle present
+        assert_eq!(trip.total_distance_upwind, 0.0);
+        assert_eq!(trip.total_time_upwind, 0);
     }
 
     #[test]
@@ -149,13 +189,72 @@ mod tests {
         let mut trip = Trip::new(now, "Test Trip".to_string());
 
         let later = now + Duration::from_secs(100);
-        trip.update(later, 0.0, 100000, EngineStatus::Off, true);
+        trip.update(later, 0.0, 100000, EngineStatus::Off, true, Some(30.0));
 
         assert_eq!(trip.total_time_moored, 100000);
         assert_eq!(trip.total_distance_sailed, 0.0);
         assert_eq!(trip.total_distance_motoring, 0.0);
         assert_eq!(trip.total_time_sailing, 0);
         assert_eq!(trip.total_time_motoring, 0);
+        assert_eq!(trip.total_distance_upwind, 0.0);
+    }
+
+    #[test]
+    fn test_update_sailing_upwind() {
+        let now = SystemTime::now();
+        let mut trip = Trip::new(now, "Test Trip".to_string());
+
+        let later = now + Duration::from_secs(100);
+        trip.update(later, 5.0, 100000, EngineStatus::Off, false, Some(30.0));
+
+        assert_eq!(trip.total_distance_sailed, 5.0);
+        assert_eq!(trip.total_distance_upwind, 5.0);
+        assert_eq!(trip.total_time_upwind, 100000);
+        assert_eq!(trip.total_distance_reaching, 0.0);
+        assert_eq!(trip.total_distance_running, 0.0);
+    }
+
+    #[test]
+    fn test_update_sailing_reaching() {
+        let now = SystemTime::now();
+        let mut trip = Trip::new(now, "Test Trip".to_string());
+
+        let later = now + Duration::from_secs(100);
+        trip.update(later, 5.0, 100000, EngineStatus::Off, false, Some(90.0));
+
+        assert_eq!(trip.total_distance_reaching, 5.0);
+        assert_eq!(trip.total_time_reaching, 100000);
+        assert_eq!(trip.total_distance_upwind, 0.0);
+        assert_eq!(trip.total_distance_running, 0.0);
+    }
+
+    #[test]
+    fn test_update_sailing_running() {
+        let now = SystemTime::now();
+        let mut trip = Trip::new(now, "Test Trip".to_string());
+
+        let later = now + Duration::from_secs(100);
+        trip.update(later, 5.0, 100000, EngineStatus::Off, false, Some(160.0));
+
+        assert_eq!(trip.total_distance_running, 5.0);
+        assert_eq!(trip.total_time_running, 100000);
+        assert_eq!(trip.total_distance_upwind, 0.0);
+        assert_eq!(trip.total_distance_reaching, 0.0);
+    }
+
+    #[test]
+    fn test_update_sailing_no_wind_data() {
+        let now = SystemTime::now();
+        let mut trip = Trip::new(now, "Test Trip".to_string());
+
+        let later = now + Duration::from_secs(100);
+        trip.update(later, 5.0, 100000, EngineStatus::Off, false, None);
+
+        // Counted in sailing totals, but none of the three buckets
+        assert_eq!(trip.total_distance_sailed, 5.0);
+        assert_eq!(trip.total_distance_upwind, 0.0);
+        assert_eq!(trip.total_distance_reaching, 0.0);
+        assert_eq!(trip.total_distance_running, 0.0);
     }
 
     #[test]
@@ -182,8 +281,8 @@ mod tests {
         let mut trip = Trip::new(now, "Test Trip".to_string());
 
         let later = now + Duration::from_secs(100);
-        trip.update(later, 1000.0, 50000, EngineStatus::Off, false); // sailing
-        trip.update(later, 500.0, 50000, EngineStatus::On, false); // motoring
+        trip.update(later, 1000.0, 50000, EngineStatus::Off, false, None); // sailing
+        trip.update(later, 500.0, 50000, EngineStatus::On, false, None); // motoring
 
         assert_eq!(trip.total_distance(), 1500.0);
     }
@@ -194,9 +293,9 @@ mod tests {
         let mut trip = Trip::new(now, "Test Trip".to_string());
 
         let later = now + Duration::from_secs(100);
-        trip.update(later, 1000.0, 30000, EngineStatus::Off, false); // sailing
-        trip.update(later, 500.0, 40000, EngineStatus::On, false); // motoring
-        trip.update(later, 0.0, 50000, EngineStatus::Off, true); // moored
+        trip.update(later, 1000.0, 30000, EngineStatus::Off, false, None); // sailing
+        trip.update(later, 500.0, 40000, EngineStatus::On, false, None); // motoring
+        trip.update(later, 0.0, 50000, EngineStatus::Off, true, None); // moored
 
         assert_eq!(trip.total_time(), 120000);
     }

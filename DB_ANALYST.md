@@ -28,6 +28,15 @@ to vessel_status and environmental_data manually.
 - `start_timestamp` / `end_timestamp` — UTC DATETIME(3); define the trip's time window
 - `total_distance_sailed` / `total_distance_motoring` — nautical miles (DOUBLE)
 - `total_time_sailing` / `total_time_motoring` / `total_time_moored` — milliseconds (BIGINT)
+- `total_distance_upwind` — nautical miles (DOUBLE); sailing distance with folded TWA ≤ 60°
+- `total_distance_reaching` — nautical miles (DOUBLE); sailing distance with folded TWA > 60° and < 120°
+- `total_distance_running` — nautical miles (DOUBLE); sailing distance with folded TWA ≥ 120°
+- `total_time_upwind` — milliseconds (BIGINT); sailing time with folded TWA ≤ 60°
+- `total_time_reaching` — milliseconds (BIGINT); sailing time with folded TWA > 60° and < 120°
+- `total_time_running` — milliseconds (BIGINT); sailing time with folded TWA ≥ 120°
+  (folded TWA = `LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg)`; the three
+  buckets partition the sailing rows that have a non-NULL wind angle, so they sum to at
+  most `total_distance_sailed` / `total_time_sailing`)
 - `description` — auto-generated "Trip YYYY-MM-DD"; user-editable
 
 ### vessel_status
@@ -154,12 +163,36 @@ DELETE FROM environmental_data
 -- recalculate_and_update_trip (src/db/operations/gap_fill.rs) — do not use
 -- `engine_on = 1` alone for the motored bucket, it double-counts rows that
 -- are both moored and engine-on.
+-- The point-of-sail buckets fold the true wind angle to 0-180 via
+-- LEAST(angle, 360 - angle), then split the sailing rows: upwind <= 60,
+-- reaching > 60 and < 120, running >= 120. Rows with a NULL wind angle stay in
+-- the sailing totals but fall into no bucket.
 SELECT
   SUM(CASE WHEN is_moored = 0 AND engine_on != 1 THEN total_distance_nm ELSE 0 END) AS sailed,
   SUM(CASE WHEN is_moored = 0 AND engine_on = 1  THEN total_distance_nm ELSE 0 END) AS motored,
   SUM(CASE WHEN is_moored = 0 AND engine_on != 1 THEN total_time_ms ELSE 0 END) AS time_sailing,
   SUM(CASE WHEN is_moored = 0 AND engine_on = 1  THEN total_time_ms ELSE 0 END) AS time_motoring,
-  SUM(CASE WHEN is_moored = 1                    THEN total_time_ms ELSE 0 END) AS time_moored
+  SUM(CASE WHEN is_moored = 1                    THEN total_time_ms ELSE 0 END) AS time_moored,
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60
+           THEN total_distance_nm ELSE 0 END) AS dist_upwind,
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120
+           THEN total_distance_nm ELSE 0 END) AS dist_reaching,
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120
+           THEN total_distance_nm ELSE 0 END) AS dist_running,
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60
+           THEN total_time_ms ELSE 0 END) AS time_upwind,
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120
+           THEN total_time_ms ELSE 0 END) AS time_reaching,
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120
+           THEN total_time_ms ELSE 0 END) AS time_running
 FROM vessel_status WHERE timestamp BETWEEN '<new_start>' AND '<new_end>';
 
 -- 9. Update the trip record
@@ -170,7 +203,13 @@ UPDATE trips SET
   total_distance_motoring= <motored>,
   total_time_sailing     = <time_sailing>,
   total_time_motoring    = <time_motoring>,
-  total_time_moored      = <time_moored>
+  total_time_moored      = <time_moored>,
+  total_distance_upwind  = <dist_upwind>,
+  total_distance_reaching= <dist_reaching>,
+  total_distance_running = <dist_running>,
+  total_time_upwind      = <time_upwind>,
+  total_time_reaching    = <time_reaching>,
+  total_time_running     = <time_running>
 WHERE id = <id>;
 
 -- 10. Invalidate heatmap_cache

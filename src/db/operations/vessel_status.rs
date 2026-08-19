@@ -53,10 +53,14 @@ impl VesselDatabase {
                     r"INSERT INTO trips
                       (description, start_timestamp, end_timestamp,
                        total_distance_sailed, total_distance_motoring,
-                       total_time_sailing, total_time_motoring, total_time_moored, uuid)
+                       total_time_sailing, total_time_motoring, total_time_moored,
+                       total_distance_upwind, total_distance_reaching, total_distance_running,
+                       total_time_upwind, total_time_reaching, total_time_running, uuid)
                       VALUES (:description, :start_ts, :end_ts,
                               :distance_sailed, :distance_motoring,
-                              :time_sailing, :time_motoring, :time_moored, :uuid)",
+                              :time_sailing, :time_motoring, :time_moored,
+                              :distance_upwind, :distance_reaching, :distance_running,
+                              :time_upwind, :time_reaching, :time_running, :uuid)",
                     params! {
                         "description" => &trip.description,
                         "start_ts" => start_timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
@@ -66,6 +70,12 @@ impl VesselDatabase {
                         "time_sailing" => trip.total_time_sailing,
                         "time_motoring" => trip.total_time_motoring,
                         "time_moored" => trip.total_time_moored,
+                        "distance_upwind" => trip.total_distance_upwind,
+                        "distance_reaching" => trip.total_distance_reaching,
+                        "distance_running" => trip.total_distance_running,
+                        "time_upwind" => trip.total_time_upwind,
+                        "time_reaching" => trip.total_time_reaching,
+                        "time_running" => trip.total_time_running,
                         "uuid" => &trip.uuid,
                     },
                 )?;
@@ -83,7 +93,13 @@ impl VesselDatabase {
                               total_distance_motoring = :distance_motoring,
                               total_time_sailing = :time_sailing,
                               total_time_motoring = :time_motoring,
-                              total_time_moored = :time_moored
+                              total_time_moored = :time_moored,
+                              total_distance_upwind = :distance_upwind,
+                              total_distance_reaching = :distance_reaching,
+                              total_distance_running = :distance_running,
+                              total_time_upwind = :time_upwind,
+                              total_time_reaching = :time_reaching,
+                              total_time_running = :time_running
                           WHERE id = :trip_id",
                         params! {
                             "trip_id" => trip_id,
@@ -93,6 +109,12 @@ impl VesselDatabase {
                             "time_sailing" => trip.total_time_sailing,
                             "time_motoring" => trip.total_time_motoring,
                             "time_moored" => trip.total_time_moored,
+                            "distance_upwind" => trip.total_distance_upwind,
+                            "distance_reaching" => trip.total_distance_reaching,
+                            "distance_running" => trip.total_distance_running,
+                            "time_upwind" => trip.total_time_upwind,
+                            "time_reaching" => trip.total_time_reaching,
+                            "time_running" => trip.total_time_running,
                         },
                     )?;
                 }
@@ -129,7 +151,9 @@ impl VesselDatabase {
                      DATE_FORMAT(start_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as start_ts,
                      DATE_FORMAT(end_timestamp, '%Y-%m-%dT%H:%i:%S.%fZ') as end_ts,
                      total_distance_sailed, total_distance_motoring,
-                     total_time_sailing, total_time_motoring, total_time_moored, uuid
+                     total_time_sailing, total_time_motoring, total_time_moored,
+                     total_distance_upwind, total_distance_reaching, total_distance_running,
+                     total_time_upwind, total_time_reaching, total_time_running, uuid
               FROM trips
               ORDER BY end_timestamp DESC
               LIMIT 1",
@@ -156,6 +180,24 @@ impl VesselDatabase {
             let total_time_moored: u64 = row
                 .take("total_time_moored")
                 .ok_or("Missing total_time_moored")?;
+            let total_distance_upwind: f64 = row
+                .take("total_distance_upwind")
+                .ok_or("Missing total_distance_upwind")?;
+            let total_distance_reaching: f64 = row
+                .take("total_distance_reaching")
+                .ok_or("Missing total_distance_reaching")?;
+            let total_distance_running: f64 = row
+                .take("total_distance_running")
+                .ok_or("Missing total_distance_running")?;
+            let total_time_upwind: u64 = row
+                .take("total_time_upwind")
+                .ok_or("Missing total_time_upwind")?;
+            let total_time_reaching: u64 = row
+                .take("total_time_reaching")
+                .ok_or("Missing total_time_reaching")?;
+            let total_time_running: u64 = row
+                .take("total_time_running")
+                .ok_or("Missing total_time_running")?;
             let uuid: Option<String> = row.take("uuid").unwrap_or(None);
 
             // Parse timestamps - remove 'Z' suffix and parse ISO 8601 format
@@ -183,6 +225,12 @@ impl VesselDatabase {
                 total_time_sailing,
                 total_time_motoring,
                 total_time_moored,
+                total_distance_upwind,
+                total_distance_reaching,
+                total_distance_running,
+                total_time_upwind,
+                total_time_reaching,
+                total_time_running,
             }))
         } else {
             Ok(None)
@@ -356,6 +404,44 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(desc, "Test Create");
+    }
+
+    #[test]
+    #[ignore]
+    fn test_insert_status_creates_trip_persists_point_of_sail() {
+        let db = setup_db();
+        let op = make_status_op(); // wind_angle_deg: Some(45.0) -> upwind (folded 45 <= 60)
+        let ts_sys = dirty_instant_to_systemtime(op.timestamp);
+        let mut trip = Trip::new(ts_sys, "POS Test".to_string());
+        trip.update(
+            ts_sys,
+            op.total_distance_nm,
+            op.total_time_ms,
+            op.engine_on,
+            op.is_moored,
+            op.wind_angle_deg,
+        );
+        let result = db
+            .insert_status_and_trip(&op, &TripOperation::CreateTrip(trip))
+            .unwrap();
+        let trip_id = result.expect("CreateTrip should return Some(id)");
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let row: (f64, f64, f64, u64, u64, u64) = conn
+            .exec_first(
+                "SELECT total_distance_upwind, total_distance_reaching, total_distance_running,
+                        total_time_upwind, total_time_reaching, total_time_running
+                 FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_approx_equal(row.0, 1.2, 0.001, "total_distance_upwind");
+        assert_approx_equal(row.1, 0.0, 0.001, "total_distance_reaching");
+        assert_approx_equal(row.2, 0.0, 0.001, "total_distance_running");
+        assert_eq!(row.3, 600_000, "total_time_upwind");
+        assert_eq!(row.4, 0, "total_time_reaching");
+        assert_eq!(row.5, 0, "total_time_running");
     }
 
     #[test]

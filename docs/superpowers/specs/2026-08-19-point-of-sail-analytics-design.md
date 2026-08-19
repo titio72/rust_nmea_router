@@ -101,11 +101,19 @@ logic on `average_wind_angle_deg`, scoped to the sailing branch only.
   bucket-and-sum logic, sailing branch only.
 - **`src/db/operations/query.rs` `fetch_heatmap`** — both the cached-column `CREATE TABLE`/
   `ALTER TABLE` and the day-level recompute `SELECT ... GROUP BY DATE_FORMAT(...)` query gain
-  the 6 new `SUM(CASE WHEN ...)` branches (`is_moored = 0 AND engine_on != 1` already the
-  existing sailing condition at this site, per the current `sailing_distance` branch).
+  the 6 new `SUM(CASE WHEN ...)` branches, gated on `engine_on = 0` — which is what this
+  site's own pre-existing `sailing_distance` branch uses, *not* the `is_moored = 0 AND
+  engine_on != 1` used at trip and leg level (`is_moored = 0` is already applied in the
+  query's `WHERE` clause here). The practical difference: `engine_on = 2` (Unknown), a real
+  and reachable state, is excluded from sailing at this site only. That is a pre-existing
+  inconsistency in the codebase's sailing definition, predating this plan; the point-of-sail
+  sums deliberately mirror each site's own convention so they stay consistent with the
+  sailing/motoring totals served beside them. Reconciling the two definitions is a separate,
+  larger change (it would move existing non-point-of-sail numbers) and is out of scope here.
 - **`src/db/operations/query.rs` `fetch_monthly_statistics`** — both the `heatmap_cache`
   `GROUP BY year, month` sum query and the live (uncached, post-last-cached-date) fallback
-  query over raw `vessel_status` gain the same 6 sums.
+  query over raw `vessel_status` gain the same 6 sums. The live fallback uses the same
+  `engine_on = 0` gating (and carries the same caveat) as `fetch_heatmap` above.
 
 ## API / MCP
 

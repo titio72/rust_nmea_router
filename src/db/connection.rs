@@ -77,6 +77,22 @@ impl VesselDatabase {
                     cache.insert(key, enabled);
                 }
             }
+
+            // Best-effort migrations for trips columns added in later versions (same
+            // pattern as the trip_legs_cache / heatmap_cache migrations). One statement
+            // per column on purpose: a combined multi-column ALTER fails atomically as
+            // soon as a single column already exists. Errors are ignored (column already
+            // present = MySQL 1060, or a read-only DB user).
+            for sql in &[
+                "ALTER TABLE trips ADD COLUMN total_distance_upwind DOUBLE NOT NULL DEFAULT 0",
+                "ALTER TABLE trips ADD COLUMN total_distance_reaching DOUBLE NOT NULL DEFAULT 0",
+                "ALTER TABLE trips ADD COLUMN total_distance_running DOUBLE NOT NULL DEFAULT 0",
+                "ALTER TABLE trips ADD COLUMN total_time_upwind BIGINT NOT NULL DEFAULT 0",
+                "ALTER TABLE trips ADD COLUMN total_time_reaching BIGINT NOT NULL DEFAULT 0",
+                "ALTER TABLE trips ADD COLUMN total_time_running BIGINT NOT NULL DEFAULT 0",
+            ] {
+                let _ = conn.query_drop(sql);
+            }
         }
 
         Ok(db)

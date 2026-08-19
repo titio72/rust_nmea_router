@@ -295,6 +295,12 @@ impl VesselDatabase {
                 total_time_sailing,
                 total_time_motoring,
                 total_time_moored,
+                total_distance_upwind: 0.0,
+                total_distance_reaching: 0.0,
+                total_distance_running: 0.0,
+                total_time_upwind: 0,
+                total_time_reaching: 0,
+                total_time_running: 0,
             }))
         } else {
             Ok(None)
@@ -322,6 +328,26 @@ impl VesselDatabase {
                   SUM(CASE WHEN is_moored = 0 AND engine_on != 1 THEN total_time_ms ELSE 0 END) AS time_sailing,
                   SUM(CASE WHEN is_moored = 0 AND engine_on = 1 THEN total_distance_nm ELSE 0 END) AS dist_motoring,
                   SUM(CASE WHEN is_moored = 0 AND engine_on != 1 THEN total_distance_nm ELSE 0 END) AS dist_sailed,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60
+                           THEN total_distance_nm ELSE 0 END) AS dist_upwind,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120
+                           THEN total_distance_nm ELSE 0 END) AS dist_reaching,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120
+                           THEN total_distance_nm ELSE 0 END) AS dist_running,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60
+                           THEN total_time_ms ELSE 0 END) AS time_upwind,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120
+                           THEN total_time_ms ELSE 0 END) AS time_reaching,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120
+                           THEN total_time_ms ELSE 0 END) AS time_running,
                   MAX(timestamp) AS last_ts
               FROM vessel_status
               WHERE timestamp BETWEEN :start AND :end",
@@ -334,6 +360,12 @@ impl VesselDatabase {
             let time_sailing: u64 = row.get("time_sailing").unwrap_or(0);
             let dist_motoring: f64 = row.get("dist_motoring").unwrap_or(0.0);
             let dist_sailed: f64 = row.get("dist_sailed").unwrap_or(0.0);
+            let dist_upwind: f64 = row.get("dist_upwind").unwrap_or(0.0);
+            let dist_reaching: f64 = row.get("dist_reaching").unwrap_or(0.0);
+            let dist_running: f64 = row.get("dist_running").unwrap_or(0.0);
+            let time_upwind: u64 = row.get("time_upwind").unwrap_or(0);
+            let time_reaching: u64 = row.get("time_reaching").unwrap_or(0);
+            let time_running: u64 = row.get("time_running").unwrap_or(0);
 
             // MariaDB may return MAX(timestamp) as Value::Date or Value::Bytes depending
             // on context (aggregate vs plain column). Handle both to avoid a panic.
@@ -361,6 +393,12 @@ impl VesselDatabase {
                       total_time_sailing     = :time_sailing,
                       total_distance_motoring = :dist_motoring,
                       total_distance_sailed   = :dist_sailed,
+                      total_distance_upwind   = :dist_upwind,
+                      total_distance_reaching = :dist_reaching,
+                      total_distance_running  = :dist_running,
+                      total_time_upwind       = :time_upwind,
+                      total_time_reaching     = :time_reaching,
+                      total_time_running      = :time_running,
                       end_timestamp          = :end_ts
                   WHERE id = :trip_id",
                 params! {
@@ -369,6 +407,12 @@ impl VesselDatabase {
                     "time_sailing"   => time_sailing,
                     "dist_motoring"  => dist_motoring,
                     "dist_sailed"    => dist_sailed,
+                    "dist_upwind"    => dist_upwind,
+                    "dist_reaching"  => dist_reaching,
+                    "dist_running"   => dist_running,
+                    "time_upwind"    => time_upwind,
+                    "time_reaching"  => time_reaching,
+                    "time_running"   => time_running,
                     "end_ts"         => &end_ts_str,
                     "trip_id"        => trip_id,
                 },
@@ -791,5 +835,58 @@ mod tests {
         assert_approx_equal(dist_motor, 1.5, 0.01, "motoring distance should be 1.5 NM");
         assert_eq!(time_sail, 600_000, "sailing time should be 600s");
         assert_eq!(time_motor, 300_000, "motoring time should be 300s");
+    }
+
+    #[test]
+    #[ignore]
+    fn test_recalculate_and_update_trip_computes_point_of_sail() {
+        let db = setup_db();
+        let start = SystemTime::now();
+        let trip_id = add_test_trip(
+            &db, "POS Recalc".to_string(), start,
+            start + Duration::from_secs(300), 0.0, 0.0, 0, 0, 0,
+        ).unwrap();
+
+        // Sailing, upwind (folded 30 <= 60): 2.0 nm / 60_000 ms
+        add_test_vessel_status(
+            &db, start, 50.0, -1.0, 6.0, 6.0,
+            Some(12.0), Some(30.0), false, EngineStatus::Off, 2.0, 60_000, None, None,
+        ).unwrap();
+        // Sailing, reaching (folded 90): 3.0 nm / 60_000 ms
+        add_test_vessel_status(
+            &db, start + Duration::from_secs(60), 50.01, -1.0, 6.0, 6.0,
+            Some(12.0), Some(90.0), false, EngineStatus::Off, 3.0, 60_000, None, None,
+        ).unwrap();
+        // Sailing, running (folded 160): 1.0 nm / 30_000 ms
+        add_test_vessel_status(
+            &db, start + Duration::from_secs(120), 50.02, -1.0, 6.0, 6.0,
+            Some(12.0), Some(160.0), false, EngineStatus::Off, 1.0, 30_000, None, None,
+        ).unwrap();
+        // Motoring with a wind angle present: must NOT count toward any bucket
+        add_test_vessel_status(
+            &db, start + Duration::from_secs(180), 50.03, -1.0, 6.0, 6.0,
+            Some(12.0), Some(30.0), false, EngineStatus::On, 4.0, 60_000, None, None,
+        ).unwrap();
+
+        db.recalculate_and_update_trip(
+            trip_id as i64, start, start + Duration::from_secs(300),
+        ).unwrap();
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let row: (f64, f64, f64, u64, u64, u64) = conn
+            .exec_first(
+                "SELECT total_distance_upwind, total_distance_reaching, total_distance_running,
+                        total_time_upwind, total_time_reaching, total_time_running
+                 FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_approx_equal(row.0, 2.0, 0.001, "total_distance_upwind");
+        assert_approx_equal(row.1, 3.0, 0.001, "total_distance_reaching");
+        assert_approx_equal(row.2, 1.0, 0.001, "total_distance_running");
+        assert_eq!(row.3, 60_000, "total_time_upwind");
+        assert_eq!(row.4, 60_000, "total_time_reaching");
+        assert_eq!(row.5, 30_000, "total_time_running");
     }
 }

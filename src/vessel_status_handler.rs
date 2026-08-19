@@ -203,6 +203,7 @@ impl VesselStatusHandler {
                 delta_time_ms,
                 status.engine_on,
                 status.is_moored,
+                status.wind_angle_deg,
             );
 
             *current_trip = Some(new_trip.clone());
@@ -216,6 +217,7 @@ impl VesselStatusHandler {
                     delta_time_ms,
                     status.engine_on,
                     status.is_moored,
+                    status.wind_angle_deg,
                 );
                 TripOperation::UpdateTrip(trip.clone())
             } else {

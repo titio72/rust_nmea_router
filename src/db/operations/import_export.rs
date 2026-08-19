@@ -373,7 +373,9 @@ impl VesselDatabase {
         let new_trip_id = tx.last_insert_id().ok_or(AppError::Database("Failed to get inserted trip ID".to_string()))? as i64;
         
         // Insert vessel statuses
+        let mut imported_status_count = 0usize;
         if let Some(statuses) = vessel_statuses.as_array() {
+            imported_status_count = statuses.len();
             for status in statuses {
                 let timestamp = status["ts"].as_str()
                     .ok_or(AppError::Database("Missing ts in vessel_status".to_string()))?;
@@ -452,15 +454,95 @@ impl VesselDatabase {
         
         tx.commit()?;
 
+        let trip_end = chrono::DateTime::parse_from_rfc3339(end_ts_str)
+            .map_err(|e| AppError::Database(format!("Invalid end_timestamp format: {}", e)))?;
+
+        // The export format carries only the sailing/motoring trip-level summary, not the
+        // point-of-sail breakdown, so recompute every trip aggregate (including the six
+        // upwind/reaching/running columns) from the vessel_status rows just imported.
+        // Deriving from the raw rows keeps the JSON format unchanged in both directions.
+        // Skipped when the file carried no vessel_status rows: there would be nothing to
+        // recompute from, and the SUM() aggregates over an empty set come back NULL.
+        if imported_status_count > 0 {
+            self.recalculate_and_update_trip(
+                new_trip_id,
+                std::time::SystemTime::from(new_trip_start.with_timezone(&chrono::Utc)),
+                std::time::SystemTime::from(trip_end.with_timezone(&chrono::Utc)),
+            )?;
+        }
+
         // Invalidate the heatmap cache for every day the imported trip spans so that
         // fetch_heatmap() recomputes those days from the newly inserted vessel_status rows.
         let trip_start_date = new_trip_start.date_naive();
-        let trip_end_date = chrono::DateTime::parse_from_rfc3339(end_ts_str)
-            .map_err(|e| AppError::Database(format!("Invalid end_timestamp format: {}", e)))?
-            .date_naive();
+        let trip_end_date = trip_end.date_naive();
         self.invalidate_heatmap_cache(trip_start_date, trip_end_date)?;
 
         info!("Trip imported successfully with ID: {}", new_trip_id);
         Ok(new_trip_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::db::test_helpers::{assert_approx_equal, setup_db};
+    use mysql::params;
+    use mysql::prelude::Queryable;
+
+    /// The export format carries no point-of-sail breakdown, so import must derive it
+    /// from the imported vessel_status rows' wind angles.
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_import_trip_computes_point_of_sail() {
+        let db = setup_db();
+
+        // Three sailing rows spanning all three buckets (folded TWA 30 / 90 / 160),
+        // plus one motoring row with an upwind angle that must not be counted.
+        let json = r#"{
+            "trip": {
+                "desc": "POS Import",
+                "start": "2020-05-01T10:00:00.000Z",
+                "end": "2020-05-01T10:05:00.000Z",
+                "dist_sail": 0.0,
+                "dist_motor": 0.0,
+                "t_sail": 0,
+                "t_motor": 0,
+                "t_moor": 0,
+                "uuid": "11111111-2222-3333-4444-555555555555"
+            },
+            "vs": [
+                {"ts":"2020-05-01T10:00:00.000Z","lat":43.0,"lon":11.0,"sog":6.0,"sog_max":6.5,
+                 "moor":false,"eng":0,"dist":2.0,"dur":60000,"tws":12.0,"twa":30.0},
+                {"ts":"2020-05-01T10:01:00.000Z","lat":43.1,"lon":11.0,"sog":6.0,"sog_max":6.5,
+                 "moor":false,"eng":0,"dist":3.0,"dur":60000,"tws":12.0,"twa":90.0},
+                {"ts":"2020-05-01T10:02:00.000Z","lat":43.2,"lon":11.0,"sog":6.0,"sog_max":6.5,
+                 "moor":false,"eng":0,"dist":1.0,"dur":30000,"tws":12.0,"twa":200.0},
+                {"ts":"2020-05-01T10:03:00.000Z","lat":43.3,"lon":11.0,"sog":6.0,"sog_max":6.5,
+                 "moor":false,"eng":1,"dist":4.0,"dur":60000,"tws":12.0,"twa":30.0}
+            ],
+            "em": []
+        }"#;
+
+        let trip_id = db.import_trip(json).expect("import_trip should succeed");
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let row: (f64, f64, f64, f64, f64, u64, u64, u64) = conn
+            .exec_first(
+                "SELECT total_distance_sailed, total_distance_motoring,
+                        total_distance_upwind, total_distance_reaching, total_distance_running,
+                        total_time_upwind, total_time_reaching, total_time_running
+                 FROM trips WHERE id = :id",
+                params! { "id" => trip_id },
+            )
+            .unwrap()
+            .expect("imported trip should exist");
+
+        assert_approx_equal(row.0, 6.0, 0.001, "total_distance_sailed");
+        assert_approx_equal(row.1, 4.0, 0.001, "total_distance_motoring");
+        assert_approx_equal(row.2, 2.0, 0.001, "total_distance_upwind");
+        assert_approx_equal(row.3, 3.0, 0.001, "total_distance_reaching");
+        assert_approx_equal(row.4, 1.0, 0.001, "total_distance_running");
+        assert_eq!(row.5, 60_000, "total_time_upwind");
+        assert_eq!(row.6, 60_000, "total_time_reaching");
+        assert_eq!(row.7, 30_000, "total_time_running");
     }
 }

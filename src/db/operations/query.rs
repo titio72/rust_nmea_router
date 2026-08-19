@@ -130,6 +130,7 @@ struct LegRecord {
     engine_on: bool,
     lat: Option<f64>,
     lon: Option<f64>,
+    wind_angle_deg: Option<f64>,
 }
 
 /// Returns (index, detection_method): first engine-off or first speed-above-threshold record.
@@ -173,6 +174,12 @@ fn finalize_leg(
     let mut motoring_distance = 0.0_f64;
     let mut sailing_time = 0_u64;
     let mut motoring_time = 0_u64;
+    let mut upwind_distance = 0.0_f64;
+    let mut reaching_distance = 0.0_f64;
+    let mut running_distance = 0.0_f64;
+    let mut upwind_time = 0_u64;
+    let mut reaching_time = 0_u64;
+    let mut running_time = 0_u64;
     for r in records {
         if r.engine_on {
             motoring_distance += r.distance_nm;
@@ -180,6 +187,24 @@ fn finalize_leg(
         } else {
             sailing_distance += r.distance_nm;
             sailing_time += r.time_ms;
+
+            if let Some(angle) = r.wind_angle_deg {
+                use crate::utilities::{point_of_sail_from_twa, PointOfSail};
+                match point_of_sail_from_twa(angle) {
+                    PointOfSail::Upwind => {
+                        upwind_distance += r.distance_nm;
+                        upwind_time += r.time_ms;
+                    }
+                    PointOfSail::Reaching => {
+                        reaching_distance += r.distance_nm;
+                        reaching_time += r.time_ms;
+                    }
+                    PointOfSail::Running => {
+                        running_distance += r.distance_nm;
+                        running_time += r.time_ms;
+                    }
+                }
+            }
         }
     }
 
@@ -253,6 +278,12 @@ fn finalize_leg(
         motoring_time_ms: motoring_time,
         sailing_time_formatted: format_duration_ms(sailing_time),
         motoring_time_formatted: format_duration_ms(motoring_time),
+        upwind_distance_nm: upwind_distance,
+        reaching_distance_nm: reaching_distance,
+        running_distance_nm: running_distance,
+        upwind_time_ms: upwind_time,
+        reaching_time_ms: reaching_time,
+        running_time_ms: running_time,
         start_lat,
         start_lon,
         end_lat,
@@ -302,7 +333,9 @@ impl VesselDatabase {
                      total_distance_sailed, total_distance_motoring,
                      (total_distance_sailed + total_distance_motoring) as total_distance,
                      (total_time_sailing + total_time_motoring + total_time_moored) as total_time,
-                     total_time_sailing, total_time_motoring, total_time_moored, uuid
+                     total_time_sailing, total_time_motoring, total_time_moored, uuid,
+                     total_distance_upwind, total_distance_reaching, total_distance_running,
+                     total_time_upwind, total_time_reaching, total_time_running
               FROM trips
               WHERE id = :trip_id",
             mysql::params! {
@@ -337,6 +370,12 @@ impl VesselDatabase {
                     0.0f64,
                     "fetch_trip",
                 ),
+                upwind_distance_nm: get_or_log(&row, "total_distance_upwind", 0.0f64, "fetch_trip"),
+                reaching_distance_nm: get_or_log(&row, "total_distance_reaching", 0.0f64, "fetch_trip"),
+                running_distance_nm: get_or_log(&row, "total_distance_running", 0.0f64, "fetch_trip"),
+                upwind_time_ms: get_or_log(&row, "total_time_upwind", 0i64, "fetch_trip"),
+                reaching_time_ms: get_or_log(&row, "total_time_reaching", 0i64, "fetch_trip"),
+                running_time_ms: get_or_log(&row, "total_time_running", 0i64, "fetch_trip"),
             };
             log_timing("fetch_trip", "total", t0, Some(1));
             Ok(Some(trip))
@@ -363,6 +402,8 @@ impl VesselDatabase {
                     total_time_moored as total_time_moored,
                     total_distance_sailed as total_distance_sailed,
                     total_distance_motoring as total_distance_motoring,
+                    total_distance_upwind, total_distance_reaching, total_distance_running,
+                    total_time_upwind, total_time_reaching, total_time_running,
                     uuid
              FROM trips WHERE ";
 
@@ -416,6 +457,12 @@ impl VesselDatabase {
                     0.0f64,
                     "fetch_trips",
                 ),
+                upwind_distance_nm: get_or_log(row, "total_distance_upwind", 0.0f64, "fetch_trips"),
+                reaching_distance_nm: get_or_log(row, "total_distance_reaching", 0.0f64, "fetch_trips"),
+                running_distance_nm: get_or_log(row, "total_distance_running", 0.0f64, "fetch_trips"),
+                upwind_time_ms: get_or_log(row, "total_time_upwind", 0i64, "fetch_trips"),
+                reaching_time_ms: get_or_log(row, "total_time_reaching", 0i64, "fetch_trips"),
+                running_time_ms: get_or_log(row, "total_time_running", 0i64, "fetch_trips"),
             })
             .collect();
 
@@ -432,7 +479,9 @@ impl VesselDatabase {
                      total_distance_sailed, total_distance_motoring,
                      (total_distance_sailed + total_distance_motoring) as total_distance,
                      (total_time_sailing + total_time_motoring + total_time_moored) as total_time,
-                     total_time_sailing, total_time_motoring, total_time_moored, uuid
+                     total_time_sailing, total_time_motoring, total_time_moored, uuid,
+                     total_distance_upwind, total_distance_reaching, total_distance_running,
+                     total_time_upwind, total_time_reaching, total_time_running
               FROM trips
               WHERE uuid = :uuid",
             mysql::params! {
@@ -472,6 +521,32 @@ impl VesselDatabase {
                     0.0f64,
                     "fetch_trip_by_uuid",
                 ),
+                upwind_distance_nm: get_or_log(
+                    &row,
+                    "total_distance_upwind",
+                    0.0f64,
+                    "fetch_trip_by_uuid",
+                ),
+                reaching_distance_nm: get_or_log(
+                    &row,
+                    "total_distance_reaching",
+                    0.0f64,
+                    "fetch_trip_by_uuid",
+                ),
+                running_distance_nm: get_or_log(
+                    &row,
+                    "total_distance_running",
+                    0.0f64,
+                    "fetch_trip_by_uuid",
+                ),
+                upwind_time_ms: get_or_log(&row, "total_time_upwind", 0i64, "fetch_trip_by_uuid"),
+                reaching_time_ms: get_or_log(
+                    &row,
+                    "total_time_reaching",
+                    0i64,
+                    "fetch_trip_by_uuid",
+                ),
+                running_time_ms: get_or_log(&row, "total_time_running", 0i64, "fetch_trip_by_uuid"),
             };
             Ok(Some(trip))
         } else {
@@ -488,7 +563,13 @@ impl VesselDatabase {
             r"SELECT YEAR(`date`) as year,
                      MONTH(`date`) as month,
                      SUM(sailing_distance_nm) as sailing_distance,
-                     SUM(motoring_distance_nm) as motoring_distance
+                     SUM(motoring_distance_nm) as motoring_distance,
+                     SUM(upwind_distance_nm) as upwind_distance,
+                     SUM(reaching_distance_nm) as reaching_distance,
+                     SUM(running_distance_nm) as running_distance,
+                     SUM(upwind_time_ms) as upwind_time,
+                     SUM(reaching_time_ms) as reaching_time,
+                     SUM(running_time_ms) as running_time
               FROM heatmap_cache
               GROUP BY YEAR(`date`), MONTH(`date`)
               ORDER BY year ASC, month ASC",
@@ -505,11 +586,36 @@ impl VesselDatabase {
             )?
             .flatten();
 
+        // NOTE: the point-of-sail buckets below gate on `engine_on = 0`, deliberately
+        // matching this query's own pre-existing `sailing_distance` condition rather than
+        // the `engine_on != 1` used at trip/leg level — so Unknown-engine (2) rows are
+        // excluded from sailing here only. Pre-existing inconsistency, kept for consistency
+        // with the sailing/motoring totals served by this same query.
         let live_results: Vec<mysql::Row> = conn.exec(
             r"SELECT YEAR(timestamp) as year,
                      MONTH(timestamp) as month,
                      SUM(CASE WHEN engine_on = 0 THEN COALESCE(total_distance_nm, 0) ELSE 0 END) as sailing_distance,
-                     SUM(CASE WHEN engine_on = 1 THEN COALESCE(total_distance_nm, 0) ELSE 0 END) as motoring_distance
+                     SUM(CASE WHEN engine_on = 1 THEN COALESCE(total_distance_nm, 0) ELSE 0 END) as motoring_distance,
+                     SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL
+                              AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60
+                              THEN COALESCE(total_distance_nm, 0) ELSE 0 END) as upwind_distance,
+                     SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL
+                              AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60
+                              AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120
+                              THEN COALESCE(total_distance_nm, 0) ELSE 0 END) as reaching_distance,
+                     SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL
+                              AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120
+                              THEN COALESCE(total_distance_nm, 0) ELSE 0 END) as running_distance,
+                     SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL
+                              AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60
+                              THEN COALESCE(total_time_ms, 0) ELSE 0 END) as upwind_time,
+                     SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL
+                              AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60
+                              AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120
+                              THEN COALESCE(total_time_ms, 0) ELSE 0 END) as reaching_time,
+                     SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL
+                              AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120
+                              THEN COALESCE(total_time_ms, 0) ELSE 0 END) as running_time
               FROM vessel_status
               WHERE is_moored = 0 AND DATE(timestamp) > :since
               GROUP BY YEAR(timestamp), MONTH(timestamp)",
@@ -532,9 +638,12 @@ impl VesselDatabase {
         )?;
         */
 
-        // Build a map of (year, month) -> (sailing_distance, motoring_distance)
-        let mut month_data: std::collections::HashMap<(i32, u32), (f64, f64)> =
-            std::collections::HashMap::new();
+        // Build a map of (year, month) -> (sailing_distance, motoring_distance, upwind_distance,
+        // reaching_distance, running_distance, upwind_time, reaching_time, running_time)
+        let mut month_data: std::collections::HashMap<
+            (i32, u32),
+            (f64, f64, f64, f64, f64, u64, u64, u64),
+        > = std::collections::HashMap::new();
 
         for row in results {
             let year: i32 = row
@@ -553,8 +662,44 @@ impl VesselDatabase {
                 .get_opt::<f64, _>("motoring_distance")
                 .and_then(|v| v.ok())
                 .unwrap_or(0.0);
+            let upwind_distance: f64 = row
+                .get_opt::<f64, _>("upwind_distance")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let reaching_distance: f64 = row
+                .get_opt::<f64, _>("reaching_distance")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let running_distance: f64 = row
+                .get_opt::<f64, _>("running_distance")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let upwind_time: u64 = row
+                .get_opt::<u64, _>("upwind_time")
+                .and_then(|v| v.ok())
+                .unwrap_or(0);
+            let reaching_time: u64 = row
+                .get_opt::<u64, _>("reaching_time")
+                .and_then(|v| v.ok())
+                .unwrap_or(0);
+            let running_time: u64 = row
+                .get_opt::<u64, _>("running_time")
+                .and_then(|v| v.ok())
+                .unwrap_or(0);
 
-            month_data.insert((year, month), (sailing_distance, motoring_distance));
+            month_data.insert(
+                (year, month),
+                (
+                    sailing_distance,
+                    motoring_distance,
+                    upwind_distance,
+                    reaching_distance,
+                    running_distance,
+                    upwind_time,
+                    reaching_time,
+                    running_time,
+                ),
+            );
         }
 
         for row in live_results {
@@ -574,10 +719,42 @@ impl VesselDatabase {
                 .get_opt::<f64, _>("motoring_distance")
                 .and_then(|v| v.ok())
                 .unwrap_or(0.0);
+            let upwind_distance: f64 = row
+                .get_opt::<f64, _>("upwind_distance")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let reaching_distance: f64 = row
+                .get_opt::<f64, _>("reaching_distance")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let running_distance: f64 = row
+                .get_opt::<f64, _>("running_distance")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let upwind_time: u64 = row
+                .get_opt::<u64, _>("upwind_time")
+                .and_then(|v| v.ok())
+                .unwrap_or(0);
+            let reaching_time: u64 = row
+                .get_opt::<u64, _>("reaching_time")
+                .and_then(|v| v.ok())
+                .unwrap_or(0);
+            let running_time: u64 = row
+                .get_opt::<u64, _>("running_time")
+                .and_then(|v| v.ok())
+                .unwrap_or(0);
 
-            let entry = month_data.entry((year, month)).or_insert((0.0, 0.0));
+            let entry = month_data
+                .entry((year, month))
+                .or_insert((0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0));
             entry.0 += sailing_distance;
             entry.1 += motoring_distance;
+            entry.2 += upwind_distance;
+            entry.3 += reaching_distance;
+            entry.4 += running_distance;
+            entry.5 += upwind_time;
+            entry.6 += reaching_time;
+            entry.7 += running_time;
         }
 
         // Generate all months from January 2020 to now
@@ -597,10 +774,19 @@ impl VesselDatabase {
             };
 
             for month in start_month..=end_month {
-                let (sailing_dist, motoring_dist) = month_data
+                let (
+                    sailing_dist,
+                    motoring_dist,
+                    upwind_dist,
+                    reaching_dist,
+                    running_dist,
+                    upwind_time,
+                    reaching_time,
+                    running_time,
+                ) = month_data
                     .get(&(year, month))
                     .copied()
-                    .unwrap_or((0.0, 0.0));
+                    .unwrap_or((0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0));
 
                 let date = format!("{:04}-{:02}", year, month);
 
@@ -610,6 +796,12 @@ impl VesselDatabase {
                     date,
                     sailing_distance_nm: sailing_dist,
                     motoring_distance_nm: motoring_dist,
+                    upwind_distance_nm: upwind_dist,
+                    reaching_distance_nm: reaching_dist,
+                    running_distance_nm: running_dist,
+                    upwind_time_ms: upwind_time,
+                    reaching_time_ms: reaching_time,
+                    running_time_ms: running_time,
                 });
             }
         }
@@ -1327,6 +1519,12 @@ impl VesselDatabase {
         // Best-effort migrations for columns added in later versions.
         // Silently ignored if already present (MySQL 1060) or on read-only DB users.
         for sql in &[
+            "ALTER TABLE trip_legs_cache ADD COLUMN upwind_distance_nm DOUBLE NOT NULL DEFAULT 0",
+            "ALTER TABLE trip_legs_cache ADD COLUMN reaching_distance_nm DOUBLE NOT NULL DEFAULT 0",
+            "ALTER TABLE trip_legs_cache ADD COLUMN running_distance_nm DOUBLE NOT NULL DEFAULT 0",
+            "ALTER TABLE trip_legs_cache ADD COLUMN upwind_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0",
+            "ALTER TABLE trip_legs_cache ADD COLUMN reaching_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0",
+            "ALTER TABLE trip_legs_cache ADD COLUMN running_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0",
             "ALTER TABLE trip_legs_cache ADD COLUMN start_lat DOUBLE NULL",
             "ALTER TABLE trip_legs_cache ADD COLUMN start_lon DOUBLE NULL",
             "ALTER TABLE trip_legs_cache ADD COLUMN end_lat DOUBLE NULL",
@@ -1366,6 +1564,8 @@ impl VesselDatabase {
             r"SELECT leg_number, start_timestamp, end_timestamp,
                          total_distance_nm, sailing_distance_nm, motoring_distance_nm,
                          sailing_time_ms, motoring_time_ms,
+                         upwind_distance_nm, reaching_distance_nm, running_distance_nm,
+                         upwind_time_ms, reaching_time_ms, running_time_ms,
                          start_lat, start_lon, end_lat, end_lon,
                          nav_start_timestamp, nav_end_timestamp,
                          nav_distance_nm, nav_time_ms, nav_detection_method,
@@ -1431,6 +1631,12 @@ impl VesselDatabase {
                     motoring_time_ms,
                     sailing_time_formatted: format_duration_ms(sailing_time_ms),
                     motoring_time_formatted: format_duration_ms(motoring_time_ms),
+                    upwind_distance_nm: get_or_log(row, "upwind_distance_nm", 0.0f64, "get_cached_trip_legs"),
+                    reaching_distance_nm: get_or_log(row, "reaching_distance_nm", 0.0f64, "get_cached_trip_legs"),
+                    running_distance_nm: get_or_log(row, "running_distance_nm", 0.0f64, "get_cached_trip_legs"),
+                    upwind_time_ms: get_or_log(row, "upwind_time_ms", 0u64, "get_cached_trip_legs"),
+                    reaching_time_ms: get_or_log(row, "reaching_time_ms", 0u64, "get_cached_trip_legs"),
+                    running_time_ms: get_or_log(row, "running_time_ms", 0u64, "get_cached_trip_legs"),
                     start_lat: row.get_opt("start_lat").and_then(|v| v.ok()),
                     start_lon: row.get_opt("start_lon").and_then(|v| v.ok()),
                     end_lat: row.get_opt("end_lat").and_then(|v| v.ok()),
@@ -1484,6 +1690,8 @@ impl VesselDatabase {
                 (trip_id, leg_number, start_timestamp, end_timestamp,
                  total_distance_nm, sailing_distance_nm, motoring_distance_nm,
                  sailing_time_ms, motoring_time_ms,
+                 upwind_distance_nm, reaching_distance_nm, running_distance_nm,
+                 upwind_time_ms, reaching_time_ms, running_time_ms,
                  start_lat, start_lon, end_lat, end_lon,
                  nav_start_timestamp, nav_end_timestamp,
                  nav_distance_nm, nav_time_ms, nav_detection_method,
@@ -1496,8 +1704,8 @@ impl VesselDatabase {
                  fastest_10nm_start_timestamp, fastest_10nm_end_timestamp,
                  fastest_25nm_distance_nm, fastest_25nm_avg_speed_kn, fastest_25nm_duration_ms,
                  fastest_25nm_start_timestamp, fastest_25nm_end_timestamp)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             legs.iter().map(|leg| -> Vec<mysql::Value> {
                 let mut values: Vec<mysql::Value> = vec![
                     trip_id.into(),
@@ -1509,6 +1717,12 @@ impl VesselDatabase {
                     leg.motoring_distance_nm.into(),
                     leg.sailing_time_ms.into(),
                     leg.motoring_time_ms.into(),
+                    leg.upwind_distance_nm.into(),
+                    leg.reaching_distance_nm.into(),
+                    leg.running_distance_nm.into(),
+                    leg.upwind_time_ms.into(),
+                    leg.reaching_time_ms.into(),
+                    leg.running_time_ms.into(),
                     leg.start_lat.into(),
                     leg.start_lon.into(),
                     leg.end_lat.into(),
@@ -1738,7 +1952,8 @@ impl VesselDatabase {
                 engine_on,
                 total_distance_nm,
                 total_time_ms,
-                average_speed_kn
+                average_speed_kn,
+                average_wind_angle_deg
              FROM vessel_status
              WHERE timestamp BETWEEN
                  (SELECT start_timestamp FROM trips WHERE id = :trip_id)
@@ -1776,6 +1991,9 @@ impl VesselDatabase {
                 .get_opt::<f64, _>("average_speed_kn")
                 .and_then(|v| v.ok())
                 .unwrap_or(0.0);
+            let wind_angle_deg: Option<f64> = row
+                .get_opt::<f64, _>("average_wind_angle_deg")
+                .and_then(|v| v.ok());
 
             if is_moored {
                 if in_leg {
@@ -1806,6 +2024,7 @@ impl VesselDatabase {
                     engine_on,
                     lat: last_lat,
                     lon: last_lon,
+                    wind_angle_deg,
                 });
             }
         }
@@ -1849,20 +2068,34 @@ impl VesselDatabase {
                 PRIMARY KEY (date)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         )?;
-        // Best-effort migration for columns added in later versions; ignored if already present.
-        let _ = conn.query_drop(
-            "ALTER TABLE heatmap_cache \
-             ADD COLUMN sailing_distance_nm DOUBLE NOT NULL DEFAULT 0, \
-             ADD COLUMN motoring_distance_nm DOUBLE NOT NULL DEFAULT 0",
-        );
+        // Best-effort migrations for columns added in later versions.
+        // Each column is its own ALTER TABLE statement (matching the trip_legs_cache
+        // pattern above) so that an already-present column (e.g. sailing_distance_nm on
+        // a DB that predates this widening) doesn't abort the whole batch and block the
+        // still-missing new columns from being added.
+        for sql in &[
+            "ALTER TABLE heatmap_cache ADD COLUMN sailing_distance_nm DOUBLE NOT NULL DEFAULT 0",
+            "ALTER TABLE heatmap_cache ADD COLUMN motoring_distance_nm DOUBLE NOT NULL DEFAULT 0",
+            "ALTER TABLE heatmap_cache ADD COLUMN upwind_distance_nm DOUBLE NOT NULL DEFAULT 0",
+            "ALTER TABLE heatmap_cache ADD COLUMN reaching_distance_nm DOUBLE NOT NULL DEFAULT 0",
+            "ALTER TABLE heatmap_cache ADD COLUMN running_distance_nm DOUBLE NOT NULL DEFAULT 0",
+            "ALTER TABLE heatmap_cache ADD COLUMN upwind_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0",
+            "ALTER TABLE heatmap_cache ADD COLUMN reaching_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0",
+            "ALTER TABLE heatmap_cache ADD COLUMN running_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0",
+        ] {
+            let _ = conn.query_drop(sql);
+        }
 
-        // Tuple layout: (total_nm, sailing_nm, motoring_nm)
-        type DayEntry = (f64, f64, f64);
+        // Tuple layout: (total_nm, sailing_nm, motoring_nm, upwind_nm, reaching_nm, running_nm,
+        //                upwind_ms, reaching_ms, running_ms)
+        type DayEntry = (f64, f64, f64, f64, f64, f64, u64, u64, u64);
 
         // Step 1: Load already-cached days for [start_dt, cache_end]
         let cached_rows: Vec<mysql::Row> = conn.exec(
             "SELECT DATE_FORMAT(date, '%Y-%m-%d') as day, distance_nm, \
-                    sailing_distance_nm, motoring_distance_nm \
+                    sailing_distance_nm, motoring_distance_nm, \
+                    upwind_distance_nm, reaching_distance_nm, running_distance_nm, \
+                    upwind_time_ms, reaching_time_ms, running_time_ms \
              FROM heatmap_cache WHERE date BETWEEN :start AND :end",
             mysql::params! {
                 "start" => start_dt.to_string(),
@@ -1886,7 +2119,37 @@ impl VesselDatabase {
                 .get_opt("motoring_distance_nm")
                 .and_then(|v| v.ok())
                 .unwrap_or(0.0);
-            day_map.insert(date, (total, sail, motor));
+            let upwind: f64 = row
+                .get_opt("upwind_distance_nm")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let reaching: f64 = row
+                .get_opt("reaching_distance_nm")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let running: f64 = row
+                .get_opt("running_distance_nm")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let upwind_ms: u64 = row
+                .get_opt("upwind_time_ms")
+                .and_then(|v| v.ok())
+                .unwrap_or(0);
+            let reaching_ms: u64 = row
+                .get_opt("reaching_time_ms")
+                .and_then(|v| v.ok())
+                .unwrap_or(0);
+            let running_ms: u64 = row
+                .get_opt("running_time_ms")
+                .and_then(|v| v.ok())
+                .unwrap_or(0);
+            day_map.insert(
+                date,
+                (
+                    total, sail, motor, upwind, reaching, running, upwind_ms, reaching_ms,
+                    running_ms,
+                ),
+            );
         }
 
         // Step 2: Find the earliest missing date in [start_dt, cache_end].
@@ -1904,11 +2167,34 @@ impl VesselDatabase {
 
         // Step 3: Recompute from the first missing date to cache_end using a simple range query
         if let Some(from_dt) = recompute_from {
+            // NOTE: `engine_on = 0` in the point-of-sail buckets deliberately matches this
+            // query's own pre-existing `sailing_distance` condition (not the `engine_on != 1`
+            // used at trip/leg level), so Unknown-engine (2) rows are excluded from sailing here.
             let results: Vec<mysql::Row> = conn.exec(
                 "SELECT DATE_FORMAT(timestamp, '%Y-%m-%d') as day, \
                         COALESCE(SUM(COALESCE(total_distance_nm, 0)), 0) as total_distance, \
                         COALESCE(SUM(CASE WHEN engine_on = 0 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as sailing_distance, \
-                        COALESCE(SUM(CASE WHEN engine_on = 1 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as motoring_distance \
+                        COALESCE(SUM(CASE WHEN engine_on = 1 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as motoring_distance, \
+                        COALESCE(SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL \
+                                          AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60 \
+                                     THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as upwind_distance, \
+                        COALESCE(SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL \
+                                          AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60 \
+                                          AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120 \
+                                     THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as reaching_distance, \
+                        COALESCE(SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL \
+                                          AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120 \
+                                     THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as running_distance, \
+                        COALESCE(SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL \
+                                          AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60 \
+                                     THEN COALESCE(total_time_ms, 0) ELSE 0 END), 0) as upwind_time, \
+                        COALESCE(SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL \
+                                          AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60 \
+                                          AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120 \
+                                     THEN COALESCE(total_time_ms, 0) ELSE 0 END), 0) as reaching_time, \
+                        COALESCE(SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL \
+                                          AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120 \
+                                     THEN COALESCE(total_time_ms, 0) ELSE 0 END), 0) as running_time \
                  FROM vessel_status \
                  WHERE timestamp >= :from_dt AND DATE(timestamp) <= :cache_end AND is_moored = 0 \
                  GROUP BY DATE_FORMAT(timestamp, '%Y-%m-%d')",
@@ -1934,33 +2220,108 @@ impl VesselDatabase {
                     .get_opt("motoring_distance")
                     .and_then(|v| v.ok())
                     .unwrap_or(0.0);
-                computed.insert(date, (total, sail, motor));
+                let upwind: f64 = row
+                    .get_opt("upwind_distance")
+                    .and_then(|v| v.ok())
+                    .unwrap_or(0.0);
+                let reaching: f64 = row
+                    .get_opt("reaching_distance")
+                    .and_then(|v| v.ok())
+                    .unwrap_or(0.0);
+                let running: f64 = row
+                    .get_opt("running_distance")
+                    .and_then(|v| v.ok())
+                    .unwrap_or(0.0);
+                let upwind_ms: u64 = row.get_opt("upwind_time").and_then(|v| v.ok()).unwrap_or(0);
+                let reaching_ms: u64 = row
+                    .get_opt("reaching_time")
+                    .and_then(|v| v.ok())
+                    .unwrap_or(0);
+                let running_ms: u64 = row
+                    .get_opt("running_time")
+                    .and_then(|v| v.ok())
+                    .unwrap_or(0);
+                computed.insert(
+                    date,
+                    (
+                        total, sail, motor, upwind, reaching, running, upwind_ms, reaching_ms,
+                        running_ms,
+                    ),
+                );
             }
 
             // Batch INSERT IGNORE all dates in [from_dt, cache_end] — including 0-distance days
             // so they won't be considered missing on the next call.
-            let mut rows: Vec<(String, f64, f64, f64)> = Vec::new();
+            let mut rows: Vec<(String, f64, f64, f64, f64, f64, f64, u64, u64, u64)> = Vec::new();
             let mut d = from_dt;
             while d <= cache_end {
                 let s = d.format("%Y-%m-%d").to_string();
-                let (total, sail, motor) = computed.get(&s).copied().unwrap_or((0.0, 0.0, 0.0));
+                let (total, sail, motor, upwind, reaching, running, upwind_ms, reaching_ms, running_ms) =
+                    computed
+                        .get(&s)
+                        .copied()
+                        .unwrap_or((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0));
                 let total = if total.is_finite() { total } else { 0.0 };
                 let sail = if sail.is_finite() { sail } else { 0.0 };
                 let motor = if motor.is_finite() { motor } else { 0.0 };
-                rows.push((s.clone(), total, sail, motor));
+                let upwind = if upwind.is_finite() { upwind } else { 0.0 };
+                let reaching = if reaching.is_finite() { reaching } else { 0.0 };
+                let running = if running.is_finite() { running } else { 0.0 };
+                rows.push((
+                    s.clone(),
+                    total,
+                    sail,
+                    motor,
+                    upwind,
+                    reaching,
+                    running,
+                    upwind_ms,
+                    reaching_ms,
+                    running_ms,
+                ));
                 // Don't overwrite dates already loaded from cache — INSERT IGNORE
                 // preserves them in the DB, and entry() preserves them in memory.
-                day_map.entry(s).or_insert((total, sail, motor));
+                day_map.entry(s).or_insert((
+                    total, sail, motor, upwind, reaching, running, upwind_ms, reaching_ms,
+                    running_ms,
+                ));
                 d += chrono::Duration::days(1);
             }
 
             if !rows.is_empty() {
                 conn.exec_batch(
                     "INSERT IGNORE INTO heatmap_cache \
-                     (date, distance_nm, sailing_distance_nm, motoring_distance_nm) \
-                     VALUES (?, ?, ?, ?)",
-                    rows.iter()
-                        .map(|(date, total, sail, motor)| (date.as_str(), *total, *sail, *motor)),
+                     (date, distance_nm, sailing_distance_nm, motoring_distance_nm, \
+                      upwind_distance_nm, reaching_distance_nm, running_distance_nm, \
+                      upwind_time_ms, reaching_time_ms, running_time_ms) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    rows.iter().map(
+                        |(
+                            date,
+                            total,
+                            sail,
+                            motor,
+                            upwind,
+                            reaching,
+                            running,
+                            upwind_ms,
+                            reaching_ms,
+                            running_ms,
+                        )| {
+                            (
+                                date.as_str(),
+                                *total,
+                                *sail,
+                                *motor,
+                                *upwind,
+                                *reaching,
+                                *running,
+                                *upwind_ms,
+                                *reaching_ms,
+                                *running_ms,
+                            )
+                        },
+                    ),
                 )?;
             }
         }
@@ -1968,33 +2329,56 @@ impl VesselDatabase {
         // Step 4: Always recompute today fresh if it falls within the requested window
         if end_dt >= today {
             let today_str = today.format("%Y-%m-%d").to_string();
+            // NOTE: `engine_on = 0` in the point-of-sail buckets deliberately matches this
+            // query's own pre-existing `sailing_distance` condition (not the `engine_on != 1`
+            // used at trip/leg level), so Unknown-engine (2) rows are excluded from sailing here.
             let row: Option<mysql::Row> = conn.exec_first(
                 "SELECT \
                     COALESCE(SUM(COALESCE(total_distance_nm, 0)), 0) as total_distance, \
                     COALESCE(SUM(CASE WHEN engine_on = 0 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as sailing_distance, \
-                    COALESCE(SUM(CASE WHEN engine_on = 1 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as motoring_distance \
+                    COALESCE(SUM(CASE WHEN engine_on = 1 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as motoring_distance, \
+                    COALESCE(SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL \
+                                      AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60 \
+                                 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as upwind_distance, \
+                    COALESCE(SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL \
+                                      AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60 \
+                                      AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120 \
+                                 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as reaching_distance, \
+                    COALESCE(SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL \
+                                      AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120 \
+                                 THEN COALESCE(total_distance_nm, 0) ELSE 0 END), 0) as running_distance, \
+                    COALESCE(SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL \
+                                      AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60 \
+                                 THEN COALESCE(total_time_ms, 0) ELSE 0 END), 0) as upwind_time, \
+                    COALESCE(SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL \
+                                      AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60 \
+                                      AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120 \
+                                 THEN COALESCE(total_time_ms, 0) ELSE 0 END), 0) as reaching_time, \
+                    COALESCE(SUM(CASE WHEN engine_on = 0 AND average_wind_angle_deg IS NOT NULL \
+                                      AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120 \
+                                 THEN COALESCE(total_time_ms, 0) ELSE 0 END), 0) as running_time \
                  FROM vessel_status \
                  WHERE DATE(timestamp) = :today AND is_moored = 0",
                 mysql::params! { "today" => &today_str },
             )?;
-            let (total, sail, motor) = row
+            let (total, sail, motor, upwind, reaching, running, upwind_ms, reaching_ms, running_ms) = row
                 .map(|r| {
-                    let t: f64 = r
-                        .get_opt("total_distance")
-                        .and_then(|v| v.ok())
-                        .unwrap_or(0.0);
-                    let s: f64 = r
-                        .get_opt("sailing_distance")
-                        .and_then(|v| v.ok())
-                        .unwrap_or(0.0);
-                    let m: f64 = r
-                        .get_opt("motoring_distance")
-                        .and_then(|v| v.ok())
-                        .unwrap_or(0.0);
-                    (t, s, m)
+                    let t: f64 = r.get_opt("total_distance").and_then(|v| v.ok()).unwrap_or(0.0);
+                    let s: f64 = r.get_opt("sailing_distance").and_then(|v| v.ok()).unwrap_or(0.0);
+                    let m: f64 = r.get_opt("motoring_distance").and_then(|v| v.ok()).unwrap_or(0.0);
+                    let u: f64 = r.get_opt("upwind_distance").and_then(|v| v.ok()).unwrap_or(0.0);
+                    let rc: f64 = r.get_opt("reaching_distance").and_then(|v| v.ok()).unwrap_or(0.0);
+                    let rn: f64 = r.get_opt("running_distance").and_then(|v| v.ok()).unwrap_or(0.0);
+                    let ums: u64 = r.get_opt("upwind_time").and_then(|v| v.ok()).unwrap_or(0);
+                    let rcms: u64 = r.get_opt("reaching_time").and_then(|v| v.ok()).unwrap_or(0);
+                    let rnms: u64 = r.get_opt("running_time").and_then(|v| v.ok()).unwrap_or(0);
+                    (t, s, m, u, rc, rn, ums, rcms, rnms)
                 })
-                .unwrap_or((0.0, 0.0, 0.0));
-            day_map.insert(today_str, (total, sail, motor));
+                .unwrap_or((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0));
+            day_map.insert(
+                today_str,
+                (total, sail, motor, upwind, reaching, running, upwind_ms, reaching_ms, running_ms),
+            );
         }
 
         // Step 5: Assemble sorted result over [start_dt, end_dt]; skip zero-distance days
@@ -2002,7 +2386,7 @@ impl VesselDatabase {
         let mut d = start_dt;
         while d <= end_dt {
             let s = d.format("%Y-%m-%d").to_string();
-            if let Some(&(total, sail, motor)) = day_map.get(&s) {
+            if let Some(&(total, sail, motor, _, _, _, _, _, _)) = day_map.get(&s) {
                 if total > 0.0 {
                     days.push(HeatmapDay {
                         date: s,
@@ -2265,6 +2649,7 @@ mod tests {
                 engine_on: false,
                 lat: Some(40.0 + i as f64 * dist_per_point * deg_per_nm),
                 lon: Some(2.0),
+                wind_angle_deg: None,
             })
             .collect()
     }
@@ -2341,6 +2726,62 @@ mod tests {
         assert!((seg.average_speed_kn - 6.0).abs() < 0.1);
         // ...but 25nm never fits in a 2.5nm leg.
         assert!(leg.fastest_25nm.is_none());
+    }
+
+    #[test]
+    fn finalize_leg_buckets_point_of_sail() {
+        let records = vec![
+            LegRecord {
+                timestamp: "2026-01-01T00:00:00.000Z".to_string(),
+                speed_kn: 6.0,
+                distance_nm: 1.0,
+                time_ms: 60_000,
+                engine_on: false,
+                lat: Some(50.0),
+                lon: Some(-1.0),
+                wind_angle_deg: Some(30.0), // upwind
+            },
+            LegRecord {
+                timestamp: "2026-01-01T00:01:00.000Z".to_string(),
+                speed_kn: 6.0,
+                distance_nm: 1.0,
+                time_ms: 60_000,
+                engine_on: false,
+                lat: Some(50.01),
+                lon: Some(-1.0),
+                wind_angle_deg: Some(90.0), // reaching
+            },
+            LegRecord {
+                timestamp: "2026-01-01T00:02:00.000Z".to_string(),
+                speed_kn: 6.0,
+                distance_nm: 1.0,
+                time_ms: 60_000,
+                engine_on: false,
+                lat: Some(50.02),
+                lon: Some(-1.0),
+                wind_angle_deg: Some(150.0), // running
+            },
+            LegRecord {
+                timestamp: "2026-01-01T00:03:00.000Z".to_string(),
+                speed_kn: 6.0,
+                distance_nm: 1.0,
+                time_ms: 60_000,
+                engine_on: true, // motoring — must not count toward any bucket
+                lat: Some(50.03),
+                lon: Some(-1.0),
+                wind_angle_deg: Some(30.0),
+            },
+        ];
+
+        let leg = finalize_leg(&records, 1, records[0].lat, records[0].lon)
+            .expect("leg should finalize — total distance exceeds the 0.5nm minimum");
+
+        assert_approx_equal(leg.upwind_distance_nm, 1.0, 0.001, "upwind_distance_nm");
+        assert_approx_equal(leg.reaching_distance_nm, 1.0, 0.001, "reaching_distance_nm");
+        assert_approx_equal(leg.running_distance_nm, 1.0, 0.001, "running_distance_nm");
+        assert_eq!(leg.upwind_time_ms, 60_000);
+        assert_eq!(leg.reaching_time_ms, 60_000);
+        assert_eq!(leg.running_time_ms, 60_000);
     }
 
     #[test]
@@ -2463,6 +2904,65 @@ mod tests {
             .expect("expected a cached row");
         assert_eq!(cached.legs[0].fastest_1nm, fastest_1nm_before);
         assert_eq!(cached.legs[0].max_speed_kn, max_speed_before);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_trip_legs_cache_round_trips_point_of_sail() {
+        let db = setup_db();
+        let leg = TripLeg {
+            leg_number: 1,
+            start_timestamp: "2026-01-01T00:00:00.000Z".to_string(),
+            end_timestamp: "2026-01-01T01:00:00.000Z".to_string(),
+            total_distance_nm: 3.0,
+            sailing_distance_nm: 3.0,
+            motoring_distance_nm: 0.0,
+            sailing_time_ms: 180_000,
+            motoring_time_ms: 0,
+            sailing_time_formatted: "3m".to_string(),
+            motoring_time_formatted: "0s".to_string(),
+            upwind_distance_nm: 1.0,
+            reaching_distance_nm: 1.0,
+            running_distance_nm: 1.0,
+            upwind_time_ms: 60_000,
+            reaching_time_ms: 60_000,
+            running_time_ms: 60_000,
+            start_lat: Some(50.0),
+            start_lon: Some(-1.0),
+            end_lat: Some(50.1),
+            end_lon: Some(-1.1),
+            nav_start_timestamp: None,
+            nav_end_timestamp: None,
+            nav_distance_nm: 0.0,
+            nav_time_ms: 0,
+            nav_detection_method: None,
+            max_speed_kn: None,
+            max_speed_timestamp: None,
+            fastest_1nm: None,
+            fastest_5nm: None,
+            fastest_10nm: None,
+            fastest_25nm: None,
+        };
+        // get_cached_trip_legs is the only path that runs the ALTER TABLE self-migration (see
+        // test_trip_legs_cache_round_trips_speed_records above) — call it once before saving so
+        // this test doesn't depend on another test having already migrated the shared,
+        // non-truncated trip_legs_cache table first. invalidate_trip_legs_cache then clears any
+        // stale trip_id=1/leg_number=1 row a previous run of this test (or an unrelated test using
+        // the same hardcoded trip_id) may have left behind — INSERT IGNORE below would otherwise
+        // silently keep that stale row instead of the fresh point-of-sail values.
+        db.get_cached_trip_legs_for_test(1)
+            .expect("get_cached_trip_legs failed (pre-save schema migration)");
+        db.invalidate_trip_legs_cache(1)
+            .expect("invalidate_trip_legs_cache failed (pre-save cleanup)");
+        db.save_trip_legs_to_cache_for_test(1, &[leg]).unwrap();
+        let cached = db.get_cached_trip_legs_for_test(1).unwrap().expect("cache row should exist");
+        let cached_leg = &cached.legs[0];
+        assert_approx_equal(cached_leg.upwind_distance_nm, 1.0, 0.001, "upwind_distance_nm");
+        assert_approx_equal(cached_leg.reaching_distance_nm, 1.0, 0.001, "reaching_distance_nm");
+        assert_approx_equal(cached_leg.running_distance_nm, 1.0, 0.001, "running_distance_nm");
+        assert_eq!(cached_leg.upwind_time_ms, 60_000);
+        assert_eq!(cached_leg.reaching_time_ms, 60_000);
+        assert_eq!(cached_leg.running_time_ms, 60_000);
     }
 
     fn setup_db() -> VesselDatabase {
@@ -2837,6 +3337,33 @@ mod tests {
         assert!(missing.is_none(), "Non-existent UUID must return None");
     }
 
+    #[test]
+    #[ignore]
+    fn test_fetch_trip_includes_point_of_sail() {
+        let db = setup_db();
+        let start = SystemTime::now();
+        let trip_id = add_test_trip(
+            &db, "POS API".to_string(), start,
+            start + Duration::from_secs(300), 5.0, 0.0, 300_000, 0, 0,
+        ).unwrap();
+        let mut conn = db.pool.get_conn().unwrap();
+        conn.exec_drop(
+            "UPDATE trips SET total_distance_upwind = 2.0, total_distance_reaching = 2.0,
+                    total_distance_running = 1.0, total_time_upwind = 120000,
+                    total_time_reaching = 120000, total_time_running = 60000
+             WHERE id = :id",
+            mysql::params! { "id" => trip_id },
+        ).unwrap();
+
+        let trip = db.fetch_trip(trip_id).unwrap().expect("trip should exist");
+        assert_approx_equal(trip.upwind_distance_nm, 2.0, 0.001, "upwind_distance_nm");
+        assert_approx_equal(trip.reaching_distance_nm, 2.0, 0.001, "reaching_distance_nm");
+        assert_approx_equal(trip.running_distance_nm, 1.0, 0.001, "running_distance_nm");
+        assert_eq!(trip.upwind_time_ms, 120_000);
+        assert_eq!(trip.reaching_time_ms, 120_000);
+        assert_eq!(trip.running_time_ms, 60_000);
+    }
+
     // -----------------------------------------------------------------------
     // Heatmap caching tests
     // All use past dates (2020-06-xx) so they always fall into the "cacheable"
@@ -3075,6 +3602,43 @@ mod tests {
 
     #[test]
     #[ignore]
+    fn test_fetch_heatmap_populates_point_of_sail_cache() {
+        let db = setup_db();
+        let day = chrono::Utc::now().date_naive() - chrono::Duration::days(5);
+        let day_start = day.and_hms_opt(10, 0, 0).unwrap();
+        let ts = SystemTime::UNIX_EPOCH
+            + Duration::from_secs(day_start.and_utc().timestamp() as u64);
+
+        // Sailing, upwind: 2.0 nm / 60_000 ms
+        add_test_vessel_status(
+            &db, ts, 50.0, -1.0, 6.0, 6.0,
+            Some(12.0), Some(20.0), false, EngineStatus::Off, 2.0, 60_000, None, None,
+        ).unwrap();
+        // Sailing, reaching: 1.0 nm / 30_000 ms
+        add_test_vessel_status(
+            &db, ts + Duration::from_secs(60), 50.01, -1.0, 6.0, 6.0,
+            Some(12.0), Some(90.0), false, EngineStatus::Off, 1.0, 30_000, None, None,
+        ).unwrap();
+
+        db.fetch_heatmap(chrono::Utc::now().date_naive()).unwrap();
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let row: (f64, f64, u64, u64) = conn
+            .exec_first(
+                "SELECT upwind_distance_nm, reaching_distance_nm, upwind_time_ms, reaching_time_ms
+                 FROM heatmap_cache WHERE date = :d",
+                mysql::params! { "d" => day.format("%Y-%m-%d").to_string() },
+            )
+            .unwrap()
+            .unwrap();
+        assert_approx_equal(row.0, 2.0, 0.001, "upwind_distance_nm");
+        assert_approx_equal(row.1, 1.0, 0.001, "reaching_distance_nm");
+        assert_eq!(row.2, 60_000, "upwind_time_ms");
+        assert_eq!(row.3, 30_000, "reaching_time_ms");
+    }
+
+    #[test]
+    #[ignore]
     fn test_heatmap_gap_triggers_partial_recompute() {
         let db = setup_db();
         clear_heatmap_cache(&db);
@@ -3159,5 +3723,34 @@ mod tests {
             0.001,
             "current month motoring distance should include uncached today",
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn test_fetch_monthly_statistics_includes_point_of_sail() {
+        let db = setup_db();
+        clear_heatmap_cache(&db);
+        let mut conn = db.pool.get_conn().unwrap();
+        conn.exec_drop(
+            "INSERT INTO heatmap_cache
+                (date, distance_nm, sailing_distance_nm, motoring_distance_nm,
+                 upwind_distance_nm, reaching_distance_nm, running_distance_nm,
+                 upwind_time_ms, reaching_time_ms, running_time_ms)
+             VALUES ('2025-06-15', 6.0, 6.0, 0.0, 2.0, 3.0, 1.0, 60000, 90000, 30000)",
+            (),
+        ).unwrap();
+
+        let stats = db.fetch_monthly_statistics().unwrap();
+        let june_2025 = stats
+            .months
+            .iter()
+            .find(|m| m.year == 2025 && m.month == 6)
+            .expect("June 2025 should be present");
+        assert_approx_equal(june_2025.upwind_distance_nm, 2.0, 0.001, "upwind_distance_nm");
+        assert_approx_equal(june_2025.reaching_distance_nm, 3.0, 0.001, "reaching_distance_nm");
+        assert_approx_equal(june_2025.running_distance_nm, 1.0, 0.001, "running_distance_nm");
+        assert_eq!(june_2025.upwind_time_ms, 60_000);
+        assert_eq!(june_2025.reaching_time_ms, 90_000);
+        assert_eq!(june_2025.running_time_ms, 30_000);
     }
 }

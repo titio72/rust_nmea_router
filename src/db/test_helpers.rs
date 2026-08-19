@@ -364,6 +364,12 @@ pub fn fetch_trip_by_timestamp(
             total_time_sailing,
             total_time_motoring,
             total_time_moored,
+            total_distance_upwind: 0.0,
+            total_distance_reaching: 0.0,
+            total_distance_running: 0.0,
+            total_time_upwind: 0,
+            total_time_reaching: 0,
+            total_time_running: 0,
         }))
     } else {
         Ok(None)

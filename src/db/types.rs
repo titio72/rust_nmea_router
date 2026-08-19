@@ -64,6 +64,12 @@ pub struct TripSummary {
     pub moored_time_ms: i64,
     pub sailing_distance_nm: f64,
     pub motoring_distance_nm: f64,
+    pub upwind_distance_nm: f64,
+    pub reaching_distance_nm: f64,
+    pub running_distance_nm: f64,
+    pub upwind_time_ms: i64,
+    pub reaching_time_ms: i64,
+    pub running_time_ms: i64,
 }
 
 impl TripSummary {
@@ -143,6 +149,12 @@ pub struct TripLeg {
     pub motoring_time_ms: u64,
     pub sailing_time_formatted: String,
     pub motoring_time_formatted: String,
+    pub upwind_distance_nm: f64,
+    pub reaching_distance_nm: f64,
+    pub running_distance_nm: f64,
+    pub upwind_time_ms: u64,
+    pub reaching_time_ms: u64,
+    pub running_time_ms: u64,
     pub start_lat: Option<f64>,
     pub start_lon: Option<f64>,
     pub end_lat: Option<f64>,
@@ -220,6 +232,12 @@ pub struct MonthlyStatistic {
     pub date: String,
     pub sailing_distance_nm: f64,
     pub motoring_distance_nm: f64,
+    pub upwind_distance_nm: f64,
+    pub reaching_distance_nm: f64,
+    pub running_distance_nm: f64,
+    pub upwind_time_ms: u64,
+    pub reaching_time_ms: u64,
+    pub running_time_ms: u64,
 }
 
 #[derive(Debug, serde::Serialize)]

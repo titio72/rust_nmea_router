@@ -89,6 +89,12 @@ CREATE TABLE IF NOT EXISTS trips (
     total_time_sailing BIGINT NOT NULL DEFAULT 0 COMMENT 'Time spent sailing in milliseconds',
     total_time_motoring BIGINT NOT NULL DEFAULT 0 COMMENT 'Time spent motoring in milliseconds',
     total_time_moored BIGINT NOT NULL DEFAULT 0 COMMENT 'Time spent moored in milliseconds',
+    total_distance_upwind DOUBLE NOT NULL DEFAULT 0 COMMENT 'Sailing distance with folded TWA <= 60 deg, in nautical miles',
+    total_distance_reaching DOUBLE NOT NULL DEFAULT 0 COMMENT 'Sailing distance with folded TWA 60-120 deg, in nautical miles',
+    total_distance_running DOUBLE NOT NULL DEFAULT 0 COMMENT 'Sailing distance with folded TWA >= 120 deg, in nautical miles',
+    total_time_upwind BIGINT NOT NULL DEFAULT 0 COMMENT 'Sailing time with folded TWA <= 60 deg, in milliseconds',
+    total_time_reaching BIGINT NOT NULL DEFAULT 0 COMMENT 'Sailing time with folded TWA 60-120 deg, in milliseconds',
+    total_time_running BIGINT NOT NULL DEFAULT 0 COMMENT 'Sailing time with folded TWA >= 120 deg, in milliseconds',
     uuid CHAR(36) NULL COMMENT 'UUID v4 for portable trip identification (used for import deduplication)',
     updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'Bumped by MariaDB on any UPDATE to this row; drives remote sync change-detection',
     INDEX idx_end_timestamp (end_timestamp),
@@ -104,6 +110,15 @@ COMMENT='Stores vessel trips with sailing vs motoring breakdown';
 -- ALTER TABLE trips ADD INDEX idx_trips_time_range (start_timestamp, end_timestamp);
 -- ALTER TABLE trips ADD COLUMN updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'Bumped by MariaDB on any UPDATE to this row; drives remote sync change-detection';
 -- UPDATE trips SET updated_at = end_timestamp; -- backfill so only edits made after this migration trigger a re-sync
+-- One statement per column on purpose: a combined multi-column ALTER fails
+-- atomically as soon as one of the columns already exists.
+-- (VesselDatabase::new() applies these same statements best-effort at startup.)
+-- ALTER TABLE trips ADD COLUMN total_distance_upwind DOUBLE NOT NULL DEFAULT 0;
+-- ALTER TABLE trips ADD COLUMN total_distance_reaching DOUBLE NOT NULL DEFAULT 0;
+-- ALTER TABLE trips ADD COLUMN total_distance_running DOUBLE NOT NULL DEFAULT 0;
+-- ALTER TABLE trips ADD COLUMN total_time_upwind BIGINT NOT NULL DEFAULT 0;
+-- ALTER TABLE trips ADD COLUMN total_time_reaching BIGINT NOT NULL DEFAULT 0;
+-- ALTER TABLE trips ADD COLUMN total_time_running BIGINT NOT NULL DEFAULT 0;
 
 -- ============================================================================
 -- HEATMAP CACHE TABLE
@@ -115,6 +130,12 @@ CREATE TABLE IF NOT EXISTS heatmap_cache (
     distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Total distance (sailing + motoring) in nautical miles',
     sailing_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Distance with engine off (engine_on=0) in nautical miles',
     motoring_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Distance with engine on (engine_on=1) in nautical miles',
+    upwind_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Sailing distance with folded TWA <= 60 deg, in nautical miles',
+    reaching_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Sailing distance with folded TWA 60-120 deg, in nautical miles',
+    running_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Sailing distance with folded TWA >= 120 deg, in nautical miles',
+    upwind_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Sailing time with folded TWA <= 60 deg, in milliseconds',
+    reaching_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Sailing time with folded TWA 60-120 deg, in milliseconds',
+    running_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Sailing time with folded TWA >= 120 deg, in milliseconds',
     PRIMARY KEY (date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Per-day heatmap distance cache; recomputed only for missing past days and today';
@@ -122,7 +143,13 @@ COMMENT='Per-day heatmap distance cache; recomputed only for missing past days a
 -- For existing databases, run:
 -- ALTER TABLE heatmap_cache
 --     ADD COLUMN IF NOT EXISTS sailing_distance_nm DOUBLE NOT NULL DEFAULT 0,
---     ADD COLUMN IF NOT EXISTS motoring_distance_nm DOUBLE NOT NULL DEFAULT 0;
+--     ADD COLUMN IF NOT EXISTS motoring_distance_nm DOUBLE NOT NULL DEFAULT 0,
+--     ADD COLUMN IF NOT EXISTS upwind_distance_nm DOUBLE NOT NULL DEFAULT 0,
+--     ADD COLUMN IF NOT EXISTS reaching_distance_nm DOUBLE NOT NULL DEFAULT 0,
+--     ADD COLUMN IF NOT EXISTS running_distance_nm DOUBLE NOT NULL DEFAULT 0,
+--     ADD COLUMN IF NOT EXISTS upwind_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0,
+--     ADD COLUMN IF NOT EXISTS reaching_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0,
+--     ADD COLUMN IF NOT EXISTS running_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0;
 
 -- Pre-computed leg breakdown per trip. Invalidated on trip mutation (trim/delete) and repopulated
 -- on the next fetch. Only closed trips (end_timestamp > 24h ago) are cached.
@@ -137,6 +164,12 @@ CREATE TABLE IF NOT EXISTS trip_legs_cache (
     motoring_distance_nm DOUBLE          NOT NULL DEFAULT 0,
     sailing_time_ms      BIGINT UNSIGNED NOT NULL DEFAULT 0,
     motoring_time_ms     BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    upwind_distance_nm   DOUBLE          NOT NULL DEFAULT 0,
+    reaching_distance_nm DOUBLE          NOT NULL DEFAULT 0,
+    running_distance_nm  DOUBLE          NOT NULL DEFAULT 0,
+    upwind_time_ms       BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    reaching_time_ms     BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    running_time_ms      BIGINT UNSIGNED NOT NULL DEFAULT 0,
     start_lat            DOUBLE          NULL COMMENT 'Latitude at leg start in decimal degrees',
     start_lon            DOUBLE          NULL COMMENT 'Longitude at leg start in decimal degrees',
     end_lat              DOUBLE          NULL COMMENT 'Latitude at leg end in decimal degrees',
