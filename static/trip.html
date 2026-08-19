@@ -1313,6 +1313,20 @@
             }
         }
 
+        function smoothSeries(values, windowSize) {
+            const half = Math.floor(windowSize / 2);
+            return values.map((_, i) => {
+                let sum = 0, count = 0;
+                for (let j = Math.max(0, i - half); j <= Math.min(values.length - 1, i + half); j++) {
+                    if (values[j] != null) {
+                        sum += values[j];
+                        count++;
+                    }
+                }
+                return count > 0 ? sum / count : null;
+            });
+        }
+
         function createSpeedChart(trackData) {
             const ctx = document.getElementById('speedChart').getContext('2d');
             const colors = getChartColors();
@@ -1324,7 +1338,9 @@
                 y: point.avg_speed_kn
             }));
 
-            const hasPolar = validData.some(p => p.polar_ratio != null);
+            const hasPolar = validData.some(p => p.polar_speed_kn != null);
+
+            const smoothedSpeed = smoothSeries(validData.map(p => p.avg_speed_kn), 15);
 
             const datasets = [{
                 label: 'Average Speed (knots)',
@@ -1336,31 +1352,32 @@
                 pointRadius: 0,
                 borderWidth: 1,
                 pointHoverRadius: 5,
-                yAxisID: 'y'
+                yAxisID: 'y',
+                order: 2
+            }, {
+                label: 'Smoothed Speed (knots)',
+                data: validData.map((p, i) => ({ x: chartUtcDate(p.timestamp), y: smoothedSpeed[i] })),
+                borderColor: '#f39c12',
+                borderWidth: 3,
+                pointRadius: 0,
+                fill: false,
+                tension: 0.3,
+                yAxisID: 'y',
+                order: 1
             }];
 
             if (hasPolar) {
+                const smoothedPolar = smoothSeries(validData.map(p => p.polar_speed_kn), 15);
                 datasets.push({
-                    label: '_polar_ref',
-                    data: validData.map(p => ({ x: chartUtcDate(p.timestamp), y: 100 })),
-                    borderColor: 'rgba(76, 175, 80, 0.25)',
-                    borderDash: [4, 4],
-                    borderWidth: 1,
-                    pointRadius: 0,
-                    fill: false,
-                    tension: 0,
-                    yAxisID: 'y1'
-                });
-                datasets.push({
-                    label: 'Polar %',
-                    data: validData.map(p => ({ x: chartUtcDate(p.timestamp), y: p.polar_ratio })),
+                    label: 'Polar Target Speed (knots)',
+                    data: validData.map((p, i) => ({ x: chartUtcDate(p.timestamp), y: smoothedPolar[i] })),
                     borderColor: '#4caf50',
                     borderDash: [5, 3],
                     borderWidth: 1.5,
                     pointRadius: 0,
                     fill: false,
                     tension: 0.4,
-                    yAxisID: 'y1'
+                    yAxisID: 'y'
                 });
             }
 
@@ -1374,24 +1391,11 @@
                 x: getTimeXScale(colors)
             };
 
-            if (hasPolar) {
-                scales.y1 = {
-                    type: 'linear',
-                    position: 'right',
-                    min: 0,
-                    max: 150,
-                    title: { display: true, text: 'Polar %', color: colors.text },
-                    ticks: { color: colors.text, callback: function(v) { return v + '%'; } },
-                    grid: { display: false }
-                };
-            }
-
             const plugins = {
                 legend: {
                     display: hasPolar,
                     labels: {
-                        color: colors.text,
-                        filter: item => item.text !== '_polar_ref'
+                        color: colors.text
                     }
                 },
                 title: {
