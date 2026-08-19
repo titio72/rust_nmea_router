@@ -321,6 +321,47 @@
         document.getElementById('headerContainer').innerHTML = createHeaderBar('trips');
         initializeTheme();
 
+        // This page always displays timestamps in UTC (vessel data has no meaningful
+        // "local" timezone), overriding the local-time formatters from shared-theme.js.
+        // Every formatted timestamp is suffixed " UTC" so it's never mistaken for local time.
+        function formatDate(dateStr) {
+            if (!dateStr) return 'Unknown';
+            try {
+                const date = new Date(dateStr);
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit', timeZone: 'UTC' }) + ' UTC';
+            } catch (e) {
+                return dateStr;
+            }
+        }
+
+        function formatTime(dateStr) {
+            if (!dateStr) return '';
+            try {
+                return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
+            } catch (e) {
+                return dateStr;
+            }
+        }
+
+        function formatDateTime(dateStr) {
+            if (!dateStr) return '';
+            try {
+                const date = new Date(dateStr);
+                return date.toLocaleDateString('en-US', { timeZone: 'UTC' }) + ' ' +
+                    date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
+            } catch (e) {
+                return dateStr;
+            }
+        }
+
+        // Chart.js's date-fns time adapter always renders using the browser's local
+        // timezone with no UTC option, so chart axis/tooltip dates are shifted by the
+        // local UTC offset before being handed to Chart.js, making them display as UTC.
+        function chartUtcDate(dateStr) {
+            const d = new Date(dateStr);
+            return new Date(d.getTime() + d.getTimezoneOffset() * 60000);
+        }
+
         function showMapFallback(message) {
             const mapElement = document.getElementById('map');
             if (mapElement) {
@@ -445,7 +486,12 @@
                     maxRotation: 45,
                     minRotation: 45
                 },
-                grid: { color: colors.grid }
+                grid: { color: colors.grid },
+                title: {
+                    display: true,
+                    text: 'Time (UTC)',
+                    color: colors.text
+                }
             };
         }
 
@@ -461,20 +507,20 @@
             // Mooring gap before first leg
             const firstLegStart = new Date(sortedLegs[0].start_timestamp).getTime();
             if (firstLegStart > tripStartMs) {
-                bands.push({ start: new Date(tripStart), end: new Date(sortedLegs[0].start_timestamp), type: 'moored' });
+                bands.push({ start: chartUtcDate(tripStart), end: chartUtcDate(sortedLegs[0].start_timestamp), type: 'moored' });
             }
 
             for (let i = 0; i < sortedLegs.length; i++) {
-                bands.push({ start: new Date(sortedLegs[i].start_timestamp), end: new Date(sortedLegs[i].end_timestamp), type: 'nav' });
+                bands.push({ start: chartUtcDate(sortedLegs[i].start_timestamp), end: chartUtcDate(sortedLegs[i].end_timestamp), type: 'nav' });
                 if (i + 1 < sortedLegs.length) {
-                    bands.push({ start: new Date(sortedLegs[i].end_timestamp), end: new Date(sortedLegs[i + 1].start_timestamp), type: 'moored' });
+                    bands.push({ start: chartUtcDate(sortedLegs[i].end_timestamp), end: chartUtcDate(sortedLegs[i + 1].start_timestamp), type: 'moored' });
                 }
             }
 
             // Mooring gap after last leg
             const lastLegEnd = new Date(sortedLegs[sortedLegs.length - 1].end_timestamp).getTime();
             if (lastLegEnd < tripEndMs) {
-                bands.push({ start: new Date(sortedLegs[sortedLegs.length - 1].end_timestamp), end: new Date(tripEnd), type: 'moored' });
+                bands.push({ start: chartUtcDate(sortedLegs[sortedLegs.length - 1].end_timestamp), end: chartUtcDate(tripEnd), type: 'moored' });
             }
 
             return bands;
@@ -1274,7 +1320,7 @@
             const validData = trackData.filter(point => !point.moored && point.avg_speed_kn > 0.1);
 
             const chartData = validData.map(point => ({
-                x: new Date(point.timestamp),
+                x: chartUtcDate(point.timestamp),
                 y: point.avg_speed_kn
             }));
 
@@ -1296,7 +1342,7 @@
             if (hasPolar) {
                 datasets.push({
                     label: '_polar_ref',
-                    data: validData.map(p => ({ x: new Date(p.timestamp), y: 100 })),
+                    data: validData.map(p => ({ x: chartUtcDate(p.timestamp), y: 100 })),
                     borderColor: 'rgba(76, 175, 80, 0.25)',
                     borderDash: [4, 4],
                     borderWidth: 1,
@@ -1307,7 +1353,7 @@
                 });
                 datasets.push({
                     label: 'Polar %',
-                    data: validData.map(p => ({ x: new Date(p.timestamp), y: p.polar_ratio })),
+                    data: validData.map(p => ({ x: chartUtcDate(p.timestamp), y: p.polar_ratio })),
                     borderColor: '#4caf50',
                     borderDash: [5, 3],
                     borderWidth: 1.5,
@@ -1397,7 +1443,7 @@
                     heading = heading - 360;
                 }
                 return {
-                    x: new Date(point.timestamp),
+                    x: chartUtcDate(point.timestamp),
                     y: heading
                 };
             });
@@ -1472,7 +1518,7 @@
 
             // Convert data to time-scale format with proper Date objects
             const chartData = validData.map(point => ({
-                x: new Date(point.timestamp),
+                x: chartUtcDate(point.timestamp),
                 y: point.average_wind_speed_kn
             }));
 
@@ -1535,7 +1581,7 @@
                     direction = direction - 360;
                 }
                 return {
-                    x: new Date(point.timestamp),
+                    x: chartUtcDate(point.timestamp),
                     y: direction
                 };
             });
@@ -1617,7 +1663,7 @@
 
             // Convert from Pascals to millibars (1 mbar = 100 Pa), use time-based x-axis
             const chartData = pressureData.map(point => ({
-                x: new Date(point.timestamp),
+                x: chartUtcDate(point.timestamp),
                 y: point.avg_value / 100
             }));
 
@@ -1680,7 +1726,7 @@
             const windDirData = metricData.map(point => {
                 let direction = point.avg_value;
                 if (normalized && direction > 180) direction = direction - 360;
-                return { x: new Date(point.timestamp), y: direction };
+                return { x: chartUtcDate(point.timestamp), y: direction };
             });
 
             // Build datasets for wind direction
@@ -1699,7 +1745,7 @@
 
             // Add wind speed dataset if available (also time-based)
             if (windSpeedData && windSpeedData.length > 0) {
-                const windSpeedChartData = windSpeedData.map(point => ({ x: new Date(point.timestamp), y: point.avg_value }));
+                const windSpeedChartData = windSpeedData.map(point => ({ x: chartUtcDate(point.timestamp), y: point.avg_value }));
                 datasets.push({
                     label: 'Wind Speed (knots)',
                     data: windSpeedChartData,
@@ -1928,7 +1974,7 @@
                 });
             }
 
-            const chartData = cabinTempData.map(point => ({ x: new Date(point.timestamp), y: point.avg_value }));
+            const chartData = cabinTempData.map(point => ({ x: chartUtcDate(point.timestamp), y: point.avg_value }));
 
             return new Chart(ctx, {
                 type: 'line',
@@ -1982,7 +2028,7 @@
                 });
             }
 
-            const chartData = humidityData.map(point => ({ x: new Date(point.timestamp), y: point.avg_value }));
+            const chartData = humidityData.map(point => ({ x: chartUtcDate(point.timestamp), y: point.avg_value }));
 
             return new Chart(ctx, {
                 type: 'line',
@@ -2038,7 +2084,7 @@
                 });
             }
 
-            const chartData = rollData.map(point => ({ x: new Date(point.timestamp), y: point.avg_value }));
+            const chartData = rollData.map(point => ({ x: chartUtcDate(point.timestamp), y: point.avg_value }));
 
             return new Chart(ctx, {
                 type: 'line',
@@ -2210,7 +2256,9 @@
                 }
                 if (!closest) continue;
 
-                const hourLabel = new Date(hourMs).toISOString().slice(11, 16); // HH:MM UTC
+                // "Z" (Zulu time) is the compact maritime notation for UTC — used here
+                // instead of " UTC" because the badge is only 48px wide.
+                const hourLabel = new Date(hourMs).toISOString().slice(11, 16) + 'Z';
 
                 const svg = [
                     '<svg xmlns="http://www.w3.org/2000/svg" width="50" height="32">',
@@ -2227,10 +2275,105 @@
                         iconSize: [50, 32],
                         iconAnchor: [25, 28]
                     }),
-                    title: hourLabel + ' UTC',
+                    title: hourLabel,
                     zIndexOffset: 500
                 }).addTo(map);
             }
+        }
+
+        // Wind arrows: originate at track points, pointing toward the direction
+        // the wind is blowing. Length scales with wind speed; color follows the
+        // same blue-green-yellow-red wind intensity scale used in plan.html.
+        // Density (spacing between arrows) is fixed in screen pixels, so it is
+        // re-sampled on zoom to keep ~20-30px between arrows at any zoom level.
+        const WIND_ARROW_MIN_SPACING_PX = 25;
+        const WIND_ARROW_MIN_LEN_PX = 14;
+        const WIND_ARROW_MAX_LEN_PX = 46;
+        const WIND_ARROW_SPEED_SCALE_PX_PER_KN = 2.5;
+        const WIND_ARROW_HEAD_PX = 8;
+
+        function interpolateColorStops(speed, stops) {
+            const kn = Math.max(speed || 0, 0);
+            if (kn <= stops[0][0]) return `rgb(${stops[0][1].join(',')})`;
+            if (kn >= stops[stops.length - 1][0]) return `rgb(${stops[stops.length - 1][1].join(',')})`;
+            for (let i = 1; i < stops.length; i++) {
+                if (kn <= stops[i][0]) {
+                    const t = (kn - stops[i-1][0]) / (stops[i][0] - stops[i-1][0]);
+                    const c = stops[i-1][1].map((a, j) => Math.round(a + t * (stops[i][1][j] - a)));
+                    return `rgb(${c.join(',')})`;
+                }
+            }
+        }
+
+        function windColor(speed) {
+            return interpolateColorStops(speed, [
+                [0,  [170, 170, 170]],
+                [4,  [30,  160, 255]],
+                [7,  [0,   210, 180]],
+                [10, [0,   190,  60]],
+                [16, [220, 210,   0]],
+                [22, [255, 140,   0]],
+                [28, [220,  30,   0]],
+            ]);
+        }
+
+        function windArrowIcon(bearingDeg, lenPx, color) {
+            const R = WIND_ARROW_MAX_LEN_PX + WIND_ARROW_HEAD_PX + 2;
+            const headW = WIND_ARROW_HEAD_PX * 0.7;
+            const svg = [
+                '<svg xmlns="http://www.w3.org/2000/svg" width="' + (2 * R) + '" height="' + (2 * R) +
+                    '" viewBox="' + (-R) + ' ' + (-R) + ' ' + (2 * R) + ' ' + (2 * R) + '">',
+                '<g transform="rotate(' + bearingDeg.toFixed(1) + ')">',
+                '<line x1="0" y1="0" x2="0" y2="' + (-lenPx) + '" stroke="' + color + '" stroke-width="2.5" stroke-linecap="round"/>',
+                '<path d="M 0,' + (-lenPx - WIND_ARROW_HEAD_PX) + ' L ' + (-headW) + ',' + (-lenPx + 2) +
+                    ' L ' + headW + ',' + (-lenPx + 2) + ' Z" fill="' + color + '"/>',
+                '</g>',
+                '</svg>'
+            ].join('');
+
+            return L.icon({
+                iconUrl: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
+                iconSize: [2 * R, 2 * R],
+                iconAnchor: [R, R]
+            });
+        }
+
+        function initWindArrows(map, trackPoints) {
+            const validPoints = trackPoints.filter(p =>
+                p.average_wind_speed_kn != null &&
+                p.average_wind_angle_deg != null &&
+                p.average_heading_deg != null
+            );
+            if (validPoints.length === 0) return;
+
+            const layer = L.layerGroup().addTo(map);
+
+            function redraw() {
+                layer.clearLayers();
+                let lastPixel = null;
+                for (const pt of validPoints) {
+                    const pixel = map.latLngToLayerPoint([pt.latitude, pt.longitude]);
+                    if (lastPixel && pixel.distanceTo(lastPixel) < WIND_ARROW_MIN_SPACING_PX) continue;
+                    lastPixel = pixel;
+
+                    let bearing = (pt.average_heading_deg + pt.average_wind_angle_deg + 180) % 360;
+                    if (bearing < 0) bearing += 360;
+
+                    const len = Math.min(
+                        WIND_ARROW_MAX_LEN_PX,
+                        WIND_ARROW_MIN_LEN_PX + pt.average_wind_speed_kn * WIND_ARROW_SPEED_SCALE_PX_PER_KN
+                    );
+
+                    L.marker([pt.latitude, pt.longitude], {
+                        icon: windArrowIcon(bearing, len, windColor(pt.average_wind_speed_kn)),
+                        interactive: false,
+                        zIndexOffset: -100
+                    }).addTo(layer);
+                }
+            }
+
+            redraw();
+            map.on('zoomend', redraw);
         }
 
         function initializeMap(trackData, isFullTrip, navStartTs, navEndTs) {
@@ -2295,6 +2438,7 @@
 
             if (!isFullTrip) {
                 addHourlyMarkers(map, validTrackPoints);
+                initWindArrows(map, validTrackPoints);
             }
 
             if (validTrackPoints.length > 0) {
@@ -2402,8 +2546,8 @@
                 const heading = nearest.average_heading_deg != null ? nearest.average_heading_deg.toFixed(0) + '°' : 'N/A';
                 const wind    = nearest.average_wind_speed_kn != null ? nearest.average_wind_speed_kn.toFixed(1) + ' kn' : 'N/A';
                 let absWindDir = 'N/A';
-                if (nearest.absolute_wind_direction_deg != null && nearest.average_heading_deg != null) {
-                    let d = (nearest.absolute_wind_direction_deg + nearest.average_heading_deg) % 360;
+                if (nearest.average_wind_angle_deg != null && nearest.average_heading_deg != null) {
+                    let d = (nearest.average_wind_angle_deg + nearest.average_heading_deg) % 360;
                     if (d < 0) d += 360;
                     absWindDir = d.toFixed(0) + '°';
                 }

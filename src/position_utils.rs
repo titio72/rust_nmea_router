@@ -147,59 +147,49 @@ impl PositionQueue {
         )
     }
 
+    /// Checks whether the vessel has stayed near a stable reference point.
+    ///
+    /// The reference point is the median position over `reference_window` (long,
+    /// e.g. 10 min) rather than the mean of `check_window` itself: a swing whose
+    /// period exceeds `check_window` (e.g. a slow current-driven anchor swing) only
+    /// shows part of its arc within a short window, biasing a same-window mean
+    /// toward whichever side of the arc it caught and making the boat look like
+    /// it's moving away from "itself". A longer, independently-computed reference
+    /// isn't affected by that partial-arc bias.
     pub fn is_stationary(
         &self,
-        time_window: Duration,
+        check_window: Duration,
+        reference_window: Duration,
+        min_reference_samples: usize,
         accuracy: f64,
         threshold_meters: f64,
         now: Instant,
     ) -> bool {
-        let cutoff = now - time_window;
+        let (_, reference) =
+            self.get_rolling_median_position(reference_window, min_reference_samples, now);
+        let Some(reference) = reference else {
+            return false; // not enough data yet to establish a reference point
+        };
 
-        // Get positions from the last X minutes
-        let mut iter = self.samples.iter().rev();
-        let mut recent_positions: Vec<&PositionSample> = Vec::new();
-        let mut sum_lat: f64 = f64::NAN;
-        let mut sum_lon: f64 = f64::NAN;
-        let mut count = 0;
-        while let Some(sample) = iter.clone().next() {
-            if sample.timestamp < cutoff {
-                break;
-            }
-            recent_positions.push(sample);
-            if sum_lat.is_nan() {
-                sum_lat = sample.position.latitude;
-            } else {
-                sum_lat += sample.position.latitude;
-            }
-            if sum_lon.is_nan() {
-                sum_lon = sample.position.longitude;
-            } else {
-                sum_lon += sample.position.longitude;
-            }
-            count += 1;
-            iter.next();
-        }
+        let cutoff = now - check_window;
+        let recent: Vec<&PositionSample> = self
+            .samples
+            .iter()
+            .rev()
+            .take_while(|s| s.timestamp >= cutoff)
+            .collect();
 
-        if count < 2 {
+        if recent.len() < 2 {
             // not enough positions to determine stationary
             return false;
         }
 
-        // Calculate the average position
-        let avg_lat = sum_lat / count as f64;
-        let avg_lon = sum_lon / count as f64;
-        let avg_position = Position {
-            latitude: avg_lat,
-            longitude: avg_lon,
-        };
-
-        // Check if all positions are within threshold of average position
-        recent_positions
+        // Check how many recent positions are within threshold of the reference point
+        recent
             .iter()
-            .filter(|p| (p.position.distance_to_nm(&avg_position) * 1852.0) <= threshold_meters)
+            .filter(|p| (p.position.distance_to_nm(&reference) * 1852.0) <= threshold_meters)
             .count()
-            >= (recent_positions.len() as f64 * accuracy) as usize // At least 90% within threshold
+            >= (recent.len() as f64 * accuracy) as usize
     }
 }
 
@@ -351,7 +341,14 @@ mod tests {
         }
 
         // Should detect as stationary with 30m threshold
-        assert!(queue.is_stationary(Duration::from_secs(180), 0.90, 30.0, now));
+        assert!(queue.is_stationary(
+            Duration::from_secs(180),
+            Duration::from_secs(180),
+            5,
+            0.90,
+            30.0,
+            now
+        ));
     }
 
     #[test]
@@ -369,7 +366,14 @@ mod tests {
         }
 
         // Should not detect as stationary with 30m threshold
-        assert!(!queue.is_stationary(Duration::from_secs(180), 0.90, 30.0, now));
+        assert!(!queue.is_stationary(
+            Duration::from_secs(180),
+            Duration::from_secs(180),
+            5,
+            0.90,
+            30.0,
+            now
+        ));
     }
 
     #[test]
@@ -387,7 +391,14 @@ mod tests {
         );
 
         // Should return false with < 2 samples
-        assert!(!queue.is_stationary(Duration::from_secs(60), 0.90, 30.0, now));
+        assert!(!queue.is_stationary(
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            2,
+            0.90,
+            30.0,
+            now
+        ));
     }
 
     #[test]

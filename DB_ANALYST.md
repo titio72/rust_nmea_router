@@ -32,7 +32,7 @@ to vessel_status and environmental_data manually.
 
 ### vessel_status
 - One row every 30 s while underway, every 30 min while moored
-- `is_moored` (BOOLEAN) — TRUE when position stable within 30 m radius for 2+ min
+- `is_moored` (BOOLEAN) — TRUE when position stable within 45 m radius of a 10-min reference point for 2+ min
 - `engine_on` (TINYINT) — 0 = off, 1 = on, 2 = unknown
 - `average_wind_speed_kn` / `average_wind_angle_deg` — true wind (nullable)
 - `average_speed_kn` / `max_speed_kn` — speed over ground in knots

@@ -46,6 +46,10 @@ name = "gap_filler"
 path = "src/bin/gap_filler.rs"
 
 [[bin]]
+name = "trip_timing"
+path = "src/bin/trip_timing.rs"
+
+[[bin]]
 name = "mcp_server"
 path = "src/bin/mcp_server.rs"
 
