@@ -5,6 +5,7 @@ pub mod environmental;
 pub mod import_export;
 pub mod query;
 pub mod gap_fill;
+pub mod mooring_fix;
 pub mod sync;
 pub mod forecast;
 

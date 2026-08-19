@@ -131,6 +131,13 @@ pub struct CorrectEngineStatusQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct FixMooringStatusQuery {
+    pub start_timestamp: String,
+    pub end_timestamp: String,
+    pub is_moored: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TrackQuery {
     pub trip_id: Option<u32>,
     pub start: Option<String>,
@@ -663,6 +670,35 @@ pub async fn correct_engine_status(
         }
         Err(e) => {
             error!(error = %e, trip_id = params.trip_id, "Failed to correct engine status");
+            {
+                let bt = Backtrace::force_capture();
+                error!(?bt, "Backtrace for error");
+                Ok(Json(ApiResponse::error(e.to_string())))
+            }
+        }
+    }
+}
+
+pub async fn fix_mooring_status(
+    State(state): State<AppState>,
+    Json(params): Json<FixMooringStatusQuery>,
+) -> Result<Json<ApiResponse<crate::db::FixMooringReport>>, StatusCode> {
+    info!(?params, "POST /api/fix_mooring_status called");
+
+    let start = parse_required_datetime(&params.start_timestamp)?;
+    let end = parse_required_datetime(&params.end_timestamp)?;
+    let moored_interval_secs = state.config.database.vessel_status.interval_moored_seconds;
+
+    match state
+        .db()
+        .fix_mooring_status(start, end, params.is_moored, moored_interval_secs)
+    {
+        Ok(report) => {
+            info!(?report, "Mooring status corrected successfully");
+            Ok(Json(ApiResponse::ok(report)))
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to correct mooring status");
             {
                 let bt = Backtrace::force_capture();
                 error!(?bt, "Backtrace for error");
@@ -1996,6 +2032,7 @@ pub fn create_api_router(state: AppState) -> Router {
             .route("/delete_trip", delete(delete_trip))
             .route("/trim_trip", post(trim_trip))
             .route("/correct_engine_status", post(correct_engine_status))
+            .route("/fix_mooring_status", post(fix_mooring_status))
             .route("/invalidate_trip_legs", post(invalidate_trip_legs))
             .route("/nav_window", put(set_nav_window))
             .route("/export_trip", get(export_trip))

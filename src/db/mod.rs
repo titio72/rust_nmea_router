@@ -20,5 +20,6 @@ pub use types::{
     TripSummary, TrackPoint, WebMetricData, MultiMetricData, SpeedDistributionData, WindStatisticsData,
     TripLegsData, HeatmapData, MonthlyStatistics, NavAnalysisRow,
 };
+pub use operations::mooring_fix::FixMooringReport;
 
 // Operations are available through the operations module if needed

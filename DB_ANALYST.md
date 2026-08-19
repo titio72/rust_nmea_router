@@ -246,6 +246,30 @@ DELETE FROM environmental_data WHERE metric_id IN (5, 6)
 
 ---
 
+### Fix a Mislabeled Mooring Period
+
+Goal: a range of `vessel_status` rows has the wrong `is_moored` value (e.g. mooring
+detection failed at anchor and logged dense underway-cadence reports for a period the
+boat never actually left).
+
+Prefer the `fix_mooring_status` MCP tool (or `POST /api/fix_mooring_status`) over manual
+SQL — it does the following atomically:
+1. Finds the trip covering `[start, end]` (clamps the window to the trip's own bounds).
+2. Sets `is_moored` on every row in the window.
+3. If the target is `true` (moored), resamples: collapses the dense rows down to the
+   moored reporting interval (median position per bucket, vector distance/time/course
+   from bucket to bucket instead of summing per-sample GPS jitter, circular-mean
+   heading/wind-angle, arithmetic-mean wind speed, max speed per bucket). This matters —
+   leaving dense rows under a moored label still double-counts jitter as travelled
+   distance even after the flag is fixed.
+4. Recomputes the trip's aggregate totals (never its `start_timestamp`/`end_timestamp`).
+5. Invalidates `trip_legs_cache` and `heatmap_cache` for the affected range.
+
+Before calling it, sanity-check the window the same way as any other correction:
+`SELECT is_moored, engine_on, latitude, longitude FROM vessel_status WHERE timestamp
+BETWEEN '<start>' AND '<end>' ORDER BY id` — confirm the position barely moves and
+`engine_on = 0` before concluding it should be moored.
+
 ## MCP Tools
 
 The `nmea_router` MCP server (`target/debug/mcp_server`, or `target/release/mcp_server` in production) exposes the following typed tools. Prefer these over raw SQL for all structured reads and every write operation.
@@ -273,6 +297,7 @@ The `nmea_router` MCP server (`target/debug/mcp_server`, or `target/release/mcp_
 | `get_wind_statistics` | Wind rose data (72 × 5° buckets) |
 | `get_monthly_statistics` | Monthly sailing/motoring distance; optional `year` filter |
 | `trim_trip` | Remove moored padding, recalculate aggregates, invalidate caches (atomic) |
+| `fix_mooring_status` | Correct a mislabeled mooring period: set `is_moored` for `[start, end]`; if `true`, also resamples the window to the moored cadence, recomputes trip aggregates, invalidates caches (atomic) |
 | `delete_trip` | Delete trip + all vessel_status + environmental_data + caches (atomic) |
 | `update_trip_description` | Change the free-text trip name |
 | `invalidate_trip_legs` | Force-invalidate legs cache for a trip |

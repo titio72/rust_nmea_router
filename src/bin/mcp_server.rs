@@ -89,6 +89,16 @@ struct NavAnalysisParams {
     trip_id: Option<u32>,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct FixMooringParams {
+    #[schemars(description = "ISO-8601 UTC datetime, e.g. \"2024-06-01T22:20:00Z\"")]
+    start: String,
+    #[schemars(description = "ISO-8601 UTC datetime")]
+    end: String,
+    #[schemars(description = "true = mark the range moored (and resample it down to the moored reporting cadence); false = mark it underway")]
+    is_moored: bool,
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn parse_dt(s: &str) -> Result<DateTime<Utc>, Box<dyn std::error::Error>> {
@@ -122,15 +132,17 @@ fn db_err(e: impl std::fmt::Display) -> McpError {
 #[derive(Clone)]
 struct NmeaRouterMcp {
     db: VesselDatabase,
+    moored_interval_secs: u64,
     #[allow(dead_code)]
     tool_router: ToolRouter<NmeaRouterMcp>,
 }
 
 #[tool_router]
 impl NmeaRouterMcp {
-    fn new(db: VesselDatabase) -> Self {
+    fn new(db: VesselDatabase, moored_interval_secs: u64) -> Self {
         Self {
             db,
+            moored_interval_secs,
             tool_router: Self::tool_router(),
         }
     }
@@ -414,6 +426,25 @@ impl NmeaRouterMcp {
         .map_err(db_err)?;
         to_json(data)
     }
+
+    #[tool(description = "Fix a mislabeled mooring period: set is_moored for every vessel_status row in [start, end] to the given value. When set to true, also resamples the (now dense, underway-cadence) rows in that window down to the moored reporting cadence, recomputes the covering trip's aggregate totals, and invalidates its trip_legs_cache/heatmap_cache entries. Errors if no trip covers the window or no rows are found in range.")]
+    async fn fix_mooring_status(
+        &self,
+        Parameters(FixMooringParams { start, end, is_moored }): Parameters<FixMooringParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let start = parse_dt(&start).map_err(db_err)?;
+        let end = parse_dt(&end).map_err(db_err)?;
+        let db = self.db.clone();
+        let moored_interval_secs = self.moored_interval_secs;
+        let data = tokio::task::spawn_blocking(move || {
+            db.fix_mooring_status(start, end, is_moored, moored_interval_secs)
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(db_err)?
+        .map_err(db_err)?;
+        to_json(data)
+    }
 }
 
 #[tool_handler]
@@ -451,8 +482,9 @@ async fn main() {
         std::process::exit(1);
     });
 
+    let moored_interval_secs = cfg.database.vessel_status.interval_moored_seconds;
     let transport = rmcp::transport::stdio();
-    NmeaRouterMcp::new(db)
+    NmeaRouterMcp::new(db, moored_interval_secs)
         .serve(transport)
         .await
         .expect("MCP serve failed")

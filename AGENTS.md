@@ -173,6 +173,10 @@ The application converts NMEA2000 data to legacy NMEA0183 sentences and broadcas
 ### Web Interface
 The application provides a REST API for programmatic access to trip data, vessel tracks, environmental metrics, and speed distributions. An HTML dashboard offers interactive visualization with Google Maps integration for trip tracks and real-time AIS target monitoring.
 
+Corrections to previously-recorded data (writable only when the server is not in read-only mode):
+- `POST /api/correct_engine_status` — body `{trip_id, start_timestamp, end_timestamp, engine_on}`; overwrites `engine_on` for `vessel_status` rows in range and recomputes the trip's sailing/motoring aggregates.
+- `POST /api/fix_mooring_status` — body `{start_timestamp, end_timestamp, is_moored}`; sets `is_moored` for `vessel_status` rows in range (clamped to the covering trip's window). When `is_moored` is `true`, also resamples the window down to the moored reporting cadence (`vessel_status.interval_moored_seconds`), collapsing dense underway-rate GPS jitter that would otherwise be double-counted as travelled distance. Recomputes the trip's aggregate totals and invalidates its `trip_legs_cache`/`heatmap_cache` entries. Returns `{trip_id, rows_matched, rows_after, resampled}`.
+
 ### Trip Synchronization
 When `sync.enabled: true` and `sync.target_url` point to a trips_viewer instance, the boat can push its complete trip history to the viewer via `POST /api/sync/push`. The push is incremental (only trips updated since the last sync are transferred) and performs full reconciliation (trips deleted on the boat are deleted on the viewer). Authentication uses a shared Bearer token (`sync.api_key`). The viewer's receive endpoint (`POST /api/sync/receive`) is always registered even in read-only mode. See `TRIPS_VIEWER.md` for configuration details.
 
