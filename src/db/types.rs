@@ -138,6 +138,14 @@ pub struct WindStatisticsData {
 }
 
 #[derive(Debug, serde::Serialize)]
+pub struct TwaDistributionData {
+    /// Signed TWA bucket lower bounds, degrees (-180..175); negative = port, positive = starboard
+    pub angles: Vec<f64>,
+    /// Distance sailed in each bucket, nautical miles
+    pub distance: Vec<f64>,
+}
+
+#[derive(Debug, serde::Serialize)]
 pub struct TripLeg {
     pub leg_number: u32,
     pub start_timestamp: String,

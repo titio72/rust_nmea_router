@@ -467,13 +467,13 @@
             legChartsContainer.innerHTML = ''; // Clear any existing charts
             if (!isVisible) return;
             addChart(legChartsContainer, 'speedChart');
+            addChart(legChartsContainer, 'speedDistributionChart');
             addChart(legChartsContainer, 'headingChart', 'headingScaleBtn', toggleHeadingScale);
             addChart(legChartsContainer, 'windSpeedChart');
-            addChart(legChartsContainer, 'windDirectionChart');
+            addChart(legChartsContainer, 'twaDistributionChart');
+            addChart(legChartsContainer, 'windStatisticsChart');
             addChart(legChartsContainer, 'rollAngleChart');
             addChart(legChartsContainer, 'heelDistributionChart');
-            addChart(legChartsContainer, 'speedDistributionChart');
-            addChart(legChartsContainer, 'windStatisticsChart');
         }
 
         function initializeChartsTrip(isVisible) {
@@ -981,7 +981,6 @@
             allCharts.speed = createSpeedChart(trackData);
             allCharts.heading = createHeadingChart(trackData, headingScaleNormalized);
             allCharts.windSpeed = createWindSpeedChart(trackData);
-            allCharts.windDirection = createWindDirectionChart(trackData);
             markTime('leg_timeseries_charts_rendered', { track_points: trackData.length });
 
             const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
@@ -989,11 +988,13 @@
             const rollChartMaxPoints = getChartMaxPoints('rollAngleChart', 1000);
             speedDistQuery = '/api/speed_distribution?start=' + formattedStart + '&end=' + formattedEnd;
             windStatsQuery = '/api/wind_statistics?start=' + formattedStart + '&end=' + formattedEnd;
+            twaDistQuery = '/api/twa_distribution?start=' + formattedStart + '&end=' + formattedEnd;
             rollQuery = '/api/metrics?metric=7&start=' + formattedStart + '&end=' + formattedEnd + '&max_points=' + rollChartMaxPoints;
 
-            const [speedDistResponse, windStatsResponse, rollResponse] = await Promise.all([
+            const [speedDistResponse, windStatsResponse, twaDistResponse, rollResponse] = await Promise.all([
                 fetch(speedDistQuery),
                 fetch(windStatsQuery),
+                fetch(twaDistQuery),
                 fetch(rollQuery)
             ]);
 
@@ -1015,6 +1016,15 @@
                 }
             }
 
+            // Process TWA distribution
+            let twaDistData = null;
+            if (twaDistResponse && twaDistResponse.ok) {
+                const result = await twaDistResponse.json();
+                if (result.status === 'ok' && result.data) {
+                    twaDistData = result.data;
+                }
+            }
+
             let rollData = null;
             if (rollResponse && rollResponse.ok) {
                 const result = await rollResponse.json();
@@ -1026,11 +1036,13 @@
             markTime('leg_charts_fetch_resolved', {
                 speed_dist_buckets: speedDistData ? speedDistData.labels.length : 0,
                 wind_stats_buckets: windStatsData ? windStatsData.directions.length : 0,
+                twa_dist_buckets: twaDistData ? twaDistData.angles.length : 0,
                 roll_points: rollData ? rollData.length : 0
             });
 
             allCharts.speedDistribution = createSpeedDistributionChart(speedDistData);
             allCharts.windStatistics = createWindStatisticsChart(windStatsData);
+            allCharts.twaDistribution = createTwaDistributionChart(twaDistData);
             allCharts.rollAngle = createRollAngleChart(rollData);
             allCharts.heelDistribution = createHeelDistributionChart(rollData);
             markTime('leg_distribution_charts_rendered');
@@ -1589,68 +1601,15 @@
             const colors = getChartColors();
 
             // Filter out data points where wind speed is not available
-            const validData = trackData.filter(point => point.average_wind_speed_kn !== null && point.average_wind_speed_kn !== undefined);
-
-            // Convert data to time-scale format with proper Date objects
-            const chartData = validData.map(point => ({
+            const validSpeedData = trackData.filter(point => point.average_wind_speed_kn !== null && point.average_wind_speed_kn !== undefined);
+            const speedChartData = validSpeedData.map(point => ({
                 x: chartUtcDate(point.timestamp),
                 y: point.average_wind_speed_kn
             }));
 
-            const datasets = [{
-                label: 'Wind Speed (knots)',
-                data: chartData,
-                borderColor: '#27ae60',
-                backgroundColor: 'rgba(39, 174, 96, 0.1)',
-                fill: true,
-                tension: 0.1,
-                pointRadius: 0,
-                borderWidth: 1,
-                pointHoverRadius: 5
-            }];
-
-            return new Chart(ctx, {
-                type: 'line',
-                data: { datasets },
-                options: {
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            title: {
-                                display: true,
-                                text: 'Wind Speed (knots)',
-                                color: colors.text
-                            },
-                            ticks: { color: colors.text },
-                            grid: { color: colors.grid }
-                        },
-                        x: getTimeXScale(colors)
-                    },
-                    plugins: {
-                        legend: {
-                            display: false,
-                            labels: { color: colors.text }
-                        },
-                        title: {
-                            display: true,
-                            text: 'True Wind Speed (TWS)',
-                            color: colors.text
-                        }
-                    }
-                }
-            });
-        }
-
-        function createWindDirectionChart(trackData) {
-            const ctx = document.getElementById('windDirectionChart').getContext('2d');
-            const colors = getChartColors();
-
-            // Filter out data points where wind direction is not available
-            const validData = trackData.filter(point => point.average_wind_angle_deg !== null && point.average_wind_angle_deg !== undefined);
-
-            // Convert data to time-scale format with proper Date objects
-            const chartData = validData.map(point => {
+            // Filter out data points where wind angle is not available
+            const validAngleData = trackData.filter(point => point.average_wind_angle_deg !== null && point.average_wind_angle_deg !== undefined);
+            const angleChartData = validAngleData.map(point => {
                 let direction = point.average_wind_angle_deg;
                 if (direction > 180) {
                     direction = direction - 360;
@@ -1662,31 +1621,56 @@
             });
 
             const datasets = [{
-                label: 'Wind Direction (degrees)',
-                data: chartData,
-                borderColor: '#f39c12',
-                backgroundColor: 'rgba(243, 156, 18, 0.1)',
+                label: 'Wind Speed (knots)',
+                data: speedChartData,
+                borderColor: '#27ae60',
+                backgroundColor: 'rgba(39, 174, 96, 0.1)',
                 fill: true,
                 tension: 0.1,
                 pointRadius: 0,
+                borderWidth: 1,
                 pointHoverRadius: 5,
-                borderWidth: 1
+                yAxisID: 'y'
+            }, {
+                label: 'Wind Angle (degrees)',
+                data: angleChartData,
+                borderColor: '#f39c12',
+                backgroundColor: 'rgba(243, 156, 18, 0.1)',
+                fill: false,
+                tension: 0.1,
+                pointRadius: 0,
+                pointHoverRadius: 5,
+                borderWidth: 1,
+                yAxisID: 'y1'
             }];
-
-            const showLegend = false;
 
             return new Chart(ctx, {
                 type: 'line',
                 data: { datasets },
                 options: {
                     maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
                     scales: {
                         y: {
+                            type: 'linear',
+                            position: 'left',
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Wind Speed (knots)',
+                                color: colors.text
+                            },
+                            ticks: { color: colors.text },
+                            grid: { color: colors.grid }
+                        },
+                        y1: {
+                            type: 'linear',
+                            position: 'right',
                             min: -180,
                             max: 180,
                             title: {
                                 display: true,
-                                text: 'Wind Direction (degrees)',
+                                text: 'Wind Angle (degrees)',
                                 color: colors.text
                             },
                             ticks: {
@@ -1700,18 +1684,19 @@
                                     return Math.abs(value) + '° ' + side;
                                 }
                             },
-                            grid: { color: colors.grid }
+                            grid: { display: false }
                         },
                         x: getTimeXScale(colors)
                     },
                     plugins: {
                         legend: {
-                            display: showLegend,
-                            labels: { color: colors.text }
+                            display: true,
+                            labels: { color: colors.text },
+                            position: 'bottom'
                         },
                         title: {
                             display: true,
-                            text: 'True Wind Angle (TWA)',
+                            text: 'True Wind Speed (TWS) & Angle (TWA)',
                             color: colors.text
                         }
                     }
@@ -2026,6 +2011,73 @@
                             },
                             grid: { color: colors.grid },
                             ticks: { color: colors.text, backdropColor: colors.background },
+                        }
+                    }
+                }
+            });
+        }
+
+        function createTwaDistributionChart(twaDistData) {
+            const ctx = document.getElementById('twaDistributionChart').getContext('2d');
+            const colors = getChartColors();
+
+            // Buckets are the signed lower bound (-180..175); label with the bucket's
+            // absolute degree range and port/starboard side, matching the TWA chart convention.
+            const labels = twaDistData.angles.map(a => {
+                const mid = a + 2.5;
+                const side = mid < 0 ? 'P' : 'S';
+                const lower = Math.abs(a);
+                const upper = Math.abs(a + 5);
+                return Math.min(lower, upper) + '-' + Math.max(lower, upper) + '° ' + side;
+            });
+
+            return new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'Distance Sailed (NM)',
+                        data: twaDistData.distance,
+                        backgroundColor: getComputedStyle(document.documentElement).getPropertyValue('--sailing-color').trim(),
+                        borderColor: getComputedStyle(document.documentElement).getPropertyValue('--sailing-color').trim(),
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            ticks: {
+                                maxRotation: 90,
+                                minRotation: 90,
+                                color: colors.text
+                            },
+                            grid: { color: colors.grid }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Distance (nautical miles)',
+                                color: colors.text
+                            },
+                            ticks: { color: colors.text },
+                            grid: { color: colors.grid }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false, labels: { color: colors.text } },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return context.dataset.label + ': ' + context.parsed.y.toFixed(2) + ' NM';
+                                }
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Distance Sailed by True Wind Angle (TWA)',
+                            color: colors.text
                         }
                     }
                 }

@@ -18,6 +18,7 @@ pub use types::{
     is_connection_error,
     // Response types
     TripSummary, TrackPoint, WebMetricData, MultiMetricData, SpeedDistributionData, WindStatisticsData,
+    TwaDistributionData,
     TripLegsData, HeatmapData, MonthlyStatistics, NavAnalysisRow,
 };
 pub use operations::mooring_fix::FixMooringReport;

@@ -25,7 +25,8 @@ use crate::config::Config;
 use crate::db::operations::sync::{SyncManifestPayload, SyncManifestResult, SyncResult};
 use crate::db::{
     HeatmapData, MultiMetricData, NavAnalysisRow, SpeedDistributionData,
-    TrackPoint, TripLegsData, TripSummary, VesselDatabase, WebMetricData, WindStatisticsData,
+    TrackPoint, TripLegsData, TripSummary, TwaDistributionData, VesselDatabase, WebMetricData,
+    WindStatisticsData,
 };
 use crate::web::auth::JwtSecret;
 use crate::web::broadcast_manager::SignalKBroadcastChannels;
@@ -536,6 +537,25 @@ pub async fn get_wind_statistics(
         Ok(statistics) => Ok(Json(ApiResponse::ok(statistics))),
         Err(e) => {
             error!(error = %e, "Failed to fetch wind statistics");
+            {
+                let bt = Backtrace::force_capture();
+                error!(?bt, "Backtrace for error");
+                Ok(Json(ApiResponse::error(e.to_string())))
+            }
+        }
+    }
+}
+
+pub async fn get_twa_distribution(
+    State(state): State<AppState>,
+    Query(params): Query<TimeRangeQuery>,
+) -> Result<Json<ApiResponse<TwaDistributionData>>, StatusCode> {
+    let start = parse_optional_datetime(&params.start)?;
+    let end = parse_optional_datetime(&params.end)?;
+    match state.db().fetch_twa_distribution(params.id, start, end) {
+        Ok(distribution) => Ok(Json(ApiResponse::ok(distribution))),
+        Err(e) => {
+            error!(error = %e, "Failed to fetch TWA distribution");
             {
                 let bt = Backtrace::force_capture();
                 error!(?bt, "Backtrace for error");
@@ -2013,6 +2033,7 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/metrics/batch", get(get_metrics_batch))
         .route("/speed_distribution", get(get_speed_distribution))
         .route("/wind_statistics", get(get_wind_statistics))
+        .route("/twa_distribution", get(get_twa_distribution))
         .route("/trip_legs", get(get_trip_legs))
         .route("/monthly_statistics", get(get_monthly_statistics))
         .route("/heatmap", get(get_heatmap))
@@ -2530,6 +2551,83 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/wind_statistics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["status"], "error");
+        assert!(json["error"].as_str().unwrap().contains("required"));
+    }
+
+    #[tokio::test]
+    async fn test_get_twa_distribution_with_trip_id() {
+        let app = create_test_app();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/twa_distribution?id=132")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["status"], "ok");
+        assert!(json["data"].is_object());
+        assert!(json["data"]["angles"].is_array());
+        assert!(json["data"]["distance"].is_array());
+    }
+
+    #[tokio::test]
+    async fn test_get_twa_distribution_with_time_range() {
+        let app = create_test_app();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/twa_distribution?start=2026-02-02%2009:00:00&end=2026-02-02%2012:00:00")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["status"], "ok");
+        assert!(json["data"].is_object());
+    }
+
+    #[tokio::test]
+    async fn test_get_twa_distribution_missing_params() {
+        let app = create_test_app();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/twa_distribution")
                     .body(Body::empty())
                     .unwrap(),
             )

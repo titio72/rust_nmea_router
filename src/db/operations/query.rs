@@ -1,8 +1,8 @@
 use crate::db::types::{
     format_duration_ms, FastestSegment, HeatmapData, HeatmapDay, MonthlyStatistic,
     MonthlyStatistics, MultiMetricData, NavAnalysisRow, SpeedDistributionData,
-    TrackPoint, TripLeg, TripLegsData, TripSummary, VesselDatabase, WebMetricData,
-    WindStatisticsData,
+    TrackPoint, TripLeg, TripLegsData, TripSummary, TwaDistributionData, VesselDatabase,
+    WebMetricData, WindStatisticsData,
 };
 use crate::error::AppError;
 use crate::utilities::haversine_distance_nm;
@@ -1359,6 +1359,96 @@ impl VesselDatabase {
             wind_distances,
             max_wind_speeds,
         })
+    }
+
+    /// Fetch distance sailed bucketed by signed True Wind Angle (5-degree buckets, -180..175).
+    /// Negative = port, positive = starboard. Sailing rows only (excludes moored/motoring).
+    pub fn fetch_twa_distribution(
+        &self,
+        trip_id: Option<u32>,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
+    ) -> Result<TwaDistributionData, AppError> {
+        // 72 buckets of 5 degrees covering the signed TWA range [-180, 180)
+        let bucket_size = 5.0;
+        let num_buckets = 72usize;
+
+        let mut distance = vec![0.0; num_buckets];
+        let mut angles = Vec::with_capacity(num_buckets);
+        for i in 0..num_buckets {
+            angles.push(-180.0 + i as f64 * bucket_size);
+        }
+
+        // Fold to signed TWA (-180..180] before bucketing, so port/starboard tack stay
+        // distinguishable, matching the display convention already used for the TWA chart.
+        let mut conn = self.pool.get_conn()?;
+        let t_sql = Instant::now();
+
+        let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
+            conn.exec(
+                "SELECT FLOOR(
+                        (CASE WHEN average_wind_angle_deg > 180.0
+                              THEN average_wind_angle_deg - 360.0
+                              ELSE average_wind_angle_deg END) / 5.0
+                     ) * 5.0 AS twa_bucket,
+                     SUM(total_distance_nm) AS dist
+                 FROM vessel_status
+                 WHERE timestamp BETWEEN
+                     (SELECT start_timestamp FROM trips WHERE id = :trip_id)
+                     AND COALESCE((SELECT end_timestamp FROM trips WHERE id = :trip_id), NOW())
+                 AND is_moored = 0
+                 AND engine_on != 1
+                 AND average_wind_angle_deg IS NOT NULL
+                 GROUP BY twa_bucket",
+                mysql::params! { "trip_id" => trip_id },
+            )?
+        } else if let (Some(start), Some(end)) = (start, end) {
+            conn.exec(
+                "SELECT FLOOR(
+                        (CASE WHEN average_wind_angle_deg > 180.0
+                              THEN average_wind_angle_deg - 360.0
+                              ELSE average_wind_angle_deg END) / 5.0
+                     ) * 5.0 AS twa_bucket,
+                     SUM(total_distance_nm) AS dist
+                 FROM vessel_status
+                 WHERE timestamp BETWEEN :start AND :end
+                 AND is_moored = 0
+                 AND engine_on != 1
+                 AND average_wind_angle_deg IS NOT NULL
+                 GROUP BY twa_bucket",
+                mysql::params! {
+                    "start" => start.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
+                },
+            )?
+        } else {
+            return Err(AppError::Database(
+                "Either trip_id or both start and end timestamps are required".to_string(),
+            ));
+        };
+        log_timing(
+            "fetch_twa_distribution",
+            "sql_query",
+            t_sql,
+            Some(results.len()),
+        );
+
+        for row in results {
+            let twa_bucket: f64 = row
+                .get_opt::<f64, _>("twa_bucket")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let dist: f64 = row
+                .get_opt::<f64, _>("dist")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+
+            let bucket_index = (((twa_bucket + 180.0) / bucket_size).round() as isize)
+                .clamp(0, num_buckets as isize - 1) as usize;
+            distance[bucket_index] += dist;
+        }
+
+        Ok(TwaDistributionData { angles, distance })
     }
 
     /// Fetch trip legs data - divides trip into legs between mooring periods.
