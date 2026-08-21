@@ -1267,7 +1267,7 @@ impl VesselDatabase {
         })
     }
 
-    /// Fetch wind statistics data for a trip or time range
+    /// Fetch wind statistics (distance sailed by True Wind Direction bucket) for a trip or time range
     pub fn fetch_wind_statistics(
         &self,
         trip_id: Option<u32>,
@@ -1286,14 +1286,16 @@ impl VesselDatabase {
             directions.push(i as f64 * bucket_size);
         }
 
-        // Aggregate on the database side: one row per 5-degree wind-angle bucket.
+        // Aggregate on the database side: one row per 5-degree True Wind Direction bucket.
+        // TWD = (true heading + TWA) mod 360, i.e. the absolute compass bearing the wind
+        // blows from, matching the absolute_angle calculation in environmental_monitor.rs.
         // Wind distance = speed (kn) * period duration (h) = speed * total_time_ms / 3_600_000
         let mut conn = self.pool.get_conn()?;
         let t_sql = Instant::now();
 
         let results: Vec<mysql::Row> = if let Some(trip_id) = trip_id {
             conn.exec(
-                "SELECT FLOOR(average_wind_angle_deg / 5.0) * 5.0 AS angle,
+                "SELECT FLOOR(MOD(average_heading_deg + average_wind_angle_deg, 360.0) / 5.0) * 5.0 AS angle,
                         SUM(average_wind_speed_kn * total_time_ms / 3600000) AS dist_wind,
                         MAX(average_wind_speed_kn) AS max_wind_speed
                  FROM vessel_status
@@ -1303,12 +1305,13 @@ impl VesselDatabase {
                  AND is_moored = 0
                  AND average_wind_angle_deg IS NOT NULL
                  AND average_wind_speed_kn IS NOT NULL
-                 GROUP BY FLOOR(average_wind_angle_deg / 5.0) * 5.0",
+                 AND average_heading_deg IS NOT NULL
+                 GROUP BY FLOOR(MOD(average_heading_deg + average_wind_angle_deg, 360.0) / 5.0) * 5.0",
                 mysql::params! { "trip_id" => trip_id },
             )?
         } else if let (Some(start), Some(end)) = (start, end) {
             conn.exec(
-                "SELECT FLOOR(average_wind_angle_deg / 5.0) * 5.0 AS angle,
+                "SELECT FLOOR(MOD(average_heading_deg + average_wind_angle_deg, 360.0) / 5.0) * 5.0 AS angle,
                         SUM(average_wind_speed_kn * total_time_ms / 3600000) AS dist_wind,
                         MAX(average_wind_speed_kn) AS max_wind_speed
                  FROM vessel_status
@@ -1316,7 +1319,8 @@ impl VesselDatabase {
                  AND is_moored = 0
                  AND average_wind_angle_deg IS NOT NULL
                  AND average_wind_speed_kn IS NOT NULL
-                 GROUP BY FLOOR(average_wind_angle_deg / 5.0) * 5.0",
+                 AND average_heading_deg IS NOT NULL
+                 GROUP BY FLOOR(MOD(average_heading_deg + average_wind_angle_deg, 360.0) / 5.0) * 5.0",
                 mysql::params! {
                     "start" => start.format("%Y-%m-%d %H:%M:%S").to_string(),
                     "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),

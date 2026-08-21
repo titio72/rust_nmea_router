@@ -139,6 +139,30 @@
         .chartToggleBtn:hover {
             background-color: var(--bg-hover);
         }
+
+        .chartInfoIcon {
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background-color: var(--bg-tertiary);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+            font-style: italic;
+            cursor: help;
+            user-select: none;
+        }
+        .chartInfoIcon:hover {
+            background-color: var(--bg-hover);
+            color: var(--text-primary);
+        }
         .loading {
             text-align: center;
             padding: 50px;
@@ -435,7 +459,7 @@
             }
         }
 
-        function addChart(container, id, switchAngleBtnId, toggleFunction) {
+        function addChart(container, id, switchAngleBtnId, toggleFunction, description) {
             const appCard = document.createElement('div');
             appCard.className = 'app-card';
 
@@ -444,6 +468,14 @@
             const canvas = document.createElement('canvas');
             canvas.id = id;
             chartWrapper.appendChild(canvas);
+
+            if (description) {
+                const infoIcon = document.createElement('div');
+                infoIcon.className = 'chartInfoIcon';
+                infoIcon.textContent = 'i';
+                infoIcon.title = description;
+                chartWrapper.appendChild(infoIcon);
+            }
 
             if (switchAngleBtnId && toggleFunction) {
                 const toolbar = document.createElement('div');
@@ -466,24 +498,36 @@
             const legChartsContainer = document.getElementById('chartsContainerLeg');
             legChartsContainer.innerHTML = ''; // Clear any existing charts
             if (!isVisible) return;
-            addChart(legChartsContainer, 'speedChart');
-            addChart(legChartsContainer, 'speedDistributionChart');
-            addChart(legChartsContainer, 'headingChart', 'headingScaleBtn', toggleHeadingScale);
-            addChart(legChartsContainer, 'windSpeedChart');
-            addChart(legChartsContainer, 'twaDistributionChart');
-            addChart(legChartsContainer, 'windStatisticsChart');
-            addChart(legChartsContainer, 'rollAngleChart');
-            addChart(legChartsContainer, 'heelDistributionChart');
+            addChart(legChartsContainer, 'speedChart', null, null,
+                'Speed over ground (SOG) through the leg, in knots.');
+            addChart(legChartsContainer, 'speedDistributionChart', null, null,
+                'Distance sailed, bucketed by speed over ground (0.5 kn buckets), split between sailing and motoring.');
+            addChart(legChartsContainer, 'headingChart', 'headingScaleBtn', toggleHeadingScale,
+                'True heading over time. Use the button to switch between a 0–360° and a −180…180° scale.');
+            addChart(legChartsContainer, 'windSpeedChart', null, null,
+                'True wind speed (left axis, knots) and true wind angle (right axis, degrees, negative = port / positive = starboard) over time.');
+            addChart(legChartsContainer, 'twaDistributionChart', null, null,
+                'Distance sailed by True Wind Angle, in 5° buckets, shown as a compass rose: dead ahead at top, starboard tacks to the right, port tacks to the left.');
+            addChart(legChartsContainer, 'windStatisticsChart', null, null,
+                'Measures the "amount of wind" from each True Wind Direction (absolute compass bearing, 5° buckets): wind speed integrated over time (hours × knots), not distance sailed. E.g. 20 kn of wind for 1h scores 20, the same as 5 kn for 4h. Segment color reflects the max wind speed recorded from that direction.');
+            addChart(legChartsContainer, 'rollAngleChart', null, null,
+                'Boat roll (heel) angle over time, in degrees.');
+            addChart(legChartsContainer, 'heelDistributionChart', null, null,
+                'Distribution of time spent at each heel angle.');
         }
 
         function initializeChartsTrip(isVisible) {
             chartsContainer = document.getElementById('chartsContainerTrip');
             chartsContainer.innerHTML = ''; // Clear any existing charts
             if (!isVisible) return;
-            addChart(chartsContainer, 'atmosphericPressureChart');
-            addChart(chartsContainer, 'absoluteWindDirectionChart', 'absoluteWindDirectionScaleBtn', toggleAbsoluteWindDirectionScale);
-            addChart(chartsContainer, 'cabinTemperatureChart');
-            addChart(chartsContainer, 'humidityChart');
+            addChart(chartsContainer, 'atmosphericPressureChart', null, null,
+                'Barometric pressure over the trip, in millibars.');
+            addChart(chartsContainer, 'absoluteWindDirectionChart', 'absoluteWindDirectionScaleBtn', toggleAbsoluteWindDirectionScale,
+                'Absolute wind direction (compass bearing) and wind speed over the trip. Use the button to switch between a 0–360° and a −180…180° scale.');
+            addChart(chartsContainer, 'cabinTemperatureChart', null, null,
+                'Cabin temperature over the trip, in °C.');
+            addChart(chartsContainer, 'humidityChart', null, null,
+                'Cabin relative humidity over the trip, in %.');
         }
 
         // A chart can't usefully render more distinct data points than it has pixels of
@@ -1988,7 +2032,7 @@
                                     const distance = context.parsed.r;
                                     const maxSpeed = maxSpeeds[context.dataIndex];
                                     return [
-                                        `Direction: ${direction}°`,
+                                        `TWD: ${direction}°`,
                                         `Wind Distance: ${distance.toFixed(3)} hours·knots`,
                                         `Max Wind Speed: ${maxSpeed.toFixed(1)} knots`
                                     ];
@@ -1997,7 +2041,7 @@
                         },
                         title: {
                             display: true,
-                            text: 'Wind Speed Analytics (NM)',
+                            text: 'Wind Analytics (NM)',
                             color: colors.text
                         }
                     },
@@ -2011,6 +2055,17 @@
                             },
                             grid: { color: colors.grid },
                             ticks: { color: colors.text, backdropColor: colors.background },
+                            // Buckets are ordered 0..355° clockwise from top (index i = i*5°);
+                            // only label every 15° to keep the ring readable.
+                            pointLabels: {
+                                display: true,
+                                color: colors.text,
+                                font: { size: 10 },
+                                callback: function(_label, index) {
+                                    const angle = index * 5;
+                                    return angle % 15 === 0 ? angle + '°' : '';
+                                }
+                            }
                         }
                     }
                 }
@@ -2021,56 +2076,48 @@
             const ctx = document.getElementById('twaDistributionChart').getContext('2d');
             const colors = getChartColors();
 
-            // Buckets are the signed lower bound (-180..175); label with the bucket's
-            // absolute degree range and port/starboard side, matching the TWA chart convention.
-            const labels = twaDistData.angles.map(a => {
+            // Buckets come back as the signed lower bound (-180..175). Chart.js polarArea
+            // places index 0 at the top and lays out slices clockwise, so reorder buckets
+            // into compass order (0..355) to get a wind-rose layout: dead ahead at top,
+            // starboard (positive TWA) to the right, port (negative TWA) to the left.
+            const indices = twaDistData.angles.map((_, i) => i);
+            indices.sort((i, j) => {
+                const na = (twaDistData.angles[i] + 360) % 360;
+                const nb = (twaDistData.angles[j] + 360) % 360;
+                return na - nb;
+            });
+
+            const labels = indices.map(i => {
+                const a = twaDistData.angles[i];
                 const mid = a + 2.5;
                 const side = mid < 0 ? 'P' : 'S';
                 const lower = Math.abs(a);
                 const upper = Math.abs(a + 5);
                 return Math.min(lower, upper) + '-' + Math.max(lower, upper) + '° ' + side;
             });
+            const data = indices.map(i => twaDistData.distance[i]);
 
             return new Chart(ctx, {
-                type: 'bar',
+                type: 'polarArea',
                 data: {
                     labels,
                     datasets: [{
                         label: 'Distance Sailed (NM)',
-                        data: twaDistData.distance,
+                        data,
                         backgroundColor: getComputedStyle(document.documentElement).getPropertyValue('--sailing-color').trim(),
                         borderColor: getComputedStyle(document.documentElement).getPropertyValue('--sailing-color').trim(),
                         borderWidth: 1
                     }]
                 },
                 options: {
-                    maintainAspectRatio: false,
-                    scales: {
-                        x: {
-                            ticks: {
-                                maxRotation: 90,
-                                minRotation: 90,
-                                color: colors.text
-                            },
-                            grid: { color: colors.grid }
-                        },
-                        y: {
-                            beginAtZero: true,
-                            title: {
-                                display: true,
-                                text: 'Distance (nautical miles)',
-                                color: colors.text
-                            },
-                            ticks: { color: colors.text },
-                            grid: { color: colors.grid }
-                        }
-                    },
+                    maintainAspectRatio: true,
+                    backgroundColor: colors.background,
                     plugins: {
                         legend: { display: false, labels: { color: colors.text } },
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
-                                    return context.dataset.label + ': ' + context.parsed.y.toFixed(2) + ' NM';
+                                    return 'Distance Sailed: ' + context.parsed.r.toFixed(2) + ' NM';
                                 }
                             }
                         },
@@ -2078,6 +2125,34 @@
                             display: true,
                             text: 'Distance Sailed by True Wind Angle (TWA)',
                             color: colors.text
+                        }
+                    },
+                    scales: {
+                        r: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Distance (nautical miles)',
+                                color: colors.text
+                            },
+                            grid: { color: colors.grid },
+                            ticks: { color: colors.text, backdropColor: colors.background },
+                            // Reordered buckets sit at index*5° clockwise from top (0=dead
+                            // ahead, 180=dead astern). Label every 15°, magnitude only,
+                            // with S on the starboard (right) half and P on the port (left) half.
+                            pointLabels: {
+                                display: true,
+                                color: colors.text,
+                                font: { size: 10 },
+                                callback: function(_label, index) {
+                                    const position = index * 5;
+                                    if (position % 15 !== 0) return '';
+                                    if (position === 0 || position === 180) return position + '°';
+                                    return position < 180
+                                        ? position + '° S'
+                                        : (360 - position) + '° P';
+                                }
+                            }
                         }
                     }
                 }
