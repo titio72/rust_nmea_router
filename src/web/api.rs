@@ -2042,6 +2042,7 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/config/read_only", get(get_read_only))
         .route("/sync/status", get(get_sync_status))
         .route("/sync/manifest", post(post_sync_manifest))
+        .route("/export_trip", get(export_trip))
         .route(
             "/sync/trip",
             post(post_sync_trip).layer(DefaultBodyLimit::max(MAX_IMPORT_TRIP_UPLOAD_BYTES)),
@@ -2056,7 +2057,7 @@ pub fn create_api_router(state: AppState) -> Router {
             .route("/fix_mooring_status", post(fix_mooring_status))
             .route("/invalidate_trip_legs", post(invalidate_trip_legs))
             .route("/nav_window", put(set_nav_window))
-            .route("/export_trip", get(export_trip))
+//            .route("/export_trip", get(export_trip))
             .route(
                 "/import_trip",
                 post(import_trip).layer(DefaultBodyLimit::max(MAX_IMPORT_TRIP_UPLOAD_BYTES)),
