@@ -13,6 +13,7 @@ nmea2000 = "0.2.2"
 socketcan = "3.0"
 mysql = "25.0"
 chrono = "0.4"
+chrono-tz = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 log = "0.4"
@@ -56,4 +57,8 @@ path = "src/bin/mcp_server.rs"
 [[bin]]
 name = "backfill_legs"
 path = "src/bin/backfill_legs.rs"
+
+[[bin]]
+name = "import_legacy_trips"
+path = "src/bin/import_legacy_trips.rs"
 
