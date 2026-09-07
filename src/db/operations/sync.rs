@@ -5,20 +5,21 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use tracing::{info, warn};
 
-/// Payload sent from boat to viewer's `/api/sync/manifest` endpoint.
-/// Contains all UUID the boat has (for orphan deletion) and the sync timestamp.
+/// Payload sent from boat to viewer's `/api/sync/manifest` endpoint: every
+/// local trip's UUID and current version. Replaces the old UUID-list-plus-
+/// timestamp-cursor exchange — the receiving side diffs this directly
+/// against its own stored versions.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncManifestPayload {
-    pub all_uuids: Vec<String>,
-    pub synced_at: String,
+    pub trip_versions: std::collections::HashMap<String, u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncManifestResult {
     pub deleted_count: usize,
-    /// UUIDs from the manifest payload that the viewer does not yet have.
-    /// The boat should send exactly these trips.
-    pub missing_uuids: Vec<String>,
+    /// UUIDs the boat should push: unknown to the remote, or known at a
+    /// lower version than the boat just reported.
+    pub uuids_to_push: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
