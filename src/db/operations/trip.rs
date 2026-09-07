@@ -4,6 +4,7 @@
 // Testing: Database tests require serial execution (--test-threads=1) due to shared test DB.
 // See: AGENTS.md for database patterns, transaction examples, and type conversions.
 //
+use crate::db::operations::trip_update::exec_trip_update;
 use crate::db::types::VesselDatabase;
 use crate::error::AppError;
 use crate::utilities::EngineStatus;
@@ -19,12 +20,12 @@ impl VesselDatabase {
         new_description: &str,
     ) -> Result<(), AppError> {
         let mut conn = self.pool.get_conn()?;
-        let query = "UPDATE trips SET description = :description WHERE id = :id";
-        conn.exec_drop(
-            query,
+        exec_trip_update(
+            &mut conn,
+            "description = :description",
             params! {
                 "description" => new_description,
-                "id" => trip_id,
+                "trip_id" => trip_id,
             },
         )?;
         Ok(())
@@ -406,6 +407,8 @@ mod tests {
         add_test_trip, add_test_vessel_status, fetch_vessel_status_by_id, setup_db,
     };
     use crate::utilities::EngineStatus;
+    use mysql::params;
+    use mysql::prelude::Queryable;
     use std::{
         ops::{Add, Sub},
         time::{Duration, SystemTime},
@@ -445,6 +448,38 @@ mod tests {
             fetched_trip.description, "Updated Description",
             "Trip description should be updated"
         );
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_update_trip_description_bumps_version() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Before".to_string(),
+            t,
+            t.add(Duration::from_secs(ONE_HOUR_S)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert test trip");
+
+        db.update_trip_description(trip_id as i64, "After")
+            .expect("update_trip_description failed");
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let version: u64 = conn
+            .exec_first(
+                "SELECT version FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(version, 2, "update_trip_description must bump version");
     }
 
     #[test]
