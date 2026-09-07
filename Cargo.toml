@@ -58,7 +58,3 @@ path = "src/bin/mcp_server.rs"
 name = "backfill_legs"
 path = "src/bin/backfill_legs.rs"
 
-[[bin]]
-name = "import_legacy_trips"
-path = "src/bin/import_legacy_trips.rs"
-
