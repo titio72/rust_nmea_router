@@ -581,7 +581,7 @@ mod test_infrastructure_examples {
 
         // Import the trip
         let imported_trip_id = db
-            .import_trip(&json_data)
+            .import_trip(&json_data, false)
             .expect("Failed to import trip from JSON");
 
         assert!(imported_trip_id > 0, "Imported trip ID should be positive");
@@ -678,7 +678,7 @@ mod test_infrastructure_examples {
 
         // First import: should insert a new trip
         let first_id = db
-            .import_trip(&make_payload("Original"))
+            .import_trip(&make_payload("Original"), false)
             .expect("First import failed");
         assert!(first_id > 0);
 
@@ -698,7 +698,7 @@ mod test_infrastructure_examples {
 
         // Second import with same UUID, different description: should delete old and insert new
         let second_id = db
-            .import_trip(&make_payload("Re-imported"))
+            .import_trip(&make_payload("Re-imported"), false)
             .expect("Second import failed");
         assert!(second_id > 0);
         assert_ne!(

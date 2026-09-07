@@ -819,7 +819,7 @@ pub async fn import_trip(
                             }
                         };
 
-                        match state.db().import_trip(json_content) {
+                        match state.db().import_trip(json_content, false) {
                             Ok(trip_id) => {
                                 info!(trip_id = trip_id, "Trip imported successfully");
                                 return Ok(Json(ApiResponse::ok(format!(
@@ -1618,7 +1618,7 @@ pub async fn post_sync_trip(
         Err(e) => return Json(ApiResponse::<()>::error(e.to_string())).into_response(),
     };
 
-    match state.db().import_trip(&json_str) {
+    match state.db().import_trip(&json_str, true) {
         Ok(_) => Json(ApiResponse::ok(())).into_response(),
         Err(e) => {
             error!(error = %e, "Sync trip: import failed");

@@ -653,7 +653,7 @@ mod tests {
         // Per-trip step
         for trip_value in &updated_trips {
             let json_str = serde_json::to_string(trip_value).unwrap();
-            db.import_trip(&json_str).expect("import_trip failed");
+            db.import_trip(&json_str, true).expect("import_trip failed");
         }
 
         assert_eq!(count_rows(&db, "trips"), 2);
@@ -713,8 +713,8 @@ mod tests {
         let json_str = serde_json::to_string(&trip_json).unwrap();
 
         // Import twice — second call must produce the same DB state
-        db.import_trip(&json_str).expect("first import failed");
-        db.import_trip(&json_str).expect("second import failed");
+        db.import_trip(&json_str, true).expect("first import failed");
+        db.import_trip(&json_str, true).expect("second import failed");
         assert_eq!(count_rows(&db, "trips"), 1, "still exactly one trip");
 
         let uuids = db.get_all_trip_uuids().expect("get UUIDs");
