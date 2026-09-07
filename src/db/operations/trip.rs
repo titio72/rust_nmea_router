@@ -125,9 +125,10 @@ impl VesselDatabase {
         )?;
 
         // Update trip with new boundaries
-        tx.exec_drop(
-            "UPDATE trips SET start_timestamp = SUBTIME(@min_ts, '0 1:00:0.000'), end_timestamp = ADDTIME(@max_ts, '0 1:00:0.000') WHERE id = :id",
-            params! { "id" => trip_id },
+        exec_trip_update(
+            &mut tx,
+            "start_timestamp = SUBTIME(@min_ts, '0 1:00:0.000'), end_timestamp = ADDTIME(@max_ts, '0 1:00:0.000')",
+            params! { "trip_id" => trip_id },
         )?;
 
         tx.commit()?;
@@ -414,6 +415,44 @@ mod tests {
         time::{Duration, SystemTime},
     };
     const ONE_HOUR_S: u64 = 3600;
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_trim_trip_bumps_version() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let trip_lenght_h = 2;
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Trim Version Test".to_string(),
+            t,
+            t.add(Duration::from_secs(trip_lenght_h * ONE_HOUR_S)),
+            0.0,
+            0.0,
+            0,
+            0,
+            trip_lenght_h * ONE_HOUR_S * 1000,
+        )
+        .expect("Failed to insert test trip");
+
+        add_test_vessel_status(
+            &db, t, 43.0, 11.0, 0.0, 0.0, None, None, false,
+            crate::utilities::EngineStatus::On, 0.1, 30000, None, None,
+        )
+        .expect("Failed to insert vessel status");
+
+        db.trim_trip(trip_id).expect("trim_trip failed");
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let version: u64 = conn
+            .exec_first(
+                "SELECT version FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(version, 2, "trim_trip must bump version");
+    }
 
     #[test]
     #[ignore] // This test is ignored because it relies on specific time-based logic and may require adjustments to the test data setup to ensure it works correctly. It can be enabled and adjusted as needed when testing trip description updates.
