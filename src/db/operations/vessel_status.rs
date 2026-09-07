@@ -1,4 +1,5 @@
 use crate::db::types::{TripOperation, VesselDatabase, VesselStatusOperation};
+use crate::db::operations::trip_update::exec_trip_update;
 use crate::trip::Trip;
 use crate::utilities::dirty_instant_to_systemtime;
 use chrono::NaiveDateTime;
@@ -86,21 +87,20 @@ impl VesselDatabase {
                 if let Some(trip_id) = trip.id {
                     let end_timestamp = chrono::DateTime::<chrono::Utc>::from(trip.end_timestamp);
 
-                    tx.exec_drop(
-                        r"UPDATE trips
-                          SET end_timestamp = :end_ts,
-                              total_distance_sailed = :distance_sailed,
-                              total_distance_motoring = :distance_motoring,
-                              total_time_sailing = :time_sailing,
-                              total_time_motoring = :time_motoring,
-                              total_time_moored = :time_moored,
-                              total_distance_upwind = :distance_upwind,
-                              total_distance_reaching = :distance_reaching,
-                              total_distance_running = :distance_running,
-                              total_time_upwind = :time_upwind,
-                              total_time_reaching = :time_reaching,
-                              total_time_running = :time_running
-                          WHERE id = :trip_id",
+                    exec_trip_update(
+                        &mut tx,
+                        r"end_timestamp = :end_ts,
+                          total_distance_sailed = :distance_sailed,
+                          total_distance_motoring = :distance_motoring,
+                          total_time_sailing = :time_sailing,
+                          total_time_motoring = :time_motoring,
+                          total_time_moored = :time_moored,
+                          total_distance_upwind = :distance_upwind,
+                          total_distance_reaching = :distance_reaching,
+                          total_distance_running = :distance_running,
+                          total_time_upwind = :time_upwind,
+                          total_time_reaching = :time_reaching,
+                          total_time_running = :time_running",
                         params! {
                             "trip_id" => trip_id,
                             "end_ts" => end_timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
@@ -504,5 +504,76 @@ mod tests {
         assert_approx_equal(rec.average_speed_kn, 6.5, 0.001, "average_speed_kn");
         assert_approx_equal(rec.total_distance_nm, 1.2, 0.001, "total_distance_nm");
         assert!(!rec.is_moored, "is_moored should be false");
+    }
+
+    #[test]
+    #[ignore]
+    fn test_insert_status_and_trip_update_bumps_version() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Live Trip".to_string(),
+            t,
+            t.add(Duration::from_secs(1800)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("add_test_trip failed");
+
+        let status_op = VesselStatusOperation {
+            timestamp: std::time::Instant::now(),
+            position: Position {
+                latitude: 43.0,
+                longitude: 11.0,
+            },
+            average_speed_kn: 5.0,
+            max_speed_kn: 6.0,
+            is_moored: false,
+            engine_on: EngineStatus::Off,
+            total_distance_nm: 1.0,
+            total_time_ms: 1800,
+            wind_speed_kn: None,
+            wind_speed_variance: None,
+            wind_angle_deg: None,
+            wind_angle_variance: None,
+            cog_deg: None,
+            average_heading_deg: None,
+        };
+        let trip = Trip {
+            id: Some(trip_id as i64),
+            uuid: uuid::Uuid::new_v4().to_string(),
+            description: "Live Trip".to_string(),
+            start_timestamp: t,
+            end_timestamp: t.add(Duration::from_secs(2400)),
+            total_distance_sailed: 1.0,
+            total_distance_motoring: 0.0,
+            total_time_sailing: 2400,
+            total_time_motoring: 0,
+            total_time_moored: 0,
+            total_distance_upwind: 0.0,
+            total_distance_reaching: 0.0,
+            total_distance_running: 0.0,
+            total_time_upwind: 0,
+            total_time_reaching: 0,
+            total_time_running: 0,
+        };
+        let trip_operation = TripOperation::UpdateTrip(trip);
+
+        db.insert_status_and_trip(&status_op, &trip_operation)
+            .expect("insert_status_and_trip failed");
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let version: u64 = conn
+            .exec_first(
+                "SELECT version FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(version, 2, "advancing the live trip must bump version");
     }
 }
