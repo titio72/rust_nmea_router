@@ -348,20 +348,19 @@ impl VesselDatabase {
             let time_reaching: u64 = row.get("time_reaching").unwrap_or(0);
             let time_running: u64 = row.get("time_running").unwrap_or(0);
 
-            tx.exec_drop(
-                r"UPDATE trips
-                  SET total_time_moored       = :time_moored,
-                      total_time_motoring     = :time_motoring,
-                      total_time_sailing      = :time_sailing,
-                      total_distance_motoring = :dist_motoring,
-                      total_distance_sailed   = :dist_sailed,
-                      total_distance_upwind   = :dist_upwind,
-                      total_distance_reaching = :dist_reaching,
-                      total_distance_running  = :dist_running,
-                      total_time_upwind       = :time_upwind,
-                      total_time_reaching     = :time_reaching,
-                      total_time_running      = :time_running
-                  WHERE id = :trip_id",
+            exec_trip_update(
+                &mut tx,
+                r"total_time_moored       = :time_moored,
+                  total_time_motoring     = :time_motoring,
+                  total_time_sailing      = :time_sailing,
+                  total_distance_motoring = :dist_motoring,
+                  total_distance_sailed   = :dist_sailed,
+                  total_distance_upwind   = :dist_upwind,
+                  total_distance_reaching = :dist_reaching,
+                  total_distance_running  = :dist_running,
+                  total_time_upwind       = :time_upwind,
+                  total_time_reaching     = :time_reaching,
+                  total_time_running      = :time_running",
                 params! {
                     "time_moored"   => time_moored,
                     "time_motoring" => time_motoring,
@@ -787,6 +786,47 @@ mod tests {
                 );
             }
         });
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_correct_engine_status_bumps_version() {
+        let db = setup_db();
+        let t = SystemTime::now();
+
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Engine Fix Version Test".to_string(),
+            t,
+            t.add(Duration::from_secs(1800)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert test trip");
+
+        add_test_vessel_status(
+            &db, t, 43.0, 11.0, 5.0, 6.0, None, None, false,
+            EngineStatus::Off, 1.0, 900_000, None, None,
+        )
+        .expect("Failed to insert vessel status");
+
+        let start_dt = chrono::DateTime::<chrono::Utc>::from(t);
+        let end_dt = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(1800)));
+        db.correct_engine_status(trip_id, start_dt, end_dt, EngineStatus::On)
+            .expect("correct_engine_status should succeed");
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let version: u64 = conn
+            .exec_first(
+                "SELECT version FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(version, 2, "correct_engine_status must bump version");
     }
 
     #[test]
