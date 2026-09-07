@@ -283,6 +283,11 @@ DELETE FROM environmental_data WHERE metric_id IN (5, 6)
   AND timestamp IN (SELECT timestamp FROM vessel_status WHERE id IN (<ids>));
 ```
 
+After any of the above, call the `bump_trip_version` MCP tool with the trip's
+`id` so the correction is picked up by the next remote sync — edits to
+`vessel_status`/`environmental_data` alone never touch the `trips` row, so
+nothing else will flag the trip as changed.
+
 ---
 
 ### Fix a Mislabeled Mooring Period
@@ -337,6 +342,7 @@ The `nmea_router` MCP server (`target/debug/mcp_server`, or `target/release/mcp_
 | `get_monthly_statistics` | Monthly sailing/motoring distance; optional `year` filter |
 | `trim_trip` | Remove moored padding, recalculate aggregates, invalidate caches (atomic) |
 | `fix_mooring_status` | Correct a mislabeled mooring period: set `is_moored` for `[start, end]`; if `true`, also resamples the window to the moored cadence, recomputes trip aggregates, invalidates caches (atomic) |
+| `bump_trip_version` | Bump a trip's version with no other field changes (for direct SQL corrections that don't touch `trips` itself) |
 | `delete_trip` | Delete trip + all vessel_status + environmental_data + caches (atomic) |
 | `update_trip_description` | Change the free-text trip name |
 | `invalidate_trip_legs` | Force-invalidate legs cache for a trip |
