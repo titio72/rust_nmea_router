@@ -2,6 +2,7 @@
 // switches the window to moored, resample the (now dense, underway-cadence) rows down
 // to the moored reporting cadence. See DB_ANALYST.md for the manual protocol this
 // automates and AGENTS.md for the REST endpoint.
+use crate::db::operations::trip_update::exec_trip_update;
 use crate::db::types::VesselDatabase;
 use crate::error::AppError;
 use crate::position_utils::Position;
@@ -446,20 +447,19 @@ impl VesselDatabase {
             let time_reaching: u64 = row.get("time_reaching").unwrap_or(0);
             let time_running: u64 = row.get("time_running").unwrap_or(0);
 
-            tx.exec_drop(
-                r"UPDATE trips
-                  SET total_time_moored       = :time_moored,
-                      total_time_motoring     = :time_motoring,
-                      total_time_sailing      = :time_sailing,
-                      total_distance_motoring = :dist_motoring,
-                      total_distance_sailed   = :dist_sailed,
-                      total_distance_upwind   = :dist_upwind,
-                      total_distance_reaching = :dist_reaching,
-                      total_distance_running  = :dist_running,
-                      total_time_upwind       = :time_upwind,
-                      total_time_reaching     = :time_reaching,
-                      total_time_running      = :time_running
-                  WHERE id = :trip_id",
+            exec_trip_update(
+                &mut tx,
+                r"total_time_moored       = :time_moored,
+                  total_time_motoring     = :time_motoring,
+                  total_time_sailing      = :time_sailing,
+                  total_distance_motoring = :dist_motoring,
+                  total_distance_sailed   = :dist_sailed,
+                  total_distance_upwind   = :dist_upwind,
+                  total_distance_reaching = :dist_reaching,
+                  total_distance_running  = :dist_running,
+                  total_time_upwind       = :time_upwind,
+                  total_time_reaching     = :time_reaching,
+                  total_time_running      = :time_running",
                 params! {
                     "time_moored"   => time_moored,
                     "time_motoring" => time_motoring,
@@ -524,6 +524,46 @@ mod tests {
             average_wind_speed_kn: Some(wind_speed),
             average_wind_angle_deg: Some(wind_angle),
         }
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_fix_mooring_status_bumps_version() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Mooring Fix Version Test".to_string(),
+            t,
+            t + Duration::from_secs(3600),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("add_test_trip failed");
+
+        add_test_vessel_status(
+            &db, t + Duration::from_secs(600), 43.0, 11.0, 0.1, 0.2, None, None,
+            false, crate::utilities::EngineStatus::Off, 0.05, 30_000, None, None,
+        )
+        .expect("add_test_vessel_status failed");
+
+        let start = chrono::DateTime::<chrono::Utc>::from(t + Duration::from_secs(300));
+        let end = chrono::DateTime::<chrono::Utc>::from(t + Duration::from_secs(900));
+        db.fix_mooring_status(start, end, true, 1800)
+            .expect("fix_mooring_status failed");
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let version: u64 = conn
+            .exec_first(
+                "SELECT version FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(version, 2, "fix_mooring_status must bump version");
     }
 
     #[test]
