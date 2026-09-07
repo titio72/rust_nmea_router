@@ -90,6 +90,7 @@ impl VesselDatabase {
                 "ALTER TABLE trips ADD COLUMN total_time_upwind BIGINT NOT NULL DEFAULT 0",
                 "ALTER TABLE trips ADD COLUMN total_time_reaching BIGINT NOT NULL DEFAULT 0",
                 "ALTER TABLE trips ADD COLUMN total_time_running BIGINT NOT NULL DEFAULT 0",
+                "ALTER TABLE trips ADD COLUMN version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT 'Bumped on every change to this row; drives remote sync change-detection'",
             ] {
                 let _ = conn.query_drop(sql);
             }

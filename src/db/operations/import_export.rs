@@ -31,6 +31,8 @@ struct ExportTrip {
     total_time_motoring: u64,
     #[serde(rename = "t_moor")]
     total_time_moored: u64,
+    #[serde(rename = "ver")]
+    version: u64,
 }
 
 #[derive(serde::Serialize)]
@@ -133,7 +135,7 @@ impl VesselDatabase {
             "SELECT id, start_timestamp, end_timestamp,
                     description, total_distance_sailed,
                     total_distance_motoring, total_time_sailing, total_time_motoring,
-                    total_time_moored, uuid
+                    total_time_moored, uuid, version
              FROM trips WHERE id = :id",
             params! { "id" => trip_id },
         )?;
@@ -150,6 +152,7 @@ impl VesselDatabase {
         let total_time_motoring: u64 = trip_row.get(7).ok_or(AppError::Database("Missing total_time_motoring".to_string()))?;
         let total_time_moored:   u64 = trip_row.get(8).ok_or(AppError::Database("Missing total_time_moored".to_string()))?;
         let trip_uuid: Option<String> = trip_row.get(9).unwrap_or(None);
+        let version: u64 = trip_row.get(10).ok_or(AppError::Database("Missing version".to_string()))?;
 
         let start_ts_str = mysql_datetime_to_iso(&start_ts)?;
         let end_ts_str   = mysql_datetime_to_iso(&end_ts)?;
@@ -249,6 +252,7 @@ impl VesselDatabase {
                 total_time_sailing,
                 total_time_motoring,
                 total_time_moored,
+                version,
             },
             vessel_statuses,
             environmental_metrics: env_metrics,
@@ -283,7 +287,7 @@ impl VesselDatabase {
         Ok(())
     }
 
-    pub fn import_trip(&self, json_data: &str) -> Result<i64, AppError> {
+    pub fn import_trip(&self, json_data: &str, is_sync: bool) -> Result<i64, AppError> {
         use serde_json::Value;
         
         let json: Value = serde_json::from_str(json_data)?;
@@ -309,19 +313,30 @@ impl VesselDatabase {
         let total_time_moored = trip["t_moor"].as_u64()
             .ok_or(AppError::Database("Missing or invalid trip.t_moor".to_string()))?;
         let import_uuid: Option<&str> = trip["uuid"].as_str();
-        
+
+        // Validate the sync-mode version field before any mutation happens (in
+        // particular, before the UUID-match delete below). A malformed sync
+        // payload must error out with the existing trip left intact, not after
+        // it has already been deleted.
+        let payload_version: Option<u64> = trip["ver"].as_u64();
+        if is_sync && payload_version.is_none() {
+            return Err(AppError::Database("Missing or invalid trip.ver in sync payload".to_string()));
+        }
+
         let mut conn = self.pool.get_conn()?;
         
         let new_trip_start = chrono::DateTime::parse_from_rfc3339(start_ts_str)
             .map_err(|e| AppError::Database(format!("Invalid start_timestamp format: {}", e)))?;
 
+        let mut existing_version: Option<u64> = None;
         if let Some(uuid) = import_uuid {
             // UUID present: if a trip with this UUID already exists, delete it first (replace semantics)
-            let existing_id: Option<u64> = conn.exec_first(
-                "SELECT id FROM trips WHERE uuid = :uuid LIMIT 1",
+            let existing: Option<(u64, u64)> = conn.exec_first(
+                "SELECT id, version FROM trips WHERE uuid = :uuid LIMIT 1",
                 params! { "uuid" => uuid },
             )?;
-            if let Some(id) = existing_id {
+            if let Some((id, version)) = existing {
+                existing_version = Some(version);
                 info!("Import: deleting existing trip {} with UUID {} before re-import", id, uuid);
                 self.delete_trip(id as u32)?;
             }
@@ -352,10 +367,21 @@ impl VesselDatabase {
             .map(|s| s.to_string())
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
+        // Sync receives are authoritative from the boat: adopt its version number
+        // verbatim so both sides converge on the exact same value. Manual imports
+        // have no authoritative external version to trust — bump from whatever is
+        // already stored locally (or start at 1 for a brand-new UUID).
+        let new_version: u64 = if is_sync {
+            // Already validated as Some above, before the UUID-match delete ran.
+            payload_version.unwrap()
+        } else {
+            existing_version.unwrap_or(0) + 1
+        };
+
         // Insert trip
         tx.exec_drop(
-            "INSERT INTO trips (description, start_timestamp, end_timestamp, total_distance_sailed, total_distance_motoring, total_time_sailing, total_time_motoring, total_time_moored, uuid)
-             VALUES (:desc, :start_ts, :end_ts, :dist_sailed, :dist_motoring, :time_sailing, :time_motoring, :time_moored, :uuid)",
+            "INSERT INTO trips (description, start_timestamp, end_timestamp, total_distance_sailed, total_distance_motoring, total_time_sailing, total_time_motoring, total_time_moored, uuid, version)
+             VALUES (:desc, :start_ts, :end_ts, :dist_sailed, :dist_motoring, :time_sailing, :time_motoring, :time_moored, :uuid, :version)",
             params! {
                 "desc" => description,
                 "start_ts" => new_trip_start.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
@@ -367,6 +393,7 @@ impl VesselDatabase {
                 "time_motoring" => total_time_motoring,
                 "time_moored" => total_time_moored,
                 "uuid" => &effective_uuid,
+                "version" => new_version,
             },
         )?;
         
@@ -522,7 +549,7 @@ mod tests {
             "em": []
         }"#;
 
-        let trip_id = db.import_trip(json).expect("import_trip should succeed");
+        let trip_id = db.import_trip(json, false).expect("import_trip should succeed");
 
         let mut conn = db.pool.get_conn().unwrap();
         let row: (f64, f64, f64, f64, f64, u64, u64, u64) = conn
@@ -544,5 +571,154 @@ mod tests {
         assert_eq!(row.5, 60_000, "total_time_upwind");
         assert_eq!(row.6, 60_000, "total_time_reaching");
         assert_eq!(row.7, 30_000, "total_time_running");
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_import_trip_manual_new_uuid_starts_at_version_one() {
+        let db = setup_db();
+        let json = r#"{
+            "trip": {
+                "desc": "Manual Import", "start": "2020-05-01T10:00:00.000Z",
+                "end": "2020-05-01T10:05:00.000Z", "dist_sail": 0.0, "dist_motor": 0.0,
+                "t_sail": 0, "t_motor": 0, "t_moor": 0,
+                "uuid": "aaaaaaaa-1111-2222-3333-444444444444"
+            }, "vs": [], "em": []
+        }"#;
+
+        let trip_id = db.import_trip(json, false).expect("import_trip should succeed");
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let version: u64 = conn
+            .exec_first(
+                "SELECT version FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(version, 1, "a brand-new manually-imported trip starts at version 1");
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_import_trip_sync_adopts_payload_version_verbatim() {
+        let db = setup_db();
+        let json = r#"{
+            "trip": {
+                "desc": "Synced Trip", "start": "2020-05-01T10:00:00.000Z",
+                "end": "2020-05-01T10:05:00.000Z", "dist_sail": 0.0, "dist_motor": 0.0,
+                "t_sail": 0, "t_motor": 0, "t_moor": 0,
+                "uuid": "bbbbbbbb-1111-2222-3333-444444444444", "ver": 7
+            }, "vs": [], "em": []
+        }"#;
+
+        let trip_id = db.import_trip(json, true).expect("import_trip should succeed");
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let version: u64 = conn
+            .exec_first(
+                "SELECT version FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(version, 7, "is_sync=true must adopt the payload's version verbatim");
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_import_trip_sync_missing_version_is_an_error() {
+        let db = setup_db();
+        let json = r#"{
+            "trip": {
+                "desc": "No Version", "start": "2020-05-01T10:00:00.000Z",
+                "end": "2020-05-01T10:05:00.000Z", "dist_sail": 0.0, "dist_motor": 0.0,
+                "t_sail": 0, "t_motor": 0, "t_moor": 0,
+                "uuid": "cccccccc-1111-2222-3333-444444444444"
+            }, "vs": [], "em": []
+        }"#;
+
+        let result = db.import_trip(json, true);
+        assert!(result.is_err(), "is_sync=true with no 'ver' field must fail, not guess");
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_import_trip_manual_reimport_bumps_from_existing_version() {
+        let db = setup_db();
+        let fixed_uuid = "dddddddd-1111-2222-3333-444444444444";
+        let make_payload = |desc: &str| {
+            format!(
+                r#"{{"trip": {{"desc": "{desc}", "start": "2020-05-01T10:00:00.000Z",
+                "end": "2020-05-01T10:05:00.000Z", "dist_sail": 0.0, "dist_motor": 0.0,
+                "t_sail": 0, "t_motor": 0, "t_moor": 0, "uuid": "{fixed_uuid}"}},
+                "vs": [], "em": []}}"#
+            )
+        };
+
+        db.import_trip(&make_payload("Original"), false)
+            .expect("first import should succeed");
+        let second_id = db
+            .import_trip(&make_payload("Re-imported"), false)
+            .expect("second import should succeed");
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let version: u64 = conn
+            .exec_first(
+                "SELECT version FROM trips WHERE id = :id",
+                mysql::params! { "id" => second_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            version, 2,
+            "manual re-import of the same UUID must bump from the prior stored version, \
+             not reset to 1 — this is the exact scenario that silently failed to \
+             re-sync before this feature"
+        );
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_import_trip_sync_missing_version_does_not_delete_existing_trip() {
+        let db = setup_db();
+        let fixed_uuid = "eeeeeeee-1111-2222-3333-444444444444";
+        let original_payload = format!(
+            r#"{{"trip": {{"desc": "Original", "start": "2020-05-01T10:00:00.000Z",
+            "end": "2020-05-01T10:05:00.000Z", "dist_sail": 0.0, "dist_motor": 0.0,
+            "t_sail": 0, "t_motor": 0, "t_moor": 0, "uuid": "{fixed_uuid}", "ver": 1}},
+            "vs": [], "em": []}}"#
+        );
+
+        db.import_trip(&original_payload, true)
+            .expect("initial sync import should succeed");
+
+        // Same UUID, but no 'ver' field — a malformed sync payload.
+        let malformed_payload = format!(
+            r#"{{"trip": {{"desc": "Malformed Resync", "start": "2020-05-01T10:00:00.000Z",
+            "end": "2020-05-01T10:05:00.000Z", "dist_sail": 0.0, "dist_motor": 0.0,
+            "t_sail": 0, "t_motor": 0, "t_moor": 0, "uuid": "{fixed_uuid}"}},
+            "vs": [], "em": []}}"#
+        );
+
+        let result = db.import_trip(&malformed_payload, true);
+        assert!(
+            result.is_err(),
+            "is_sync=true with no 'ver' field must fail, not delete-then-fail"
+        );
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let count: u64 = conn
+            .exec_first(
+                "SELECT COUNT(*) FROM trips WHERE uuid = :uuid",
+                mysql::params! { "uuid" => fixed_uuid },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "the original trip must still exist after a malformed sync payload errors out — \
+             validation of trip.ver must happen before the existing-trip delete, not after"
+        );
     }
 }

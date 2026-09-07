@@ -22,7 +22,7 @@ use tracing::{error, info, warn, Span};
 
 use crate::ais_target_cache::{AisTargetCache, AisTargetData};
 use crate::config::Config;
-use crate::db::operations::sync::{SyncManifestPayload, SyncManifestResult, SyncResult};
+use crate::db::operations::sync::{compute_uuids_to_push, SyncManifestPayload, SyncManifestResult, SyncResult};
 use crate::db::{
     HeatmapData, MultiMetricData, NavAnalysisRow, SpeedDistributionData,
     TrackPoint, TripLegsData, TripSummary, TwaDistributionData, VesselDatabase, WebMetricData,
@@ -819,7 +819,7 @@ pub async fn import_trip(
                             }
                         };
 
-                        match state.db().import_trip(json_content) {
+                        match state.db().import_trip(json_content, false) {
                             Ok(trip_id) => {
                                 info!(trip_id = trip_id, "Trip imported successfully");
                                 return Ok(Json(ApiResponse::ok(format!(
@@ -1364,22 +1364,11 @@ pub async fn post_sync_push(State(state): State<AppState>) -> Json<ApiResponse<S
         }
     };
 
-    let all_uuids = match state.db().get_all_trip_uuids() {
+    let trip_versions = match state.db().get_trip_versions() {
         Ok(v) => v,
         Err(e) => {
-            error!(error = %e, "Sync: failed to get trip UUIDs");
+            error!(error = %e, "Sync: failed to get trip versions");
             return Json(ApiResponse::error(format!("DB error: {}", e)));
-        }
-    };
-
-    // Capture the previous sync timestamp before it gets overwritten below, so
-    // we can detect trips already known to the viewer that changed since then
-    // (e.g. the live trip, whose end_timestamp advances with every status report).
-    let previous_synced_at = match state.db().get_sync_status() {
-        Ok(s) => s.last_synced_at,
-        Err(e) => {
-            error!(error = %e, "Sync: failed to read previous sync status");
-            None
         }
     };
 
@@ -1399,12 +1388,11 @@ pub async fn post_sync_push(State(state): State<AppState>) -> Json<ApiResponse<S
 
     let base_url = sync_cfg.target_url.trim_end_matches('/').to_string();
 
-    // Step 1: Send manifest so the viewer can delete orphaned trips
+    // Step 1: Send the version manifest. The remote deletes any of its own
+    // trips whose UUID isn't in this map (orphans) and returns exactly the
+    // UUIDs it needs — new to it, or at a lower version than reported here.
     let manifest_url = format!("{}/api/sync/manifest", base_url);
-    let manifest = SyncManifestPayload {
-        all_uuids,
-        synced_at: synced_at.clone(),
-    };
+    let manifest = SyncManifestPayload { trip_versions };
     let manifest_resp = match client
         .post(&manifest_url)
         .bearer_auth(&api_key)
@@ -1449,23 +1437,12 @@ pub async fn post_sync_push(State(state): State<AppState>) -> Json<ApiResponse<S
                 .unwrap_or_else(|| "Manifest step failed".to_string()),
         ));
     }
-    let (deleted_count, missing_uuids) = match manifest_result.data {
-        Some(r) => (r.deleted_count, r.missing_uuids),
+    let (deleted_count, uuids_to_push) = match manifest_result.data {
+        Some(r) => (r.deleted_count, r.uuids_to_push),
         None => (0, vec![]),
     };
 
-    // Step 2: Fetch and send the trips the viewer reported as missing, plus any
-    // trip already known to the viewer that changed since the previous sync
-    // (the manifest step alone only detects brand-new UUIDs).
-    let mut uuids_to_push: std::collections::HashSet<String> = missing_uuids.into_iter().collect();
-    if let Some(since) = &previous_synced_at {
-        match state.db().get_trip_uuids_modified_since(since) {
-            Ok(modified) => uuids_to_push.extend(modified),
-            Err(e) => error!(error = %e, "Sync: failed to get modified trip UUIDs"),
-        }
-    }
-    let uuids_to_push: Vec<String> = uuids_to_push.into_iter().collect();
-
+    // Step 2: Fetch and send exactly the trips the remote asked for.
     let updated_trips = match state.db().get_trips_by_uuids(&uuids_to_push) {
         Ok(v) => v,
         Err(e) => {
@@ -1512,7 +1489,9 @@ pub async fn post_sync_push(State(state): State<AppState>) -> Json<ApiResponse<S
         }
     }
 
-    // Step 3: Record last_synced_at locally
+    // Purely cosmetic now — no sync-decision code reads this. A push that failed
+    // for some UUIDs simply leaves the remote's version behind for that UUID, so
+    // the next manifest diff catches it again automatically.
     if let Err(e) = state
         .db()
         .set_system_status_string("last_synced_at", &synced_at)
@@ -1563,7 +1542,8 @@ pub async fn post_sync_manifest(
         return err;
     }
 
-    let deleted_count = match state.db().delete_trips_not_in_uuids(&payload.all_uuids) {
+    let keep_uuids: Vec<String> = payload.trip_versions.keys().cloned().collect();
+    let deleted_count = match state.db().delete_trips_not_in_uuids(&keep_uuids) {
         Ok(n) => n,
         Err(e) => {
             error!(error = %e, "Sync manifest: delete orphans failed");
@@ -1571,35 +1551,29 @@ pub async fn post_sync_manifest(
         }
     };
 
-    // Determine which UUIDs the boat listed that we don't yet have.
-    let missing_uuids = match state.db().get_all_trip_uuids() {
-        Ok(existing) => {
-            let existing_set: std::collections::HashSet<String> = existing.into_iter().collect();
-            payload
-                .all_uuids
-                .iter()
-                .filter(|u| !existing_set.contains(*u))
-                .cloned()
-                .collect::<Vec<_>>()
-        }
+    let local_versions = match state.db().get_trip_versions() {
+        Ok(v) => v,
         Err(e) => {
-            error!(error = %e, "Sync manifest: failed to get existing UUIDs");
+            error!(error = %e, "Sync manifest: failed to get local trip versions");
             return Json(ApiResponse::<SyncManifestResult>::error(e.to_string())).into_response();
         }
     };
+    let uuids_to_push = compute_uuids_to_push(&local_versions, &payload.trip_versions);
 
+    // Cosmetic only, matching post_sync_push — last_synced_at is display-only now.
+    let synced_at = chrono::Utc::now().to_rfc3339();
     if let Err(e) = state
         .db()
-        .set_system_status_string("last_synced_at", &payload.synced_at)
+        .set_system_status_string("last_synced_at", &synced_at)
     {
         error!(error = %e, "Sync manifest: failed to persist synced_at");
     }
 
-    let missing_count = missing_uuids.len();
-    info!(deleted_count, missing_count, "Sync manifest applied");
+    let push_count = uuids_to_push.len();
+    info!(deleted_count, push_count, "Sync manifest applied");
     Json(ApiResponse::ok(SyncManifestResult {
         deleted_count,
-        missing_uuids,
+        uuids_to_push,
     }))
     .into_response()
 }
@@ -1618,7 +1592,7 @@ pub async fn post_sync_trip(
         Err(e) => return Json(ApiResponse::<()>::error(e.to_string())).into_response(),
     };
 
-    match state.db().import_trip(&json_str) {
+    match state.db().import_trip(&json_str, true) {
         Ok(_) => Json(ApiResponse::ok(())).into_response(),
         Err(e) => {
             error!(error = %e, "Sync trip: import failed");

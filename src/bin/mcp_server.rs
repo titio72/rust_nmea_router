@@ -99,6 +99,11 @@ struct FixMooringParams {
     is_moored: bool,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct BumpTripVersionParams {
+    trip_id: u32,
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn parse_dt(s: &str) -> Result<DateTime<Utc>, Box<dyn std::error::Error>> {
@@ -444,6 +449,21 @@ impl NmeaRouterMcp {
         .map_err(db_err)?
         .map_err(db_err)?;
         to_json(data)
+    }
+
+    #[tool(description = "Bump a trip's version counter with no other field changes. Use after a direct SQL correction to vessel_status/environmental_data that doesn't itself touch the trips row, so the change is picked up by the next remote sync (see DB_ANALYST.md).")]
+    async fn bump_trip_version(
+        &self,
+        Parameters(BumpTripVersionParams { trip_id }): Parameters<BumpTripVersionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let db = self.db.clone();
+        tokio::task::spawn_blocking(move || {
+            db.bump_trip_version(trip_id as i64).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(db_err)?
+        .map_err(db_err)?;
+        Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 }
 

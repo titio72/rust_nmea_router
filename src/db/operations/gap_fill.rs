@@ -12,6 +12,7 @@ use mysql::params;
 use mysql::prelude::Queryable;
 use crate::error::AppError;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use crate::db::operations::trip_update::exec_trip_update;
 
 /// A detected gap between two consecutive vessel_status records.
 #[derive(Debug)]
@@ -386,21 +387,20 @@ impl VesselDatabase {
                 end_str.clone()
             };
 
-            tx.exec_drop(
-                r"UPDATE trips
-                  SET total_time_moored      = :time_moored,
-                      total_time_motoring    = :time_motoring,
-                      total_time_sailing     = :time_sailing,
-                      total_distance_motoring = :dist_motoring,
-                      total_distance_sailed   = :dist_sailed,
-                      total_distance_upwind   = :dist_upwind,
-                      total_distance_reaching = :dist_reaching,
-                      total_distance_running  = :dist_running,
-                      total_time_upwind       = :time_upwind,
-                      total_time_reaching     = :time_reaching,
-                      total_time_running      = :time_running,
-                      end_timestamp          = :end_ts
-                  WHERE id = :trip_id",
+            exec_trip_update(
+                &mut tx,
+                r"total_time_moored      = :time_moored,
+                  total_time_motoring    = :time_motoring,
+                  total_time_sailing     = :time_sailing,
+                  total_distance_motoring = :dist_motoring,
+                  total_distance_sailed   = :dist_sailed,
+                  total_distance_upwind   = :dist_upwind,
+                  total_distance_reaching = :dist_reaching,
+                  total_distance_running  = :dist_running,
+                  total_time_upwind       = :time_upwind,
+                  total_time_reaching     = :time_reaching,
+                  total_time_running      = :time_running,
+                  end_timestamp          = :end_ts",
                 params! {
                     "time_moored"    => time_moored,
                     "time_motoring"  => time_motoring,
@@ -888,5 +888,46 @@ mod tests {
         assert_eq!(row.3, 60_000, "total_time_upwind");
         assert_eq!(row.4, 60_000, "total_time_reaching");
         assert_eq!(row.5, 30_000, "total_time_running");
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_recalculate_and_update_trip_bumps_version() {
+        use crate::db::test_helpers::{add_test_trip, add_test_vessel_status, setup_db};
+        use std::time::{Duration, SystemTime};
+
+        let db = setup_db();
+        let t = SystemTime::now();
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Recalc Version Test".to_string(),
+            t,
+            t + Duration::from_secs(1800),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("add_test_trip failed");
+
+        add_test_vessel_status(
+            &db, t, 43.0, 11.0, 5.0, 6.0, None, None, false,
+            crate::utilities::EngineStatus::Off, 1.0, 900_000, None, None,
+        )
+        .expect("add_test_vessel_status failed");
+
+        db.recalculate_and_update_trip(trip_id as i64, t, t + Duration::from_secs(1800))
+            .expect("recalculate_and_update_trip failed");
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let version: u64 = conn
+            .exec_first(
+                "SELECT version FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(version, 2, "recalculate_and_update_trip must bump version");
     }
 }

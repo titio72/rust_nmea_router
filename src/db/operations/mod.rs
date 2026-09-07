@@ -8,6 +8,7 @@ pub mod gap_fill;
 pub mod mooring_fix;
 pub mod sync;
 pub mod forecast;
+pub mod trip_update;
 
 // Test data operations - only available in test builds
 #[cfg(test)]

@@ -110,16 +110,21 @@ to vessel_status and environmental_data manually.
 5. For large deletes (>1000 rows): suggest mysqldump backup first
 
 ### Remote sync scope
-`trips.updated_at` is bumped automatically by MariaDB (`ON UPDATE CURRENT_TIMESTAMP`)
-on any `UPDATE trips ...`, and the boat's push sync uses it to decide which trips to
-re-send to the remote viewer. Any protocol below that ends with an `UPDATE trips SET
-...` (totals recompute, description, uuid backfill) is automatically re-queued for
-the next sync push — no extra step needed.
 
-Edits that touch only `vessel_status` / `environmental_data` and never update the
-trips row itself (e.g. NULLing an anomalous sensor reading) do **not** trigger
-re-sync. If a correction needs to reach the remote viewer, follow it with a totals
-recompute against the trip (see Trim a Trip, steps 8–9) so the trips row is touched.
+Every trip carries a `version` counter (`BIGINT UNSIGNED`, starts at 1).
+`exec_trip_update` (`src/db/operations/trip_update.rs`) is the only function
+allowed to write to `trips` in place, and it always bumps `version` — so no
+write path can forget to. The boat's push sync sends `{uuid: version}` for
+every trip; the remote diffs it directly against its own stored versions and
+reports back exactly which UUIDs need pushing. There is no timestamp cursor
+involved in this decision anymore.
+
+Any direct SQL edit — including a manual `UPDATE trips` statement — must
+include `version = version + 1` in its SET clause, or the change will
+silently not re-sync. Edits that only touch `vessel_status`/`environmental_data`
+and never touch the `trips` row itself need the `bump_trip_version` MCP tool
+(or `UPDATE trips SET version = version + 1 WHERE id = <id>`) afterward
+instead.
 
 ---
 
@@ -199,6 +204,7 @@ FROM vessel_status WHERE timestamp BETWEEN '<new_start>' AND '<new_end>';
 UPDATE trips SET
   start_timestamp        = '<new_start>',
   end_timestamp          = '<new_end>',
+  version                = version + 1,
   total_distance_sailed  = <sailed>,
   total_distance_motoring= <motored>,
   total_time_sailing     = <time_sailing>,
@@ -283,6 +289,11 @@ DELETE FROM environmental_data WHERE metric_id IN (5, 6)
   AND timestamp IN (SELECT timestamp FROM vessel_status WHERE id IN (<ids>));
 ```
 
+After any of the above, call the `bump_trip_version` MCP tool with the trip's
+`id` so the correction is picked up by the next remote sync — edits to
+`vessel_status`/`environmental_data` alone never touch the `trips` row, so
+nothing else will flag the trip as changed.
+
 ---
 
 ### Fix a Mislabeled Mooring Period
@@ -337,6 +348,7 @@ The `nmea_router` MCP server (`target/debug/mcp_server`, or `target/release/mcp_
 | `get_monthly_statistics` | Monthly sailing/motoring distance; optional `year` filter |
 | `trim_trip` | Remove moored padding, recalculate aggregates, invalidate caches (atomic) |
 | `fix_mooring_status` | Correct a mislabeled mooring period: set `is_moored` for `[start, end]`; if `true`, also resamples the window to the moored cadence, recomputes trip aggregates, invalidates caches (atomic) |
+| `bump_trip_version` | Bump a trip's version with no other field changes (for direct SQL corrections that don't touch `trips` itself) |
 | `delete_trip` | Delete trip + all vessel_status + environmental_data + caches (atomic) |
 | `update_trip_description` | Change the free-text trip name |
 | `invalidate_trip_legs` | Force-invalidate legs cache for a trip |

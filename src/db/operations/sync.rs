@@ -5,20 +5,21 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use tracing::{info, warn};
 
-/// Payload sent from boat to viewer's `/api/sync/manifest` endpoint.
-/// Contains all UUID the boat has (for orphan deletion) and the sync timestamp.
+/// Payload sent from boat to viewer's `/api/sync/manifest` endpoint: every
+/// local trip's UUID and current version. Replaces the old UUID-list-plus-
+/// timestamp-cursor exchange — the receiving side diffs this directly
+/// against its own stored versions.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncManifestPayload {
-    pub all_uuids: Vec<String>,
-    pub synced_at: String,
+    pub trip_versions: std::collections::HashMap<String, u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncManifestResult {
     pub deleted_count: usize,
-    /// UUIDs from the manifest payload that the viewer does not yet have.
-    /// The boat should send exactly these trips.
-    pub missing_uuids: Vec<String>,
+    /// UUIDs the boat should push: unknown to the remote, or known at a
+    /// lower version than the boat just reported.
+    pub uuids_to_push: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -167,26 +168,35 @@ impl VesselDatabase {
         Ok(SyncStatus { last_synced_at })
     }
 
-    /// Returns UUIDs of trips whose row was written to after `since` (RFC3339).
-    /// Keyed on `updated_at`, which MariaDB bumps automatically (ON UPDATE
-    /// CURRENT_TIMESTAMP) on any UPDATE to the trips row — status reports on
-    /// a still-open trip (which advance end_timestamp), trim_trip, description
-    /// edits, and manual totals/uuid corrections all count. Edits that only
-    /// touch vessel_status/environmental_data without updating the trips row
-    /// itself are not detected; see DB_ANALYST.md.
-    pub fn get_trip_uuids_modified_since(&self, since: &str) -> Result<Vec<String>, Box<dyn Error>> {
-        let since_dt = chrono::DateTime::parse_from_rfc3339(since)
-            .map_err(|e| format!("Invalid since timestamp: {}", e))?;
-        let since_str = since_dt.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
-
+    /// Returns `{uuid: version}` for every trip with a non-null UUID. Sent as
+    /// the manifest payload; the receiving side diffs it directly against its
+    /// own stored versions — no cursor or timestamp involved.
+    pub fn get_trip_versions(&self) -> Result<std::collections::HashMap<String, u64>, Box<dyn Error>> {
         let mut conn = self.pool.get_conn()?;
-        let uuids: Vec<String> = conn.exec(
-            "SELECT uuid FROM trips WHERE uuid IS NOT NULL AND updated_at > :since \
-             ORDER BY end_timestamp ASC",
-            params! { "since" => since_str },
+        let rows: Vec<(String, u64)> = conn.exec(
+            "SELECT uuid, version FROM trips WHERE uuid IS NOT NULL",
+            (),
         )?;
-        Ok(uuids)
+        Ok(rows.into_iter().collect())
     }
+}
+
+/// Diff two version maps and return the UUIDs from `payload_versions` that
+/// the receiving side (whose own state is `local_versions`) needs pushed:
+/// UUIDs it doesn't have at all, or has at a lower version than the payload.
+/// Pure and DB-free so it's fully unit-testable without a live database.
+pub(crate) fn compute_uuids_to_push(
+    local_versions: &std::collections::HashMap<String, u64>,
+    payload_versions: &std::collections::HashMap<String, u64>,
+) -> Vec<String> {
+    payload_versions
+        .iter()
+        .filter(|(uuid, &payload_version)| match local_versions.get(*uuid) {
+            None => true,
+            Some(&local_version) => local_version < payload_version,
+        })
+        .map(|(uuid, _)| uuid.clone())
+        .collect()
 }
 
 fn is_valid_uuid(s: &str) -> bool {
@@ -205,6 +215,7 @@ mod tests {
     };
     use crate::utilities::EngineStatus;
     use mysql::prelude::Queryable;
+    use std::collections::HashMap;
     use std::ops::Add;
     use std::time::{Duration, SystemTime};
 
@@ -483,123 +494,111 @@ mod tests {
         assert_eq!(status.last_synced_at.as_deref(), Some(ts));
     }
 
-    // Change-detection is driven by `trips.updated_at`, which MariaDB bumps
-    // automatically (ON UPDATE CURRENT_TIMESTAMP) on any UPDATE to the row —
-    // not by application-supplied timestamps. These tests order events with
-    // real wall-clock sleeps rather than synthetic future SystemTimes.
-
     #[test]
-    #[ignore]
-    fn test_modified_since_excludes_trip_not_touched_after_cutoff() {
-        let db = setup_db();
-        let t = SystemTime::now();
-        let (_, uuid) = make_trip(&db, "Old trip", t, 2);
+    fn test_compute_uuids_to_push_flags_missing_uuid() {
+        let local: HashMap<String, u64> = HashMap::new();
+        let mut payload = HashMap::new();
+        payload.insert("uuid-1".to_string(), 1u64);
 
-        std::thread::sleep(Duration::from_millis(50));
-        let since = chrono::Utc::now().to_rfc3339();
-
-        let modified = db
-            .get_trip_uuids_modified_since(&since)
-            .expect("should succeed");
-        assert!(
-            !modified.contains(&uuid),
-            "trip not touched since cutoff must not be reported as modified"
-        );
+        let result = compute_uuids_to_push(&local, &payload);
+        assert_eq!(result, vec!["uuid-1".to_string()]);
     }
 
     #[test]
-    #[ignore]
-    fn test_modified_since_includes_trip_touched_after_cutoff() {
-        let db = setup_db();
-        let t = SystemTime::now();
-        let since = chrono::Utc::now().to_rfc3339();
+    fn test_compute_uuids_to_push_flags_stale_local_version() {
+        let mut local = HashMap::new();
+        local.insert("uuid-1".to_string(), 3u64);
+        let mut payload = HashMap::new();
+        payload.insert("uuid-1".to_string(), 5u64);
 
-        std::thread::sleep(Duration::from_millis(50));
-        let (_, uuid) = make_trip(&db, "Recent trip", t, 2);
-
-        let modified = db
-            .get_trip_uuids_modified_since(&since)
-            .expect("should succeed");
-        assert!(
-            modified.contains(&uuid),
-            "trip created after cutoff must be reported as modified"
-        );
+        let result = compute_uuids_to_push(&local, &payload);
+        assert_eq!(result, vec!["uuid-1".to_string()]);
     }
 
     #[test]
-    #[ignore]
-    fn test_modified_since_catches_live_trip_end_timestamp_update() {
-        let db = setup_db();
-        let t = SystemTime::now();
-        let (trip_id, uuid) = make_trip(&db, "Live trip", t, 2);
+    fn test_compute_uuids_to_push_skips_up_to_date_trip() {
+        let mut local = HashMap::new();
+        local.insert("uuid-1".to_string(), 5u64);
+        let mut payload = HashMap::new();
+        payload.insert("uuid-1".to_string(), 5u64);
 
-        std::thread::sleep(Duration::from_millis(50));
-        let previous_synced_at = chrono::Utc::now().to_rfc3339();
-
-        // Not modified yet: row untouched since previous_synced_at.
-        let modified_before_update = db
-            .get_trip_uuids_modified_since(&previous_synced_at)
-            .expect("should succeed");
-        assert!(
-            !modified_before_update.contains(&uuid),
-            "trip untouched since previous sync must not be reported as modified"
-        );
-
-        std::thread::sleep(Duration::from_millis(50));
-
-        // Simulate a further status report on the still-open trip, extending it.
-        let new_end = t.add(Duration::from_secs(3 * ONE_HOUR_S));
-        let new_end_str = chrono::DateTime::<chrono::Utc>::from(new_end)
-            .format("%Y-%m-%d %H:%M:%S%.3f")
-            .to_string();
-        {
-            let mut conn = db.pool.get_conn().unwrap();
-            conn.exec_drop(
-                "UPDATE trips SET end_timestamp = :end WHERE id = :id",
-                params! { "end" => new_end_str, "id" => trip_id },
-            )
-            .unwrap();
-        }
-
-        let modified_after_update = db
-            .get_trip_uuids_modified_since(&previous_synced_at)
-            .expect("should succeed");
-        assert!(
-            modified_after_update.contains(&uuid),
-            "live trip extended past previous sync time must be reported as modified \
-             (end_timestamp update auto-bumps updated_at)"
-        );
+        let result = compute_uuids_to_push(&local, &payload);
+        assert!(result.is_empty(), "equal versions must not be re-pushed");
     }
 
     #[test]
-    #[ignore]
-    fn test_modified_since_detects_totals_only_edit_with_unchanged_end_timestamp() {
-        // Regression test: a manual DB cleanup that only rewrites totals (per
-        // DB_ANALYST.md protocols) must still be picked up for sync even
-        // though end_timestamp never changes.
+    fn test_compute_uuids_to_push_skips_when_local_is_ahead() {
+        // Should not happen in the boat-authoritative one-way flow, but the
+        // function must not treat "local newer than payload" as needing a push.
+        let mut local = HashMap::new();
+        local.insert("uuid-1".to_string(), 9u64);
+        let mut payload = HashMap::new();
+        payload.insert("uuid-1".to_string(), 5u64);
+
+        let result = compute_uuids_to_push(&local, &payload);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_get_trip_versions_returns_all() {
         let db = setup_db();
         let t = SystemTime::now();
-        let (trip_id, uuid) = make_trip(&db, "Amended trip", t, 2);
+        let (_, uuid1) = make_trip(&db, "Trip 1", t, 2);
+        let (_, uuid2) = make_trip(&db, "Trip 2", t.add(Duration::from_secs(3 * ONE_HOUR_S)), 2);
 
-        std::thread::sleep(Duration::from_millis(50));
-        let previous_synced_at = chrono::Utc::now().to_rfc3339();
-        std::thread::sleep(Duration::from_millis(50));
+        let versions = db.get_trip_versions().expect("get_trip_versions failed");
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions.get(&uuid1), Some(&1));
+        assert_eq!(versions.get(&uuid2), Some(&1));
+    }
 
-        {
-            let mut conn = db.pool.get_conn().unwrap();
-            conn.exec_drop(
-                "UPDATE trips SET total_distance_sailed = 42.0 WHERE id = :id",
-                params! { "id" => trip_id },
-            )
-            .unwrap();
-        }
+    /// Regression test for the original bug: a trip edited locally after its
+    /// first successful sync must be flagged for re-push on the next manifest
+    /// diff, with no cursor/timestamp bookkeeping involved at all.
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_edit_after_initial_sync_is_flagged_by_version_diff() {
+        let boat = setup_db();
+        let remote = setup_db();
+        let t = SystemTime::now();
+        let (trip_id, uuid) = make_trip(&boat, "Round Trip", t, 2);
 
-        let modified = db
-            .get_trip_uuids_modified_since(&previous_synced_at)
-            .expect("should succeed");
+        // Initial sync: remote adopts the boat's export verbatim (is_sync = true).
+        let json = boat.export_trip_to_string(trip_id as i64).unwrap();
+        remote.import_trip(&json, true).expect("initial sync import failed");
+
+        let boat_versions = boat.get_trip_versions().expect("boat versions failed");
+        let remote_versions = remote.get_trip_versions().expect("remote versions failed");
         assert!(
-            modified.contains(&uuid),
-            "totals edit with unchanged end_timestamp must still be reported as modified"
+            compute_uuids_to_push(&remote_versions, &boat_versions).is_empty(),
+            "freshly synced trip must not need re-push"
+        );
+
+        // Boat edits the trip locally (any exec_trip_update-backed write bumps version).
+        //
+        // Note: `boat` and `remote` share the single physical test schema (there is
+        // no two-database test harness in this codebase), and `import_trip`'s
+        // is_sync replace semantics delete-and-reinsert the row on UUID match, so
+        // the original numeric `trip_id` no longer resolves after the "remote"
+        // import above. Re-resolve it by UUID before editing — a real, physically
+        // separate boat DB would never have had its own row's id touched by a
+        // remote's import in the first place.
+        let current_trip_id = boat
+            .fetch_trip_by_uuid(&uuid)
+            .expect("fetch_trip_by_uuid failed")
+            .expect("trip not found by uuid")
+            .id;
+        boat.update_trip_description(current_trip_id as i64, "Round Trip (edited)")
+            .expect("update_trip_description failed");
+
+        let boat_versions = boat.get_trip_versions().expect("boat versions failed");
+        let to_push = compute_uuids_to_push(&remote_versions, &boat_versions);
+        assert_eq!(
+            to_push,
+            vec![uuid],
+            "an edit after the initial sync must be flagged for push, with no \
+             timestamp cursor involved"
         );
     }
 
@@ -653,7 +652,7 @@ mod tests {
         // Per-trip step
         for trip_value in &updated_trips {
             let json_str = serde_json::to_string(trip_value).unwrap();
-            db.import_trip(&json_str).expect("import_trip failed");
+            db.import_trip(&json_str, true).expect("import_trip failed");
         }
 
         assert_eq!(count_rows(&db, "trips"), 2);
@@ -713,8 +712,8 @@ mod tests {
         let json_str = serde_json::to_string(&trip_json).unwrap();
 
         // Import twice — second call must produce the same DB state
-        db.import_trip(&json_str).expect("first import failed");
-        db.import_trip(&json_str).expect("second import failed");
+        db.import_trip(&json_str, true).expect("first import failed");
+        db.import_trip(&json_str, true).expect("second import failed");
         assert_eq!(count_rows(&db, "trips"), 1, "still exactly one trip");
 
         let uuids = db.get_all_trip_uuids().expect("get UUIDs");
