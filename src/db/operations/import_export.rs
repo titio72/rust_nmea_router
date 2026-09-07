@@ -313,7 +313,16 @@ impl VesselDatabase {
         let total_time_moored = trip["t_moor"].as_u64()
             .ok_or(AppError::Database("Missing or invalid trip.t_moor".to_string()))?;
         let import_uuid: Option<&str> = trip["uuid"].as_str();
-        
+
+        // Validate the sync-mode version field before any mutation happens (in
+        // particular, before the UUID-match delete below). A malformed sync
+        // payload must error out with the existing trip left intact, not after
+        // it has already been deleted.
+        let payload_version: Option<u64> = trip["ver"].as_u64();
+        if is_sync && payload_version.is_none() {
+            return Err(AppError::Database("Missing or invalid trip.ver in sync payload".to_string()));
+        }
+
         let mut conn = self.pool.get_conn()?;
         
         let new_trip_start = chrono::DateTime::parse_from_rfc3339(start_ts_str)
@@ -363,9 +372,8 @@ impl VesselDatabase {
         // have no authoritative external version to trust — bump from whatever is
         // already stored locally (or start at 1 for a brand-new UUID).
         let new_version: u64 = if is_sync {
-            trip["ver"]
-                .as_u64()
-                .ok_or(AppError::Database("Missing or invalid trip.ver in sync payload".to_string()))?
+            // Already validated as Some above, before the UUID-match delete ran.
+            payload_version.unwrap()
         } else {
             existing_version.unwrap_or(0) + 1
         };
@@ -667,6 +675,50 @@ mod tests {
             "manual re-import of the same UUID must bump from the prior stored version, \
              not reset to 1 — this is the exact scenario that silently failed to \
              re-sync before this feature"
+        );
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_import_trip_sync_missing_version_does_not_delete_existing_trip() {
+        let db = setup_db();
+        let fixed_uuid = "eeeeeeee-1111-2222-3333-444444444444";
+        let original_payload = format!(
+            r#"{{"trip": {{"desc": "Original", "start": "2020-05-01T10:00:00.000Z",
+            "end": "2020-05-01T10:05:00.000Z", "dist_sail": 0.0, "dist_motor": 0.0,
+            "t_sail": 0, "t_motor": 0, "t_moor": 0, "uuid": "{fixed_uuid}", "ver": 1}},
+            "vs": [], "em": []}}"#
+        );
+
+        db.import_trip(&original_payload, true)
+            .expect("initial sync import should succeed");
+
+        // Same UUID, but no 'ver' field — a malformed sync payload.
+        let malformed_payload = format!(
+            r#"{{"trip": {{"desc": "Malformed Resync", "start": "2020-05-01T10:00:00.000Z",
+            "end": "2020-05-01T10:05:00.000Z", "dist_sail": 0.0, "dist_motor": 0.0,
+            "t_sail": 0, "t_motor": 0, "t_moor": 0, "uuid": "{fixed_uuid}"}},
+            "vs": [], "em": []}}"#
+        );
+
+        let result = db.import_trip(&malformed_payload, true);
+        assert!(
+            result.is_err(),
+            "is_sync=true with no 'ver' field must fail, not delete-then-fail"
+        );
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let count: u64 = conn
+            .exec_first(
+                "SELECT COUNT(*) FROM trips WHERE uuid = :uuid",
+                mysql::params! { "uuid" => fixed_uuid },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "the original trip must still exist after a malformed sync payload errors out — \
+             validation of trip.ver must happen before the existing-trip delete, not after"
         );
     }
 }
