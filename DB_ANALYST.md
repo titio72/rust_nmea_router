@@ -119,10 +119,12 @@ every trip; the remote diffs it directly against its own stored versions and
 reports back exactly which UUIDs need pushing. There is no timestamp cursor
 involved in this decision anymore.
 
-A direct SQL edit to `vessel_status`/`environmental_data` that never touches
-the `trips` row itself will not be picked up automatically — call the
-`bump_trip_version` MCP tool (or `UPDATE trips SET version = version + 1
-WHERE id = <id>`) afterward so the change reaches the remote viewer.
+Any direct SQL edit — including a manual `UPDATE trips` statement — must
+include `version = version + 1` in its SET clause, or the change will
+silently not re-sync. Edits that only touch `vessel_status`/`environmental_data`
+and never touch the `trips` row itself need the `bump_trip_version` MCP tool
+(or `UPDATE trips SET version = version + 1 WHERE id = <id>`) afterward
+instead.
 
 ---
 
@@ -202,6 +204,7 @@ FROM vessel_status WHERE timestamp BETWEEN '<new_start>' AND '<new_end>';
 UPDATE trips SET
   start_timestamp        = '<new_start>',
   end_timestamp          = '<new_end>',
+  version                = version + 1,
   total_distance_sailed  = <sailed>,
   total_distance_motoring= <motored>,
   total_time_sailing     = <time_sailing>,
