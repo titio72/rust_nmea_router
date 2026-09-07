@@ -16,9 +16,13 @@ cross build --release --target "${TARGET}"
 echo -e "${GREEN}✓ Build complete${NC}"
 
 echo -e "${YELLOW}Syncing files to ${REMOTE_HOST}...${NC}"
-rsync -av --delete \
-    static/ \
-    scripts/ \
+# static/ and scripts/ are synced separately (with --delete) so their trailing
+# slashes merge each directory's *contents* into the matching remote
+# subdirectory, rather than flattening them into REMOTE_STAGE/ alongside the
+# top-level files below.
+rsync -av --delete static/ "${REMOTE_HOST}:${REMOTE_STAGE}/static/"
+rsync -av --delete scripts/ "${REMOTE_HOST}:${REMOTE_STAGE}/scripts/"
+rsync -av \
     schema.sql \
     pgns.json \
     config.example.json \

@@ -35,16 +35,6 @@ pub struct SyncStatus {
 }
 
 impl VesselDatabase {
-    /// Returns all trip UUIDs. Used by the push side to populate `all_uuids`.
-    pub fn get_all_trip_uuids(&self) -> Result<Vec<String>, Box<dyn Error>> {
-        let mut conn = self.pool.get_conn()?;
-        let uuids: Vec<String> = conn.exec(
-            "SELECT uuid FROM trips WHERE uuid IS NOT NULL ORDER BY end_timestamp ASC",
-            (),
-        )?;
-        Ok(uuids)
-    }
-
     /// Returns export-format JSON values for the trips whose UUID is in the given list.
     pub fn get_trips_by_uuids(
         &self,
@@ -278,28 +268,6 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn test_get_all_trip_uuids_empty() {
-        let db = setup_db();
-        let uuids = db.get_all_trip_uuids().expect("should succeed");
-        assert!(uuids.is_empty(), "fresh DB has no UUIDs");
-    }
-
-    #[test]
-    #[ignore]
-    fn test_get_all_trip_uuids_returns_all() {
-        let db = setup_db();
-        let t = SystemTime::now();
-        let (_, uuid1) = make_trip(&db, "Trip 1", t, 2);
-        let (_, uuid2) = make_trip(&db, "Trip 2", t.add(Duration::from_secs(3 * ONE_HOUR_S)), 2);
-
-        let uuids = db.get_all_trip_uuids().expect("should succeed");
-        assert_eq!(uuids.len(), 2);
-        assert!(uuids.contains(&uuid1));
-        assert!(uuids.contains(&uuid2));
-    }
-
-    #[test]
-    #[ignore]
     fn test_get_trips_by_uuids_returns_matching() {
         let db = setup_db();
         let t = SystemTime::now();
@@ -372,9 +340,9 @@ mod tests {
         assert_eq!(deleted, 1, "one orphan deleted");
         assert_eq!(count_rows(&db, "trips"), 2);
 
-        let remaining = db.get_all_trip_uuids().expect("should succeed");
-        assert!(remaining.contains(&uuid1));
-        assert!(remaining.contains(&uuid2));
+        let remaining = db.get_trip_versions().expect("should succeed");
+        assert!(remaining.contains_key(&uuid1));
+        assert!(remaining.contains_key(&uuid2));
     }
 
     #[test]
@@ -633,7 +601,11 @@ mod tests {
         )
         .expect("add vessel_status failed");
 
-        let all_uuids = db.get_all_trip_uuids().expect("get UUIDs");
+        let all_uuids: Vec<String> = db
+            .get_trip_versions()
+            .expect("get trip versions")
+            .into_keys()
+            .collect();
         let updated_trips = db.get_trips_by_uuids(&all_uuids).expect("get trips");
         assert_eq!(updated_trips.len(), 2);
 
@@ -662,9 +634,9 @@ mod tests {
             "vessel_status row restored"
         );
 
-        let uuids_after = db.get_all_trip_uuids().expect("get UUIDs after");
-        assert!(uuids_after.contains(&uuid1));
-        assert!(uuids_after.contains(&uuid2));
+        let uuids_after = db.get_trip_versions().expect("get UUIDs after");
+        assert!(uuids_after.contains_key(&uuid1));
+        assert!(uuids_after.contains_key(&uuid2));
 
         let status = db.get_sync_status().expect("get sync status");
         assert_eq!(
@@ -695,9 +667,9 @@ mod tests {
         assert_eq!(deleted, 1, "trip 3 should be deleted");
         assert_eq!(count_rows(&db, "trips"), 2, "only 2 trips remain");
 
-        let remaining = db.get_all_trip_uuids().expect("get UUIDs");
-        assert!(remaining.contains(&uuid1));
-        assert!(remaining.contains(&uuid2));
+        let remaining = db.get_trip_versions().expect("get UUIDs");
+        assert!(remaining.contains_key(&uuid1));
+        assert!(remaining.contains_key(&uuid2));
     }
 
     #[test]
@@ -716,7 +688,7 @@ mod tests {
         db.import_trip(&json_str, true).expect("second import failed");
         assert_eq!(count_rows(&db, "trips"), 1, "still exactly one trip");
 
-        let uuids = db.get_all_trip_uuids().expect("get UUIDs");
+        let uuids: Vec<String> = db.get_trip_versions().expect("get UUIDs").into_keys().collect();
         assert_eq!(uuids, vec![uuid]);
     }
 }
