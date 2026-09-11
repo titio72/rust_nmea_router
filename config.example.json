@@ -44,7 +44,7 @@
     "enabled": true,
     "target_url": "https://your-trips-viewer.example.com",
     "api_key": "change-me-use-32-chars-minimum",
-    "timeout_secs": 120,
+    "timeout_secs": 600,
     "accept_invalid_certs": false
   },
   "polars_file_path": "/etc/nmea_router/polars.csv",

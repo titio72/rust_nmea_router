@@ -12,7 +12,7 @@ For trip data analysis, modification protocols, and entity relationships see [DB
 ## Directories
 
 ```
-doc/    # All the documentation goes here. Only docs relevant to agents are in the root, like README.md, DB_ANALYST.md, and CLAUDE.md.
+docs/   # All the documentation goes here. Only docs relevant to agents are in the root: README.md, AGENTS.md, CLAUDE.md, DB_ANALYST.md, TODO.md.
 ```
 
 ---
@@ -77,51 +77,13 @@ pgns.json                     # NMEA2000 PGN reference (1.3 MB)
 
 ---
 
-## Mandatory Coding Rules
+## Mandatory Coding Rules, Key Patterns & UI Conventions
 
-These apply to all code, AI-generated or otherwise (see AGENTS.md §Rules for the full list):
-
-1. **Backend**: Rust only. **Frontend**: HTML + vanilla JavaScript.
-2. **Naming**: `snake_case` functions/modules, `PascalCase` structs, `UPPER_CASE` constants.
-3. **Never call `now()`** inside business logic — pass timestamps as parameters. Only call `now()` in event handlers (e.g., on NMEA message receipt).
-4. **Units are non-negotiable**:
-   - Speed → knots, Distance → nautical miles, Position → decimal degrees
-   - Temperature → Celsius, Pressure → Pascals, Humidity → percentage
-   - Angles → decimal degrees (0–360), Durations → milliseconds
-5. **Angle averaging**: use `atan2(avg_sin, avg_cos)` — never simple arithmetic mean.
-6. **Distance/bearing**: Haversine formula only.
-7. **All timestamps in UTC**; all durations in milliseconds as `u64` or `Duration`.
-8. **Configuration is read-only** at runtime — mutable application state lives in the database.
-9. **SQL**: parameterized queries (`params!` macro) always; transactions for multi-statement ops.
-10. **SignalK broadcasts use SI units** (m/s, radians, Kelvin, Pa) regardless of internal units.
-
----
-
-## Key Patterns
-
-**Error handling**: `Result<T, Box<dyn Error>>`; chain with `.map_err()`; panic only in tests or truly fatal paths.
-
-**MySQL DECIMAL rows** come back as `mysql::Value::Bytes` — convert via `String::from_utf8(b)?.parse::<f64>()`.
-
-**Transactions**:
-```rust
-let mut tx = conn.start_transaction(mysql::TxOpts::default())?;
-tx.exec_drop("UPDATE ...", params!{...})?;
-tx.commit()?;
-```
-
-**Code hygiene**: no unused imports, no abandoned `console.log()`, no partial implementations committed to main. If a refactor is incomplete, put it on a feature branch.
-
----
-
-## UI Conventions (static/)
-
-- Pages are 1500 px wide, centered.
-- All pages load `shared-theme.js` and `shared.css`.
-- Structure: `<div class="header-bar">` then one or more `<div class="level-1-container">`.
-- Theme toggle: `id="themeBtn"` with `class="theme-toggle"`.
-- Brand logo: `id="brandLogo"` (swapped on theme change).
-- Pages that need custom theme behavior override `toggleTheme()` and call `baseToggleTheme()` first.
+These apply to all code, AI-generated or otherwise. Full detail lives in AGENTS.md — don't restate it here, read it there:
+- Naming, units, timestamp/duration rules, angle averaging, Haversine, config read-only, SQL/transaction rules → AGENTS.md §Rules and §Code Style & Conventions.
+- Error handling, MySQL `DECIMAL`→`Bytes` conversion, transaction pattern → AGENTS.md §Common Patterns.
+- Code hygiene / no partial implementations → AGENTS.md §Code Hygiene & Cleanup.
+- Page layout, `shared-theme.js`/`shared.css`, `header-bar`/`level-1-container`, theme toggle IDs → AGENTS.md §UI structure.
 
 ---
 

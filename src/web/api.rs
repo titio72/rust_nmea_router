@@ -22,7 +22,10 @@ use tracing::{error, info, warn, Span};
 
 use crate::ais_target_cache::{AisTargetCache, AisTargetData};
 use crate::config::Config;
-use crate::db::operations::sync::{compute_uuids_to_push, SyncManifestPayload, SyncManifestResult, SyncResult};
+use crate::db::operations::sync::{
+    classify_uuids_to_push, compute_uuids_to_push, SyncManifestPayload, SyncManifestResult,
+    SyncResult,
+};
 use crate::db::{
     HeatmapData, MultiMetricData, NavAnalysisRow, SpeedDistributionData,
     TrackPoint, TripLegsData, TripSummary, TwaDistributionData, VesselDatabase, WebMetricData,
@@ -1342,7 +1345,17 @@ fn err_chain(e: &dyn std::error::Error) -> String {
     msg
 }
 
-pub async fn post_sync_push(State(state): State<AppState>) -> Json<ApiResponse<SyncResult>> {
+#[derive(Debug, Deserialize)]
+pub struct SyncPushQuery {
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+pub async fn post_sync_push(
+    State(state): State<AppState>,
+    Query(query): Query<SyncPushQuery>,
+) -> Json<ApiResponse<SyncResult>> {
+    let dry_run = query.dry_run;
     let sync_cfg = &state.config.sync;
 
     if !sync_cfg.enabled {
@@ -1392,7 +1405,10 @@ pub async fn post_sync_push(State(state): State<AppState>) -> Json<ApiResponse<S
     // trips whose UUID isn't in this map (orphans) and returns exactly the
     // UUIDs it needs — new to it, or at a lower version than reported here.
     let manifest_url = format!("{}/api/sync/manifest", base_url);
-    let manifest = SyncManifestPayload { trip_versions };
+    let manifest = SyncManifestPayload {
+        trip_versions,
+        dry_run,
+    };
     let manifest_resp = match client
         .post(&manifest_url)
         .bearer_auth(&api_key)
@@ -1437,10 +1453,48 @@ pub async fn post_sync_push(State(state): State<AppState>) -> Json<ApiResponse<S
                 .unwrap_or_else(|| "Manifest step failed".to_string()),
         ));
     }
-    let (deleted_count, uuids_to_push) = match manifest_result.data {
-        Some(r) => (r.deleted_count, r.uuids_to_push),
-        None => (0, vec![]),
-    };
+    let manifest_data = manifest_result.data.unwrap_or(SyncManifestResult {
+        deleted_count: 0,
+        uuids_to_push: vec![],
+        to_add: vec![],
+        to_update: vec![],
+        to_delete: vec![],
+    });
+
+    if dry_run {
+        // Preview only: describe what would happen, write nothing, push nothing.
+        let to_add = match state.db().get_trip_summaries_by_uuids(&manifest_data.to_add) {
+            Ok(v) => v,
+            Err(e) => {
+                error!(error = %e, "Sync (dry run): failed to look up to-add trip summaries");
+                return Json(ApiResponse::error(format!("DB error: {}", e)));
+            }
+        };
+        let to_update = match state.db().get_trip_summaries_by_uuids(&manifest_data.to_update) {
+            Ok(v) => v,
+            Err(e) => {
+                error!(error = %e, "Sync (dry run): failed to look up to-update trip summaries");
+                return Json(ApiResponse::error(format!("DB error: {}", e)));
+            }
+        };
+        info!(
+            to_add = to_add.len(),
+            to_update = to_update.len(),
+            to_delete = manifest_data.to_delete.len(),
+            "Sync dry run complete"
+        );
+        return Json(ApiResponse::ok(SyncResult {
+            deleted_count: manifest_data.to_delete.len(),
+            upserted_count: 0,
+            synced_at: chrono::Utc::now().to_rfc3339(),
+            dry_run: true,
+            to_add,
+            to_update,
+            to_delete: manifest_data.to_delete,
+        }));
+    }
+
+    let (deleted_count, uuids_to_push) = (manifest_data.deleted_count, manifest_data.uuids_to_push);
 
     // Step 2: Fetch and send exactly the trips the remote asked for.
     let updated_trips = match state.db().get_trips_by_uuids(&uuids_to_push) {
@@ -1504,6 +1558,10 @@ pub async fn post_sync_push(State(state): State<AppState>) -> Json<ApiResponse<S
         deleted_count,
         upserted_count,
         synced_at,
+        dry_run: false,
+        to_add: vec![],
+        to_update: vec![],
+        to_delete: vec![],
     }))
 }
 
@@ -1543,6 +1601,45 @@ pub async fn post_sync_manifest(
     }
 
     let keep_uuids: Vec<String> = payload.trip_versions.keys().cloned().collect();
+
+    if payload.dry_run {
+        // Preview only: find what would be deleted/added/updated, write nothing.
+        let to_delete = match state.db().find_orphan_trip_details(&keep_uuids) {
+            Ok(v) => v,
+            Err(e) => {
+                error!(error = %e, "Sync manifest (dry run): find orphans failed");
+                return Json(ApiResponse::<SyncManifestResult>::error(e.to_string()))
+                    .into_response();
+            }
+        };
+        let local_versions = match state.db().get_trip_versions() {
+            Ok(v) => v,
+            Err(e) => {
+                error!(error = %e, "Sync manifest (dry run): failed to get local trip versions");
+                return Json(ApiResponse::<SyncManifestResult>::error(e.to_string()))
+                    .into_response();
+            }
+        };
+        let (to_add, to_update) = classify_uuids_to_push(&local_versions, &payload.trip_versions);
+        let uuids_to_push: Vec<String> =
+            to_add.iter().chain(to_update.iter()).cloned().collect();
+
+        info!(
+            to_delete = to_delete.len(),
+            to_add = to_add.len(),
+            to_update = to_update.len(),
+            "Sync manifest (dry run) computed"
+        );
+        return Json(ApiResponse::ok(SyncManifestResult {
+            deleted_count: to_delete.len(),
+            uuids_to_push,
+            to_add,
+            to_update,
+            to_delete,
+        }))
+        .into_response();
+    }
+
     let deleted_count = match state.db().delete_trips_not_in_uuids(&keep_uuids) {
         Ok(n) => n,
         Err(e) => {
@@ -1574,6 +1671,9 @@ pub async fn post_sync_manifest(
     Json(ApiResponse::ok(SyncManifestResult {
         deleted_count,
         uuids_to_push,
+        to_add: vec![],
+        to_update: vec![],
+        to_delete: vec![],
     }))
     .into_response()
 }

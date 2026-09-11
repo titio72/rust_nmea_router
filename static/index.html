@@ -367,6 +367,50 @@
             opacity: 0.8;
         }
 
+        .sync-modal-content {
+            max-width: 600px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sync-modal-body {
+            overflow-y: auto;
+            margin-bottom: 20px;
+        }
+
+        .sync-modal-section {
+            margin-bottom: 16px;
+        }
+
+        .sync-modal-section-title {
+            font-weight: bold;
+            color: var(--text-bold);
+            margin-bottom: 8px;
+        }
+
+        .sync-modal-trip {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+
+        .sync-modal-trip-dates {
+            color: var(--text-secondary);
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .sync-modal-empty {
+            color: var(--text-secondary);
+            font-style: italic;
+            font-size: 13px;
+        }
+
         .week-labels {
             display: grid;
             grid-template-columns: repeat(54, 23px);
@@ -425,6 +469,17 @@
                 <div class="edit-modal-buttons">
                     <button class="edit-modal-cancel" onclick="closeEditModal()">Cancel</button>
                     <button class="edit-modal-save" onclick="saveEditModal()">Save</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="syncModal" class="edit-modal">
+            <div class="edit-modal-content sync-modal-content">
+                <div class="edit-modal-header">Confirm Sync</div>
+                <div id="syncModalBody" class="sync-modal-body"></div>
+                <div class="edit-modal-buttons">
+                    <button class="edit-modal-cancel" onclick="closeSyncModal()">Cancel</button>
+                    <button class="edit-modal-save" onclick="confirmSync()">Sync</button>
                 </div>
             </div>
         </div>
@@ -1314,9 +1369,69 @@
             if (event.target === modal) {
                 closeEditModal();
             }
+            const syncModal = document.getElementById('syncModal');
+            if (event.target === syncModal) {
+                closeSyncModal();
+            }
         });
 
+        function escapeHtml(str) {
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function formatSyncTripLine(t) {
+            const start = t.start ? t.start.slice(0, 10) : '';
+            const end = t.end ? t.end.slice(0, 10) : '';
+            const range = start === end ? start : `${start} → ${end}`;
+            return `<div class="sync-modal-trip"><span>${escapeHtml(t.description || '(no description)')}</span><span class="sync-modal-trip-dates">${range}</span></div>`;
+        }
+
+        function renderSyncSection(title, trips) {
+            if (!trips || trips.length === 0) {
+                return `<div class="sync-modal-section"><div class="sync-modal-section-title">${title} (0)</div><div class="sync-modal-empty">None</div></div>`;
+            }
+            return `<div class="sync-modal-section"><div class="sync-modal-section-title">${title} (${trips.length})</div>${trips.map(formatSyncTripLine).join('')}</div>`;
+        }
+
+        function closeSyncModal() {
+            document.getElementById('syncModal').classList.remove('active');
+        }
+
         async function triggerSync() {
+            const btn = document.getElementById('syncBtn');
+            const icon = btn.querySelector('app-icon');
+            btn.disabled = true;
+            icon.setAttribute('name', 'warn');
+            try {
+                const response = await fetch('/api/sync/push?dry_run=true', { method: 'POST' });
+                const result = await response.json();
+                if (result.status !== 'ok') {
+                    alert('Sync preview failed: ' + (result.error || 'unknown error'));
+                    return;
+                }
+                const d = result.data;
+                const toAdd = d.to_add || [];
+                const toUpdate = d.to_update || [];
+                const toDelete = d.to_delete || [];
+                if (toAdd.length === 0 && toUpdate.length === 0 && toDelete.length === 0) {
+                    alert('Already in sync — nothing to add, update, or delete.');
+                    return;
+                }
+                document.getElementById('syncModalBody').innerHTML =
+                    renderSyncSection('To add', toAdd) +
+                    renderSyncSection('To update', toUpdate) +
+                    renderSyncSection('To delete on remote', toDelete);
+                document.getElementById('syncModal').classList.add('active');
+            } catch (err) {
+                alert('Sync preview error: ' + err.message);
+            } finally {
+                icon.setAttribute('name', 'sync');
+                btn.disabled = false;
+            }
+        }
+
+        async function confirmSync() {
+            closeSyncModal();
             const btn = document.getElementById('syncBtn');
             const icon = btn.querySelector('app-icon');
             btn.disabled = true;
@@ -1328,7 +1443,7 @@
                     const d = result.data;
                     alert(`Sync complete.\nUploaded: ${d.upserted_count} trip(s)\nDeleted on remote: ${d.deleted_count} trip(s)`);
                 } else {
-                    alert('Sync failed: ' + (result.message || 'unknown error'));
+                    alert('Sync failed: ' + (result.error || 'unknown error'));
                 }
             } catch (err) {
                 alert('Sync error: ' + err.message);

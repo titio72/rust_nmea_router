@@ -12,14 +12,39 @@ use tracing::{info, warn};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncManifestPayload {
     pub trip_versions: std::collections::HashMap<String, u64>,
+    /// Preview mode: compute what would change without writing anything —
+    /// no orphan deletion, no trip push, no last_synced_at update.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// Minimal human-readable identity for a trip, used in dry-run reports.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TripInfo {
+    pub uuid: String,
+    pub description: String,
+    pub start: String,
+    pub end: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncManifestResult {
     pub deleted_count: usize,
     /// UUIDs the boat should push: unknown to the remote, or known at a
-    /// lower version than the boat just reported.
+    /// lower version than the boat just reported. Populated in both real
+    /// and dry-run mode (real mode: what will be pushed; dry-run: what
+    /// would be pushed).
     pub uuids_to_push: Vec<String>,
+    /// Dry-run only: `uuids_to_push` split by reason — unknown to the remote.
+    #[serde(default)]
+    pub to_add: Vec<String>,
+    /// Dry-run only: `uuids_to_push` split by reason — known at a lower version.
+    #[serde(default)]
+    pub to_update: Vec<String>,
+    /// Dry-run only: full identity of the trips that would be deleted
+    /// (real mode only reports the count, via `deleted_count`).
+    #[serde(default)]
+    pub to_delete: Vec<TripInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -27,6 +52,17 @@ pub struct SyncResult {
     pub deleted_count: usize,
     pub upserted_count: usize,
     pub synced_at: String,
+    #[serde(default)]
+    pub dry_run: bool,
+    /// Dry-run only: trips unknown to the remote.
+    #[serde(default)]
+    pub to_add: Vec<TripInfo>,
+    /// Dry-run only: trips known to the remote at a lower version.
+    #[serde(default)]
+    pub to_update: Vec<TripInfo>,
+    /// Dry-run only: trips the remote would delete as orphans.
+    #[serde(default)]
+    pub to_delete: Vec<TripInfo>,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,6 +188,98 @@ impl VesselDatabase {
         Ok(count)
     }
 
+    /// Dry-run counterpart to `delete_trips_not_in_uuids`: same orphan
+    /// selection, but read-only — returns the trips' identity instead of
+    /// deleting them.
+    pub fn find_orphan_trip_details(
+        &self,
+        keep_uuids: &[String],
+    ) -> Result<Vec<TripInfo>, Box<dyn Error>> {
+        let valid_uuids: Vec<&String> = keep_uuids.iter().filter(|u| is_valid_uuid(u)).collect();
+
+        let mut conn = self.pool.get_conn()?;
+
+        let orphan_rows: Vec<(String, Option<String>, String, String)> = if valid_uuids.is_empty()
+        {
+            conn.exec(
+                "SELECT COALESCE(uuid, ''), description, \
+                        DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f'), \
+                        DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S.%f') FROM trips",
+                (),
+            )?
+        } else {
+            let uuid_list = valid_uuids
+                .iter()
+                .map(|u| format!("'{}'", u))
+                .collect::<Vec<_>>()
+                .join(",");
+            conn.exec(
+                format!(
+                    "SELECT COALESCE(uuid, ''), description, \
+                            DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f'), \
+                            DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S.%f') \
+                     FROM trips WHERE uuid IS NULL OR uuid NOT IN ({})",
+                    uuid_list
+                ),
+                (),
+            )?
+        };
+
+        Ok(orphan_rows
+            .into_iter()
+            .map(|(uuid, description, start, end)| TripInfo {
+                uuid,
+                description: description.unwrap_or_default(),
+                start,
+                end,
+            })
+            .collect())
+    }
+
+    /// Lightweight trip identity lookup by UUID — just enough for a dry-run
+    /// report (unlike `get_trips_by_uuids`, does not fetch vessel_status or
+    /// environmental_data).
+    pub fn get_trip_summaries_by_uuids(
+        &self,
+        uuids: &[String],
+    ) -> Result<Vec<TripInfo>, Box<dyn Error>> {
+        if uuids.is_empty() {
+            return Ok(vec![]);
+        }
+        let valid_uuids: Vec<&String> = uuids.iter().filter(|u| is_valid_uuid(u)).collect();
+        if valid_uuids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let uuid_list = valid_uuids
+            .iter()
+            .map(|u| format!("'{}'", u))
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let mut conn = self.pool.get_conn()?;
+        let rows: Vec<(String, String, String, String)> = conn.exec(
+            format!(
+                "SELECT uuid, description, \
+                        DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f'), \
+                        DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S.%f') \
+                 FROM trips WHERE uuid IN ({})",
+                uuid_list
+            ),
+            (),
+        )?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(uuid, description, start, end)| TripInfo {
+                uuid,
+                description,
+                start,
+                end,
+            })
+            .collect())
+    }
+
     /// Read last sync timestamp from system_status.
     pub fn get_sync_status(&self) -> Result<SyncStatus, Box<dyn Error>> {
         let last_synced_at = self.get_system_status_string("last_synced_at")?;
@@ -187,6 +315,28 @@ pub(crate) fn compute_uuids_to_push(
         })
         .map(|(uuid, _)| uuid.clone())
         .collect()
+}
+
+/// Dry-run counterpart to `compute_uuids_to_push`: same comparison, but
+/// splits the result by reason instead of returning one flat list — the
+/// two are always in sync since both compare `local_versions` against
+/// `payload_versions` the same way, just partitioned differently.
+pub(crate) fn classify_uuids_to_push(
+    local_versions: &std::collections::HashMap<String, u64>,
+    payload_versions: &std::collections::HashMap<String, u64>,
+) -> (Vec<String>, Vec<String>) {
+    let mut to_add = Vec::new();
+    let mut to_update = Vec::new();
+    for (uuid, &payload_version) in payload_versions {
+        match local_versions.get(uuid) {
+            None => to_add.push(uuid.clone()),
+            Some(&local_version) if local_version < payload_version => {
+                to_update.push(uuid.clone())
+            }
+            Some(_) => {}
+        }
+    }
+    (to_add, to_update)
 }
 
 fn is_valid_uuid(s: &str) -> bool {
@@ -505,6 +655,78 @@ mod tests {
 
         let result = compute_uuids_to_push(&local, &payload);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_classify_uuids_to_push_splits_add_and_update() {
+        let mut local = HashMap::new();
+        local.insert("uuid-stale".to_string(), 3u64);
+        let mut payload = HashMap::new();
+        payload.insert("uuid-new".to_string(), 1u64);
+        payload.insert("uuid-stale".to_string(), 5u64);
+        payload.insert("uuid-current".to_string(), 2u64);
+        local.insert("uuid-current".to_string(), 2u64);
+
+        let (to_add, to_update) = classify_uuids_to_push(&local, &payload);
+        assert_eq!(to_add, vec!["uuid-new".to_string()]);
+        assert_eq!(to_update, vec!["uuid-stale".to_string()]);
+    }
+
+    #[test]
+    fn test_classify_uuids_to_push_matches_compute_uuids_to_push() {
+        // The two functions must always agree: classify's to_add+to_update,
+        // as a set, equals compute_uuids_to_push's flat result.
+        let mut local = HashMap::new();
+        local.insert("uuid-stale".to_string(), 1u64);
+        local.insert("uuid-current".to_string(), 2u64);
+        local.insert("uuid-ahead".to_string(), 9u64);
+        let mut payload = HashMap::new();
+        payload.insert("uuid-new".to_string(), 1u64);
+        payload.insert("uuid-stale".to_string(), 2u64);
+        payload.insert("uuid-current".to_string(), 2u64);
+        payload.insert("uuid-ahead".to_string(), 5u64);
+
+        let flat = compute_uuids_to_push(&local, &payload);
+        let (to_add, to_update) = classify_uuids_to_push(&local, &payload);
+        let mut combined: Vec<String> = to_add.into_iter().chain(to_update).collect();
+        combined.sort();
+        let mut flat_sorted = flat;
+        flat_sorted.sort();
+        assert_eq!(combined, flat_sorted);
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_find_orphan_trip_details_returns_identity_without_deleting() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let (_, uuid_keep) = make_trip(&db, "Keep", t, 2);
+        make_trip(&db, "Orphan", t.add(Duration::from_secs(6 * ONE_HOUR_S)), 2);
+
+        let orphans = db
+            .find_orphan_trip_details(&[uuid_keep.clone()])
+            .expect("find_orphan_trip_details failed");
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].description, "Orphan");
+
+        // Nothing was actually deleted.
+        assert_eq!(count_rows(&db, "trips"), 2);
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_get_trip_summaries_by_uuids_returns_identity() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let (_, uuid1) = make_trip(&db, "Trip A", t, 2);
+        make_trip(&db, "Trip B", t.add(Duration::from_secs(3 * ONE_HOUR_S)), 2);
+
+        let summaries = db
+            .get_trip_summaries_by_uuids(&[uuid1.clone()])
+            .expect("get_trip_summaries_by_uuids failed");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].uuid, uuid1);
+        assert_eq!(summaries[0].description, "Trip A");
     }
 
     #[test]

@@ -201,7 +201,7 @@ Coding convention:
 1. Backend is written in Rust
 2. Frontend is html and javascript
 3. Use underscore _ to separate words in function names
-4. Use camel notation for struct names
+4. Use PascalCase for struct names
 5. Never use now() in function, unless the function is a handler that generates an event (for example, when a NMEA 2000 message is received, it's legit to use now() to generate the timestamp of the event. If a function in invoked because an event is generated, it will have the timestamp as parameter)
 6. Configuration fields are read only - any status that under control of the application is to be read and written from the database
 All the code, AI or human generated, must follow this rules.
@@ -313,8 +313,8 @@ fn test_my_feature() {
 - Inline tests in implementation files (with `#[cfg(test)]`)
 
 **Documentation:**
-- `doc/*.md` is the folder for documentation
-- Only `README.md` and `AGENTS.md` (this file) are in the root folder
+- `docs/*.md` is the folder for documentation
+- Only `README.md`, `AGENTS.md` (this file), `CLAUDE.md`, `DB_ANALYST.md`, and `TODO.md` are in the root folder
 - When a new feature is added, `README.md` must updated automatically 
 
 ### Common Patterns
