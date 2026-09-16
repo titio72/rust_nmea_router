@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, RwLock},
     time::Duration,
 };
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 mod ais_target_cache;
 mod app_metrics;
@@ -174,6 +174,30 @@ fn main() -> Result<(), Box<dyn Error>> {
         info!("CAN disabled — forcing read_only mode");
     }
 
+    // Create UDP broadcaster with config. Done early (before the web server starts) so the
+    // web UI can be told the real, post-bind-attempt status rather than the static config value.
+    let mut udp_enabled = config.udp.enabled;
+    let udp_broadcaster = match UdpBroadcaster::new(
+        config.udp.address.clone(),
+        config.udp.bind_address.clone(),
+        udp_enabled,
+    ) {
+        Ok(broadcaster) => broadcaster,
+        Err(e) => {
+            error!(
+                "Failed to initialize UDP broadcaster ({}), disabling UDP output: {}",
+                config.udp.address, e
+            );
+            udp_enabled = false;
+            UdpBroadcaster::new(config.udp.address.clone(), config.udp.bind_address.clone(), false)
+                .expect("disabled UDP broadcaster must not fail to construct")
+        }
+    };
+
+    if udp_enabled {
+        info!("UDP broadcaster enabled: {}", config.udp.address);
+    }
+
     // Create database connection using config
     let db_url = config.database.connection.connection_url();
 
@@ -220,7 +244,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 };
                 rt.block_on(async {
-                    match web::start_web_server(db_arc, config_arc, ais_cache_web, web_port, startup_tx).await {
+                    match web::start_web_server(db_arc, config_arc, ais_cache_web, web_port, udp_enabled, startup_tx).await {
                         Ok(()) => {}
                         Err(e) => {
                             warn!("Web server error: {}", e);
@@ -304,24 +328,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         environmental_status_handler::EnvironmentalStatusHandler::new(
             &config.database.environmental,
         );
-
-    // Create UDP broadcaster with config
-    let udp_broadcaster = match UdpBroadcaster::new(
-        config.udp.address.clone(),
-        config.udp.bind_address.clone(),
-        config.udp.enabled,
-    ) {
-        Ok(broadcaster) => broadcaster,
-        Err(e) => {
-            eprintln!("Fatal: {}", e);
-            eprintln!("UDP destination: {}", config.udp.address);
-            std::process::exit(1);
-        }
-    };
-
-    if config.udp.enabled {
-        info!("UDP broadcaster enabled: {}", config.udp.address);
-    }
 
     // Load the last trip from database
     {

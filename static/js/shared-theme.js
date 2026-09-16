@@ -118,6 +118,20 @@ async function fetchUiMode() {
     return _uiReadOnly;
 }
 
+// Cached server capabilities: null = not yet loaded
+let _capabilities = null;
+
+async function fetchCapabilities() {
+    if (_capabilities !== null) return _capabilities;
+    try {
+        const resp = await fetch('/api/config/capabilities', { credentials: 'same-origin' });
+        _capabilities = resp.ok ? await resp.json() : {};
+    } catch (_) {
+        _capabilities = {};
+    }
+    return _capabilities;
+}
+
 async function applyUiMode() {
     const readOnly = await fetchUiMode();
     if (readOnly) {
@@ -139,6 +153,7 @@ function createHeaderBar(currentPage, showConnectionStatus = false) {
         { href: '/realtime.html', label: 'Monitor', page: 'monitor', roHidden: true },
         { href: '/ais.html', label: 'AIS', page: 'ais', roHidden: true },
         { href: '/yearly-stats.html', label: 'Stats', page: 'stats', roHidden: false },
+        { href: '/compass.html', label: 'Compass', page: 'compass', roHidden: false },
         { href: '/navigation-areas.html', label: 'Navigation Areas', page: 'navigation-areas', roHidden: true },
         { href: '/plan.html', label: 'Planning', page: 'planning', roHidden: true },
         { href: '/signalk-browser.html', label: 'SignalK Browser', page: 'signalk-browser', roHidden: true },

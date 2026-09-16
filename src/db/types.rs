@@ -146,6 +146,17 @@ pub struct TwaDistributionData {
 }
 
 #[derive(Debug, serde::Serialize)]
+pub struct CompassDeviationBucket {
+    /// Heading bucket lower bound, degrees (0..350, 10-degree buckets)
+    pub heading: f64,
+    /// Number of underway samples in this bucket
+    pub count: u32,
+    /// Mean signed diff (average_heading_deg - cog_deg, circularly folded to [-180, 180)), degrees.
+    /// None when the bucket has no samples.
+    pub mean_diff: Option<f64>,
+}
+
+#[derive(Debug, serde::Serialize)]
 pub struct TripLeg {
     pub leg_number: u32,
     pub start_timestamp: String,

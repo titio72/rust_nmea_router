@@ -496,3 +496,34 @@ margin-bottom: 6px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 /* ─────────────────────────── */
+
+/* Measure-distance tool button + line label (see js/map-measure-tool.js) */
+.measure-tool-control a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 16px;
+    text-decoration: none;
+}
+.measure-tool-control a:hover {
+    background: var(--bg-tertiary);
+}
+.measure-tool-control a.measure-tool-active {
+    background: #e74c3c;
+    color: #fff;
+}
+.leaflet-tooltip.measure-label {
+    background: rgba(30, 30, 30, 0.85);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 8px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+/* ─────────────────────────── */

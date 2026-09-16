@@ -502,7 +502,7 @@
                 <span>SignalK Broadcasting:</span>
                 <div class="toggle-switch" id="signalkToggle"></div>
             </div>
-            <div class="tracking-toggle-container" onclick="toggleUdpBroadcast()" data-ro-hidden="true">
+            <div class="tracking-toggle-container" id="udpBroadcastContainer" onclick="toggleUdpBroadcast()" data-ro-hidden="true">
                 <span>UDP Broadcasting:</span>
                 <div class="toggle-switch" id="udpBroadcastToggle"></div>
             </div>
@@ -1237,6 +1237,11 @@
 
         // Initialize UDP broadcast status
         async function initializeUdpBroadcast() {
+            const capabilities = await fetchCapabilities();
+            if (!capabilities.udp_broadcast) {
+                document.getElementById('udpBroadcastContainer').style.display = 'none';
+                return;
+            }
             try {
                 const response = await fetch('/api/udp_broadcast/status');
                 if (!response.ok) {

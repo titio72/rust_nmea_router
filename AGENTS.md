@@ -173,7 +173,10 @@ The application converts NMEA2000 data to legacy NMEA0183 sentences and broadcas
 ### Web Interface
 The application provides a REST API for programmatic access to trip data, vessel tracks, environmental metrics, and speed distributions. An HTML dashboard offers interactive visualization with Google Maps integration for trip tracks and real-time AIS target monitoring.
 
+- `/compass.html` — Compass Deviation page. Date range and minimum-speed filters; renders a polar chart with one radial segment per 10° heading sector, extending outward for positive mean deviation and inward for negative, sourced from `GET /api/compass_deviation`.
+
 - `GET /api/twa_distribution` — query params `id` (trip id) or `start`/`end` (UTC datetime range); returns distance sailed (nautical miles) bucketed into 5° signed True Wind Angle buckets (-180..175, negative = port, positive = starboard), restricted to non-moored, non-motoring rows.
+- `GET /api/compass_deviation` — query params `start`/`end` (required, UTC datetime range) and `min_speed_kn` (optional, default 5.0); returns, for all 36 ten-degree heading sectors (0..350), the sample count and mean signed circular diff between `average_heading_deg` and `cog_deg` (degrees, positive = compass reads high), restricted to non-moored rows at or above the speed threshold. Backs `compass.html`; see `docs/ev1-compass-deviation-investigation.md` for the diff formula and method.
 
 Corrections to previously-recorded data (writable only when the server is not in read-only mode):
 - `POST /api/correct_engine_status` — body `{trip_id, start_timestamp, end_timestamp, engine_on}`; overwrites `engine_on` for `vessel_status` rows in range and recomputes the trip's sailing/motoring aggregates.

@@ -31,6 +31,7 @@ pub async fn start_web_server(
     config: Arc<Config>,
     ais_cache: Arc<std::sync::Mutex<AisTargetCache>>,
     port: u16,
+    udp_broadcast_available: bool,
     startup_signal: std::sync::mpsc::Sender<Result<(), String>>,
 ) -> Result<(), crate::error::AppError> {
     match config.web.auth_password.as_deref() {
@@ -88,6 +89,7 @@ pub async fn start_web_server(
         poller_status: poller_status.clone(),
         polars,
         land_mask,
+        udp_broadcast_available,
     };
 
     tokio::spawn(async {

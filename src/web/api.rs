@@ -27,7 +27,7 @@ use crate::db::operations::sync::{
     SyncResult,
 };
 use crate::db::{
-    HeatmapData, MultiMetricData, NavAnalysisRow, SpeedDistributionData,
+    CompassDeviationBucket, HeatmapData, MultiMetricData, NavAnalysisRow, SpeedDistributionData,
     TrackPoint, TripLegsData, TripSummary, TwaDistributionData, VesselDatabase, WebMetricData,
     WindStatisticsData,
 };
@@ -49,6 +49,9 @@ pub struct AppState {
     pub poller_status: Arc<std::sync::Mutex<crate::forecast_poller::ForecastPollerStatus>>,
     pub polars: Option<std::sync::Arc<crate::polars::PolarTable>>,
     pub land_mask: Option<std::sync::Arc<crate::land_mask::LandMask>>,
+    /// Whether the UDP broadcaster actually initialized at startup (config-enabled AND socket
+    /// bind succeeded). Distinct from `config.udp.enabled`, which only reflects the config file.
+    pub udp_broadcast_available: bool,
 }
 
 impl AppState {
@@ -178,6 +181,18 @@ pub struct TimeRangeQuery {
     pub id: Option<u32>,
     pub start: Option<String>,
     pub end: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CompassDeviationQuery {
+    pub start: String,
+    pub end: String,
+    #[serde(default = "default_min_speed_kn")]
+    pub min_speed_kn: f64,
+}
+
+fn default_min_speed_kn() -> f64 {
+    5.0
 }
 
 #[derive(Debug, Deserialize)]
@@ -564,6 +579,24 @@ pub async fn get_twa_distribution(
                 error!(?bt, "Backtrace for error");
                 Ok(Json(ApiResponse::error(e.to_string())))
             }
+        }
+    }
+}
+
+pub async fn get_compass_deviation(
+    State(state): State<AppState>,
+    Query(params): Query<CompassDeviationQuery>,
+) -> Result<Json<ApiResponse<Vec<CompassDeviationBucket>>>, StatusCode> {
+    let start = parse_required_datetime(&params.start)?;
+    let end = parse_required_datetime(&params.end)?;
+    match state
+        .db()
+        .fetch_compass_deviation(start, end, params.min_speed_kn)
+    {
+        Ok(buckets) => Ok(Json(ApiResponse::ok(buckets))),
+        Err(e) => {
+            error!(error = %e, "Failed to fetch compass deviation");
+            Ok(Json(ApiResponse::error(e.to_string())))
         }
     }
 }
@@ -1307,6 +1340,20 @@ pub async fn system_shutdown() -> Result<Json<ApiResponse<String>>, StatusCode> 
 
 async fn get_read_only(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "read_only": state.config.web.read_only }))
+}
+
+/// Server-side feature flags derived from the static config, so the UI can hide
+/// controls that would otherwise be inconsequential (e.g. a toggle for a broadcaster
+/// that is disabled in config and therefore cannot be enabled at runtime).
+#[derive(Debug, Serialize)]
+pub struct CapabilitiesResponse {
+    pub udp_broadcast: bool,
+}
+
+async fn get_capabilities(State(state): State<AppState>) -> Json<CapabilitiesResponse> {
+    Json(CapabilitiesResponse {
+        udp_broadcast: state.udp_broadcast_available,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -2108,12 +2155,14 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/speed_distribution", get(get_speed_distribution))
         .route("/wind_statistics", get(get_wind_statistics))
         .route("/twa_distribution", get(get_twa_distribution))
+        .route("/compass_deviation", get(get_compass_deviation))
         .route("/trip_legs", get(get_trip_legs))
         .route("/monthly_statistics", get(get_monthly_statistics))
         .route("/heatmap", get(get_heatmap))
         .route("/nav_analysis", get(get_nav_analysis))
         .route("/ais_targets", get(get_ais_targets))
         .route("/config/read_only", get(get_read_only))
+        .route("/config/capabilities", get(get_capabilities))
         .route("/sync/status", get(get_sync_status))
         .route("/sync/manifest", post(post_sync_manifest))
         .route("/export_trip", get(export_trip))
@@ -2226,6 +2275,7 @@ mod tests {
             )),
             polars: None,
             land_mask: None,
+            udp_broadcast_available: true,
         };
         create_api_router(state)
     }
@@ -3246,6 +3296,7 @@ mod tests {
             )),
             polars: None,
             land_mask: None,
+            udp_broadcast_available: true,
         };
         (create_api_router(state), db)
     }
@@ -3269,6 +3320,7 @@ mod tests {
             )),
             polars,
             land_mask: None,
+            udp_broadcast_available: true,
         };
         (create_api_router(state), db)
     }
@@ -4057,6 +4109,7 @@ mod tests {
             )),
             polars: None,
             land_mask: None,
+            udp_broadcast_available: true,
         };
         create_api_router(state)
     }

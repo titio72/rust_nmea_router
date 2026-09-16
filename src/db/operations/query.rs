@@ -1,6 +1,6 @@
 use crate::db::types::{
-    format_duration_ms, FastestSegment, HeatmapData, HeatmapDay, MonthlyStatistic,
-    MonthlyStatistics, MultiMetricData, NavAnalysisRow, SpeedDistributionData,
+    format_duration_ms, CompassDeviationBucket, FastestSegment, HeatmapData, HeatmapDay,
+    MonthlyStatistic, MonthlyStatistics, MultiMetricData, NavAnalysisRow, SpeedDistributionData,
     TrackPoint, TripLeg, TripLegsData, TripSummary, TwaDistributionData, VesselDatabase,
     WebMetricData, WindStatisticsData,
 };
@@ -1453,6 +1453,83 @@ impl VesselDatabase {
         }
 
         Ok(TwaDistributionData { angles, distance })
+    }
+
+    /// Fetch compass deviation (average_heading_deg vs cog_deg) bucketed by 10-degree
+    /// heading sectors, for underway samples at or above `min_speed_kn`. See
+    /// docs/ev1-compass-deviation-investigation.md for the diff formula and method.
+    pub fn fetch_compass_deviation(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        min_speed_kn: f64,
+    ) -> Result<Vec<CompassDeviationBucket>, AppError> {
+        let bucket_size = 10.0;
+        let num_buckets = 36usize;
+
+        let mut conn = self.pool.get_conn()?;
+        let t_sql = Instant::now();
+
+        let results: Vec<mysql::Row> = conn.exec(
+            "SELECT FLOOR(average_heading_deg / 10.0) * 10.0 AS heading_bucket,
+                    COUNT(*) AS n,
+                    AVG(MOD(average_heading_deg - cog_deg + 540, 360) - 180) AS mean_diff
+             FROM vessel_status
+             WHERE timestamp BETWEEN :start AND :end
+             AND is_moored = 0
+             AND average_heading_deg IS NOT NULL
+             AND cog_deg IS NOT NULL
+             AND average_speed_kn >= :min_speed_kn
+             GROUP BY heading_bucket",
+            params! {
+                "start" => start.format("%Y-%m-%d %H:%M:%S").to_string(),
+                "end" => end.format("%Y-%m-%d %H:%M:%S").to_string(),
+                "min_speed_kn" => min_speed_kn,
+            },
+        )?;
+        log_timing(
+            "fetch_compass_deviation",
+            "sql_query",
+            t_sql,
+            Some(results.len()),
+        );
+
+        let mut counts = vec![0u32; num_buckets];
+        let mut sums = vec![0.0f64; num_buckets];
+
+        for row in results {
+            let heading_bucket: f64 = row
+                .get_opt::<f64, _>("heading_bucket")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+            let n: u32 = row.get_opt::<u32, _>("n").and_then(|v| v.ok()).unwrap_or(0);
+            let mean_diff: f64 = row
+                .get_opt::<f64, _>("mean_diff")
+                .and_then(|v| v.ok())
+                .unwrap_or(0.0);
+
+            let bucket_index = (heading_bucket / bucket_size).round() as isize;
+            let bucket_index = bucket_index.rem_euclid(num_buckets as isize) as usize;
+            counts[bucket_index] += n;
+            sums[bucket_index] += mean_diff * n as f64;
+        }
+
+        let buckets = (0..num_buckets)
+            .map(|i| {
+                let count = counts[i];
+                CompassDeviationBucket {
+                    heading: i as f64 * bucket_size,
+                    count,
+                    mean_diff: if count > 0 {
+                        Some(sums[i] / count as f64)
+                    } else {
+                        None
+                    },
+                }
+            })
+            .collect();
+
+        Ok(buckets)
     }
 
     /// Fetch trip legs data - divides trip into legs between mooring periods.

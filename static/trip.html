@@ -14,6 +14,7 @@
     <script src="/libs/leaflet.min.js"></script>
     <script src="/libs/leaflet.fullscreen.js"></script>
     <script src="/js/map-lat-lon-panel.js"></script>
+    <script src="/js/map-measure-tool.js"></script>
     <style>
         #tripDetails {
             width: 100%;
@@ -2624,7 +2625,11 @@
             currentMap = map;
 
             L.control.fullscreen({ position: 'topleft' }).addTo(map);
-            map.on('click', () => resetSegmentMarkers());
+            const measureTool = addMeasureTool(map, { position: 'topleft' });
+            map.on('click', (e) => {
+                if (measureTool.active) { measureTool.handleClick(e.latlng); return; }
+                resetSegmentMarkers();
+            });
 
             addLatLonPanel(map, 'bottomleft');
 

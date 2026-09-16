@@ -42,6 +42,7 @@ This project is a learning and production-grade effort, inspired by https://gith
 - **AIS Target Tracking**: Decodes and broadcasts AIS position reports, static data, and navigation information via SignalK with live web dashboard for monitoring nearby vessels and navigation aids
 - **Trips Viewer Sync**: One-command push of collected trips from the boat to a cloud-hosted read-only viewer (`POST /api/sync/push`). Incremental transfer, full reconciliation (handles deletes), authenticated with a shared API key. See [TRIPS_VIEWER.md](TRIPS_VIEWER.md) for setup.
 - **Manual Engine Status Correction**: Fix mistaken automatic engine on/off detection by clicking a start and end point on a trip's track and choosing the correct state; recomputes the trip's sailing/motoring totals and invalidates dependent caches (`fix-engine-status.html`, linked from the trip detail page)
+- **Compass Deviation Analysis**: Date-range and minimum-speed filters compute the mean signed difference between compass heading and course over ground per 10° heading sector, plotted as a polar chart (`compass.html`, backed by `GET /api/compass_deviation`)
 
 ## Requirements
 

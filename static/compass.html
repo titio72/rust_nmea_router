@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compass Deviation - NMEA Router</title>
+    <link rel="icon" type="image/png" href="/images/nmeasail.png">
+    <link rel="stylesheet" href="/shared.css">
+    <script src="/js/shared-theme.js?v=3"></script>
+    <style>
+        .compass-help {
+            color: var(--text-secondary);
+            font-size: 13px;
+            margin: 4px 0 16px 0;
+            max-width: 900px;
+        }
+
+        .compass-filter-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin: 0 0 20px 0;
+        }
+
+        .compass-filter-bar label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        .compass-filter-bar input[type="date"],
+        .compass-filter-bar input[type="number"] {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 4px 8px;
+            color: var(--text-primary);
+            font-size: 13px;
+        }
+
+        .compass-filter-bar input[type="number"] {
+            width: 70px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: var(--text-secondary);
+        }
+
+        .error {
+            color: #e74c3c;
+            background: #fadbd8;
+            padding: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #e74c3c;
+        }
+
+        body.dark-theme .error {
+            background: #3d1a1e;
+            color: #f1a8ad;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        .compass-chart-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #compassSvg {
+            width: 100%;
+            max-width: 620px;
+            height: auto;
+        }
+
+        .sector-line {
+            cursor: pointer;
+        }
+
+        .sector-line.sector-highlighted {
+            stroke-width: var(--sector-highlight-width, 10px);
+        }
+
+        .no-data-tick {
+            cursor: default;
+        }
+
+        .sector-detail {
+            min-height: 20px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            text-align: center;
+        }
+
+        .sector-detail strong {
+            color: var(--text-primary);
+        }
+
+        .compass-legend {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            flex-wrap: wrap;
+            margin-top: 16px;
+            padding: 12px;
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        .compass-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .compass-legend-swatch {
+            width: 18px;
+            height: 6px;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div id="headerContainer"></div>
+
+    <div class="level-1-container">
+        <h2 style="margin: 0 0 4px 0;">Compass Deviation</h2>
+        <div class="compass-help">
+            Deviation = compass heading (true) minus course over ground, circularly folded to
+            [-180°, 180°) and averaged per 10° heading sector. Only underway samples
+            (not moored) at or above the speed threshold are included, so wake/current
+            noise at low speed doesn't dominate the curve. A real compass deviation curve
+            should be stable across trips in different locations — if a sector's bias
+            shifts between date ranges, suspect current/set instead, or a nearby object
+            that moved. See docs/ev1-compass-deviation-investigation.md for background.
+        </div>
+
+        <div class="compass-filter-bar">
+            <label>From <input type="date" id="startDate"></label>
+            <label>To <input type="date" id="endDate"></label>
+            <label>Min speed (kn) <input type="number" id="minSpeed" value="5" min="0" step="0.5"></label>
+            <button class="theme-toggle" onclick="loadDeviation()">Apply</button>
+        </div>
+
+        <div id="loading" class="loading">Loading compass deviation…</div>
+        <div id="error" class="error" style="display: none;"></div>
+
+        <div id="chartWrap" style="display: none;">
+            <div class="summary-grid">
+                <div class="analyticsCard">
+                    <div class="analyticsCardTitle">Samples</div>
+                    <div class="analyticsValue" id="statSamples">0</div>
+                    <div class="analyticsDetail">underway readings</div>
+                </div>
+                <div class="analyticsCard">
+                    <div class="analyticsCardTitle">Sectors with Data</div>
+                    <div class="analyticsValue" id="statSectors">0</div>
+                    <div class="analyticsDetail">of 36 (10° each)</div>
+                </div>
+                <div class="analyticsCard">
+                    <div class="analyticsCardTitle">Weighted Mean Deviation</div>
+                    <div class="analyticsValue" id="statMeanDiff">0°</div>
+                    <div class="analyticsDetail">signed, count-weighted</div>
+                </div>
+                <div class="analyticsCard">
+                    <div class="analyticsCardTitle">Largest Sector Deviation</div>
+                    <div class="analyticsValue" id="statMaxDiff">0°</div>
+                    <div class="analyticsDetail" id="statMaxDiffHeading">—</div>
+                </div>
+            </div>
+
+            <div class="compass-chart-container">
+                <svg id="compassSvg" viewBox="0 0 620 620" xmlns="http://www.w3.org/2000/svg"></svg>
+                <div id="sectorDetail" class="sector-detail">Hover a sector for details.</div>
+            </div>
+
+            <div class="compass-legend">
+                <div class="compass-legend-item">
+                    <div class="compass-legend-swatch" style="background: #e67e22;"></div>
+                    <span>Positive deviation (heading reads high) — segment points outward</span>
+                </div>
+                <div class="compass-legend-item">
+                    <div class="compass-legend-swatch" style="background: #3498db;"></div>
+                    <span>Negative deviation (heading reads low) — segment points inward</span>
+                </div>
+                <div class="compass-legend-item">
+                    <div class="compass-legend-swatch" style="background: var(--border-color);"></div>
+                    <span>No data in that heading sector</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('compass');
+        initializeTheme();
+
+        const SVG_NS = 'http://www.w3.org/2000/svg';
+
+        // Canvas layout for the polar chart, in SVG user units.
+        const CX = 310, CY = 310;
+        const BASE_RADIUS = 180;      // zero-deviation circle
+        const MAX_EXTENT = 90;        // pixels available on each side of the baseline
+        const LABEL_RADIUS = 300;     // compass degree / cardinal labels
+        const MIN_SCALE_DEG = 10;     // never scale tighter than +/-10 degrees
+        const POSITIVE_COLOR = '#e67e22';
+        const NEGATIVE_COLOR = '#3498db';
+        const NO_DATA_COLOR = 'var(--border-color)';
+
+        let lastBuckets = null;
+
+        function svgEl(tag, attrs) {
+            const el = document.createElementNS(SVG_NS, tag);
+            for (const key in attrs) el.setAttribute(key, attrs[key]);
+            return el;
+        }
+
+        // Compass angle (0 = North, clockwise) to canvas point at a given radius.
+        function polarPoint(angleDeg, radius) {
+            const rad = angleDeg * Math.PI / 180;
+            return {
+                x: CX + radius * Math.sin(rad),
+                y: CY - radius * Math.cos(rad)
+            };
+        }
+
+        function formatSigned(value, decimals) {
+            const d = decimals === undefined ? 1 : decimals;
+            if (value == null || isNaN(value)) return '—';
+            return (value >= 0 ? '+' : '') + value.toFixed(d) + '°';
+        }
+
+        function defaultDateRange() {
+            const end = new Date();
+            const start = new Date(end.getTime() - 30 * 24 * 3600 * 1000);
+            const toDateStr = d => d.toISOString().split('T')[0];
+            return { start: toDateStr(start), end: toDateStr(end) };
+        }
+
+        function initFilters() {
+            const { start, end } = defaultDateRange();
+            document.getElementById('startDate').value = start;
+            document.getElementById('endDate').value = end;
+        }
+
+        function setDetail(html) {
+            document.getElementById('sectorDetail').innerHTML = html;
+        }
+
+        function clearHighlight(svg) {
+            svg.querySelectorAll('.sector-highlighted').forEach(el => el.classList.remove('sector-highlighted'));
+        }
+
+        function buildChart(buckets) {
+            const svg = document.getElementById('compassSvg');
+            svg.innerHTML = '';
+
+            const maxAbsDiff = buckets.reduce((max, b) => {
+                if (b.count > 0 && b.mean_diff != null) return Math.max(max, Math.abs(b.mean_diff));
+                return max;
+            }, 0);
+            const scaleMaxDeg = Math.max(MIN_SCALE_DEG, Math.ceil(maxAbsDiff / 5) * 5);
+            const pxPerDeg = MAX_EXTENT / scaleMaxDeg;
+
+            // Guide circles: outer/inner bound the scale, baseline marks zero deviation.
+            svg.appendChild(svgEl('circle', {
+                cx: CX, cy: CY, r: BASE_RADIUS + MAX_EXTENT,
+                fill: 'none', stroke: 'var(--border-color)', 'stroke-width': 1,
+                'stroke-dasharray': '4 4', opacity: 0.6
+            }));
+            svg.appendChild(svgEl('circle', {
+                cx: CX, cy: CY, r: BASE_RADIUS - MAX_EXTENT,
+                fill: 'none', stroke: 'var(--border-color)', 'stroke-width': 1,
+                'stroke-dasharray': '4 4', opacity: 0.6
+            }));
+            svg.appendChild(svgEl('circle', {
+                cx: CX, cy: CY, r: BASE_RADIUS,
+                fill: 'none', stroke: 'var(--border-color)', 'stroke-width': 1.5
+            }));
+
+            // Scale labels, offset a few degrees clockwise of due north so they don't
+            // collide with the "N" cardinal label or the 0-10 sector segment.
+            const outerLabel = polarPoint(6, BASE_RADIUS + MAX_EXTENT);
+            const innerLabel = polarPoint(6, BASE_RADIUS - MAX_EXTENT);
+            [
+                { pt: outerLabel, text: '+' + scaleMaxDeg + '°' },
+                { pt: innerLabel, text: '-' + scaleMaxDeg + '°' }
+            ].forEach(({ pt, text }) => {
+                const t = svgEl('text', {
+                    x: pt.x, y: pt.y, 'font-size': 11, fill: 'var(--text-secondary)',
+                    'text-anchor': 'start', 'dominant-baseline': 'middle'
+                });
+                t.textContent = text;
+                svg.appendChild(t);
+            });
+
+            // Compass ticks and labels every 30 degrees, cardinal points called out.
+            const cardinals = { 0: 'N', 90: 'E', 180: 'S', 270: 'W' };
+            for (let deg = 0; deg < 360; deg += 30) {
+                const tickOuter = polarPoint(deg, BASE_RADIUS + MAX_EXTENT + 6);
+                const tickInner = polarPoint(deg, BASE_RADIUS + MAX_EXTENT);
+                svg.appendChild(svgEl('line', {
+                    x1: tickInner.x, y1: tickInner.y, x2: tickOuter.x, y2: tickOuter.y,
+                    stroke: 'var(--text-secondary)', 'stroke-width': 1
+                }));
+                const labelPt = polarPoint(deg, LABEL_RADIUS);
+                const isCardinal = cardinals[deg] !== undefined;
+                const t = svgEl('text', {
+                    x: labelPt.x, y: labelPt.y,
+                    'font-size': isCardinal ? 15 : 11,
+                    'font-weight': isCardinal ? 700 : 400,
+                    fill: isCardinal ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    'text-anchor': 'middle', 'dominant-baseline': 'middle'
+                });
+                t.textContent = isCardinal ? cardinals[deg] : String(deg);
+                svg.appendChild(t);
+            }
+
+            // One radial segment per 10-degree sector, centered on the sector midpoint,
+            // based at the zero-deviation circle and extending toward the center for a
+            // negative diff or away from the center for a positive one.
+            const sectorArcRad = 10 * Math.PI / 180;
+            const strokeWidth = Math.max(4, BASE_RADIUS * sectorArcRad * 0.82);
+
+            buckets.forEach(bucket => {
+                const midAngle = bucket.heading + 5;
+                const base = polarPoint(midAngle, BASE_RADIUS);
+
+                if (bucket.count === 0 || bucket.mean_diff == null) {
+                    const inner = polarPoint(midAngle, BASE_RADIUS - 6);
+                    const outer = polarPoint(midAngle, BASE_RADIUS + 6);
+                    const tick = svgEl('line', {
+                        class: 'no-data-tick',
+                        x1: inner.x, y1: inner.y, x2: outer.x, y2: outer.y,
+                        stroke: NO_DATA_COLOR, 'stroke-width': Math.max(2, strokeWidth * 0.3)
+                    });
+                    const title = svgEl('title', {});
+                    title.textContent = 'Heading ' + bucket.heading + '°–' + (bucket.heading + 10) + '°: no data';
+                    tick.appendChild(title);
+                    svg.appendChild(tick);
+                    return;
+                }
+
+                const deviation = Math.max(-scaleMaxDeg, Math.min(scaleMaxDeg, bucket.mean_diff));
+                const rEnd = BASE_RADIUS + deviation * pxPerDeg;
+                const tip = polarPoint(midAngle, rEnd);
+                const color = bucket.mean_diff >= 0 ? POSITIVE_COLOR : NEGATIVE_COLOR;
+                const opacity = Math.max(0.4, Math.min(1, bucket.count / 20));
+
+                const line = svgEl('line', {
+                    class: 'sector-line',
+                    x1: base.x, y1: base.y, x2: tip.x, y2: tip.y,
+                    stroke: color, 'stroke-width': strokeWidth, 'stroke-linecap': 'butt',
+                    opacity: opacity
+                });
+                line.style.setProperty('--sector-highlight-width', (strokeWidth + 3) + 'px');
+
+                const title = svgEl('title', {});
+                title.textContent = 'Heading ' + bucket.heading + '°–' + (bucket.heading + 10) + '°: ' +
+                    formatSigned(bucket.mean_diff) + ' (n=' + bucket.count + ')';
+                line.appendChild(title);
+
+                line.addEventListener('mouseenter', () => {
+                    clearHighlight(svg);
+                    line.classList.add('sector-highlighted');
+                    setDetail(
+                        '<strong>' + bucket.heading + '°–' + (bucket.heading + 10) + '°</strong> — ' +
+                        'mean deviation ' + formatSigned(bucket.mean_diff) + ', ' + bucket.count + ' samples'
+                    );
+                });
+                line.addEventListener('mouseleave', () => {
+                    clearHighlight(svg);
+                    setDetail('Hover a sector for details.');
+                });
+
+                svg.appendChild(line);
+            });
+        }
+
+        function updateSummary(buckets) {
+            const withData = buckets.filter(b => b.count > 0 && b.mean_diff != null);
+            const totalCount = withData.reduce((sum, b) => sum + b.count, 0);
+            const weightedSum = withData.reduce((sum, b) => sum + b.mean_diff * b.count, 0);
+            const weightedMean = totalCount > 0 ? weightedSum / totalCount : null;
+
+            let worst = null;
+            withData.forEach(b => {
+                if (!worst || Math.abs(b.mean_diff) > Math.abs(worst.mean_diff)) worst = b;
+            });
+
+            document.getElementById('statSamples').textContent = totalCount;
+            document.getElementById('statSectors').textContent = withData.length;
+            document.getElementById('statMeanDiff').textContent = formatSigned(weightedMean);
+            document.getElementById('statMaxDiff').textContent = worst ? formatSigned(worst.mean_diff) : '—';
+            document.getElementById('statMaxDiffHeading').textContent =
+                worst ? ('at ' + worst.heading + '°–' + (worst.heading + 10) + '°') : 'no data';
+        }
+
+        async function loadDeviation() {
+            const startVal = document.getElementById('startDate').value;
+            const endVal = document.getElementById('endDate').value;
+            const minSpeed = parseFloat(document.getElementById('minSpeed').value);
+
+            if (!startVal || !endVal) {
+                showError('Pick both a start and end date.');
+                return;
+            }
+            if (startVal > endVal) {
+                showError('The start date must be before the end date.');
+                return;
+            }
+
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('chartWrap').style.display = 'none';
+
+            // Dates are UTC calendar days; end is exclusive next-day midnight so the
+            // whole end date is included.
+            const start = startVal + ' 00:00:00';
+            const endExclusive = new Date(endVal + 'T00:00:00Z');
+            endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+            const end = endExclusive.toISOString().split('T')[0] + ' 00:00:00';
+
+            try {
+                const url = '/api/compass_deviation?start=' + encodeURIComponent(start) +
+                    '&end=' + encodeURIComponent(end) +
+                    '&min_speed_kn=' + encodeURIComponent(isNaN(minSpeed) ? 5 : minSpeed);
+                const response = await fetch(url, { credentials: 'same-origin' });
+                if (!response.ok) {
+                    throw new Error('HTTP error! status: ' + response.status);
+                }
+                const result = await response.json();
+                if (result.status !== 'ok' || !result.data) {
+                    throw new Error(result.error || 'Failed to load compass deviation');
+                }
+
+                lastBuckets = result.data;
+                buildChart(lastBuckets);
+                updateSummary(lastBuckets);
+
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('chartWrap').style.display = 'block';
+            } catch (error) {
+                console.error('Error loading compass deviation:', error);
+                showError('Error: ' + error.message);
+            }
+        }
+
+        function showError(message) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('chartWrap').style.display = 'none';
+            const errEl = document.getElementById('error');
+            errEl.textContent = message;
+            errEl.style.display = 'block';
+        }
+
+        initFilters();
+        loadDeviation();
+    </script>
+</body>
+</html>

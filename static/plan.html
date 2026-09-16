@@ -12,6 +12,7 @@
     <script src="/libs/wind-gl.js"></script>
     <script src="/js/wind-particle-layer.js"></script>
     <script src="/js/map-lat-lon-panel.js"></script>
+    <script src="/js/map-measure-tool.js"></script>
     <style>
         .container { max-width: 100%; margin: 0; padding: 0; }
         #mapWrap { position: relative; width: 100%; min-height: 380px; }
@@ -156,6 +157,11 @@
                                 style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
                                        border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
                                 Show Gust
+                            </button>
+                            <button id="measureBtn" onclick="measureTool.toggle()"
+                                style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
+                                       border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
+                                📏 Measure
                             </button>
                             <button id="planRouteBtn" onclick="toggleRouteMode()"
                                 style="padding:5px 14px; background:var(--link-color); color:#fff; border:none;
@@ -379,6 +385,8 @@
         let openFrontierReportStepIdx = null; // stepIdx/ptIdx of the frontier report currently shown in altRouteModal, for "Select this route"
         let openFrontierReportPtIdx = null;
 
+        let measureTool = null;   // handle from addMeasureTool() (js/map-measure-tool.js), created in init()
+
         const FRONTIER_STEP_HOURS = 0.5; // must match STEP_HOURS in src/routing.rs
 
         let lastGridPts = [];     // raw GridPointForecast[] from last API call
@@ -506,6 +514,17 @@
                 attribution: '© OpenStreetMap', maxZoom: 16
             }).addTo(planMap);
             planMap.on('click', onMapClick);
+            measureTool = addMeasureTool(planMap, {
+                button: false,   // this page drives the toggle from its own toolbar button
+                onActivate: () => { if (routeMode) clearRoute(); },
+                onToggle: (isActive) => {
+                    const btn = document.getElementById('measureBtn');
+                    btn.textContent = isActive ? 'Cancel Measure' : '📏 Measure';
+                    btn.style.background = isActive ? '#e74c3c' : 'var(--bg-secondary)';
+                    btn.style.color = isActive ? '#fff' : 'var(--text-secondary)';
+                    btn.style.borderColor = isActive ? '#e74c3c' : 'var(--border-color)';
+                }
+            });
             planMap.on('zoomend moveend', () => {
                 windLayers.forEach(layer => layer.reposition());
             });
@@ -1061,6 +1080,7 @@
             if (routeMode) {
                 clearRoute();
             } else {
+                if (measureTool.active) measureTool.clear();
                 routeMode = true;
                 document.getElementById('planRouteBtn').textContent = 'Clear Route';
                 document.getElementById('planRouteBtn').style.background = '#e74c3c';
@@ -1100,6 +1120,10 @@
         }
 
         function onMapClick(e) {
+            if (measureTool.active) {
+                measureTool.handleClick(e.latlng);
+                return;
+            }
             if (!routeMode || routeDone) {
                 showWindPopupAt(e.latlng);
                 return;
