@@ -53,7 +53,9 @@ pub struct Config {
     pub signalk: SignalKConfig,
     #[serde(default)]
     pub sync: SyncConfig,
-    /// Path to polar diagram CSV. Optional — when absent the route planner uses a fixed speed.
+    /// Path to polar diagram CSV, in either the dense `angle,1..20` grid layout or the
+    /// ORC-style `TWA,6,8,..` layout with `Beat_Angle`/`Run_Angle` rows; the format is
+    /// detected from the header. Optional — when absent the route planner uses a fixed speed.
     #[serde(default)]
     pub polars_file_path: Option<String>,
     /// Path to GeoJSON land polygon file for land avoidance in isochrone routing.

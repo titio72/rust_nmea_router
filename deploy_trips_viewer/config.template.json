@@ -41,5 +41,5 @@
     "api_key": null,
     "timeout_secs": 120
   },
-  "polars_file_path": "/opt/trips_viewer/dufour40.csv"
+  "polars_file_path": "/opt/trips_viewer/polars.csv"
 }
