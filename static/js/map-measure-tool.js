@@ -28,6 +28,19 @@ function addMeasureTool(map, options = {}) {
         return (R * c) / 1.852;
     }
 
+    // Initial heading from point 1 to point 2, in degrees (0 = North, 90 = East). Mirrors
+    // haversine_heading() in src/utilities.rs.
+    function haversineHeadingDeg(lat1, lon1, lat2, lon2) {
+        const toRad = d => d * Math.PI / 180;
+        const lat1Rad = toRad(lat1);
+        const lat2Rad = toRad(lat2);
+        const dLonRad = toRad(lon2 - lon1);
+        const y = Math.sin(dLonRad) * Math.cos(lat2Rad);
+        const x = Math.cos(lat1Rad) * Math.sin(lat2Rad) - Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLonRad);
+        const bearing = Math.atan2(y, x) * 180 / Math.PI;
+        return (bearing + 360) % 360;
+    }
+
     function clearDrawing() {
         state.markers.forEach(m => map.removeLayer(m));
         state.markers = [];
@@ -56,9 +69,11 @@ function addMeasureTool(map, options = {}) {
         if (state.points.length === 2) {
             const [a, b] = state.points;
             const distNm = haversineNm(a.lat, a.lng, b.lat, b.lng);
-            const text = distNm >= 1
+            const distText = distNm >= 1
                 ? `${distNm.toFixed(2)} NM`
                 : `${Math.round(distNm * 1852)} m`;
+            const headingDeg = haversineHeadingDeg(a.lat, a.lng, b.lat, b.lng);
+            const text = `${distText} · ${headingDeg.toFixed(0)}°`;
             state.line = L.polyline([[a.lat, a.lng], [b.lat, b.lng]], {
                 color: '#f6c343', weight: 3, dashArray: '8,6'
             }).addTo(map);
