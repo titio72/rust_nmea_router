@@ -28,6 +28,18 @@ cargo build --release
 
 Configuration is loaded from `./config.json`, then `/etc/nmea_router/config.json`, then defaults. See `config.example.json` for all options.
 
+### Platform support
+
+SocketCAN is Linux-only, so `nmea2k::canbus` has two interchangeable backends selected by `#[cfg(target_os = "linux")]`: real SocketCAN (`canbus.rs`) on the vessel, and a silent no-op mock (`canbus_mock.rs`) everywhere else. Both export the same functions and the same `CanSocket` type, so `router_loop` and `main` contain no platform conditionals and the whole app builds, tests, and runs on macOS.
+
+With the mock, every read blocks for the usual 500 ms and then reports `WouldBlock`, which the router already treats as an idle bus — so the pipeline starts and ticks through its periodic work, but no NMEA2000 message ever arrives and nothing is recorded or broadcast. `can.enabled` behaves the same as on Linux; it just has nothing to listen to. A reachable MariaDB is still required either way.
+
+When touching CAN code from macOS, cross-check the Linux build, which needs a C cross-compiler for the vendored OpenSSL (`zig cc` works):
+
+```bash
+cargo check --workspace --all-targets --target aarch64-unknown-linux-gnu
+```
+
 ---
 
 ## Testing

@@ -227,7 +227,7 @@ mod tests {
         Identifier,
     };
     use nmea2k::pgns::nmea2000_date_time::N2kDateTime;
-    use socketcan::ExtendedId;
+    use nmea2k::ExtendedId;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn make_identifier() -> Identifier {

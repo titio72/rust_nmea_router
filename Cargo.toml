@@ -10,7 +10,6 @@ edition = "2021"
 [dependencies]
 nmea2k = { path = "nmea2k" }
 nmea2000 = "0.2.2"
-socketcan = "3.0"
 mysql = "25.0"
 chrono = "0.4"
 chrono-tz = "0.8"
@@ -36,6 +35,11 @@ uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 rmcp = { version = "1.5.0", features = ["server", "transport-io"] }
 schemars = { version = "1.0", features = ["chrono04"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Not referenced from code: this forces `mysql`'s native-tls to link a vendored OpenSSL so the
+# binary is portable across deployment hosts. On macOS native-tls uses Security.framework, so
+# building OpenSSL there would be wasted work.
 openssl = { version = "0.10", features = ["vendored"] }
 
 [[bin]]
@@ -57,4 +61,8 @@ path = "src/bin/mcp_server.rs"
 [[bin]]
 name = "backfill_legs"
 path = "src/bin/backfill_legs.rs"
+
+[[bin]]
+name = "backfill_pos_stats"
+path = "src/bin/backfill_pos_stats.rs"
 

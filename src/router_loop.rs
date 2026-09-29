@@ -10,8 +10,9 @@ use std::{
 };
 use tracing::{info, warn};
 
-use socketcan::CanSocket;
-use nmea2k::{CanBus, Identifier, MessageHandler, N2kFrame, N2kStreamReader};
+// `CanSocket` comes from nmea2k rather than socketcan directly: off Linux it resolves to the
+// crate's no-op mock backend, which keeps this loop platform-independent.
+use nmea2k::{CanBus, CanSocket, Identifier, MessageHandler, N2kFrame, N2kStreamReader};
 
 use crate::app_metrics::{AppMetrics, MetricsLogger};
 use crate::config::Config;
@@ -346,4 +347,99 @@ impl RouterLoop {
         };
         let _ = channels.send(delta);
     }
+}
+
+/// Open the configured CAN interface, build every monitor and handler the pipeline needs,
+/// and hand control to [`RouterLoop::run`]. Never returns.
+///
+/// Called by `main` once the database and web server are up and `can.enabled` is true.
+pub fn run_can_pipeline(
+    config: Config,
+    vessel_db: Arc<RwLock<VesselDatabase>>,
+    ais_target_cache: Arc<Mutex<AisTargetCache>>,
+    udp_broadcaster: UdpBroadcaster,
+) -> ! {
+    let interface = &config.can.interface;
+    info!("Opening CAN interface: {}", interface);
+
+    let mut socket = CanBus::open_can_socket_with_retry(interface);
+    if let Err(e) = CanBus::configure_nmea2k_socket(&mut socket) {
+        eprintln!("Fatal: Failed to configure CAN socket: {}", e);
+        eprintln!("CAN interface: {}", interface);
+        std::process::exit(1);
+    }
+
+    info!("Listening for NMEA2000 messages");
+
+    // Create NMEA2000 stream reader
+    let reader = N2kStreamReader::new();
+
+    // Create vessel monitor with config
+    info!(
+        "Creating vessel monitor with underway interval: {} seconds",
+        config.database.vessel_status.interval_underway_seconds
+    );
+    let vessel_monitor = VesselMonitor::new(
+        config.database.vessel_status.interval_underway(),
+        config.database.vessel_status.interval_moored(),
+    );
+
+    // Create time monitor
+    let time_monitor = crate::time_monitor::TimeMonitor::new(
+        config.time.skew_threshold_ms,
+        config.time.set_system_time,
+    );
+
+    // Create environmental monitor with config
+    let env_monitor = EnvironmentalMonitor::new();
+
+    // Create vessel status handler
+    let mut vessel_status_handler = VesselStatusHandler::new();
+
+    // Create environmental status handler
+    let environmental_status_handler =
+        EnvironmentalStatusHandler::new(&config.database.environmental);
+
+    // Load the last trip from database
+    {
+        let db = read_db(&vessel_db);
+        vessel_status_handler.load_last_trip(&db);
+        vessel_status_handler.load_last_vessel_status(&db);
+    }
+
+    // Application metrics tracking
+    let metrics = AppMetrics::new();
+    let metrics_logger = MetricsLogger::new(Duration::from_secs(60));
+
+    // Database health check manager
+    let db_health_check = HealthCheckManager::new(
+        Duration::from_secs(60),
+        config.database.connection.pool_min,
+        config.database.connection.pool_max,
+    );
+
+    // Create SignalK broadcaster (if enabled)
+    let signalk_broadcaster = SignalKBroadcaster::new(
+        config.signalk.rate_limit_ms,
+        config.signalk.vessel_uuid.clone(),
+    );
+
+    RouterLoop::new(
+        socket,
+        reader,
+        config,
+        vessel_monitor,
+        time_monitor,
+        env_monitor,
+        vessel_status_handler,
+        environmental_status_handler,
+        udp_broadcaster,
+        signalk_broadcaster,
+        ais_target_cache,
+        vessel_db,
+        metrics,
+        metrics_logger,
+        db_health_check,
+    )
+    .run()
 }

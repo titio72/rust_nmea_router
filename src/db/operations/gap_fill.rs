@@ -308,6 +308,112 @@ impl VesselDatabase {
         }
     }
 
+    /// Update only the six point-of-sail columns for a single trip.
+    /// Does not touch end_timestamp or sailing/motoring totals.
+    pub fn backfill_trip_pos_stats_only(
+        &self,
+        trip_id: i64,
+        trip_start: SystemTime,
+        trip_end: SystemTime,
+    ) -> Result<(), AppError> {
+        let mut conn = self.pool.get_conn()?;
+        let mut tx = conn.start_transaction(mysql::TxOpts::default())?;
+
+        let start_str = systemtime_to_mysql_str(trip_start);
+        let end_str = systemtime_to_mysql_str(trip_end);
+
+        let row: Option<mysql::Row> = tx.exec_first(
+            r"SELECT
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60
+                           THEN total_distance_nm ELSE 0 END) AS dist_upwind,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120
+                           THEN total_distance_nm ELSE 0 END) AS dist_reaching,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120
+                           THEN total_distance_nm ELSE 0 END) AS dist_running,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60
+                           THEN total_time_ms ELSE 0 END) AS time_upwind,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120
+                           THEN total_time_ms ELSE 0 END) AS time_reaching,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120
+                           THEN total_time_ms ELSE 0 END) AS time_running
+              FROM vessel_status
+              WHERE timestamp BETWEEN :start AND :end",
+            params! { "start" => &start_str, "end" => &end_str },
+        )?;
+
+        if let Some(row) = row {
+            let dist_upwind: f64 = row.get("dist_upwind").unwrap_or(0.0);
+            let dist_reaching: f64 = row.get("dist_reaching").unwrap_or(0.0);
+            let dist_running: f64 = row.get("dist_running").unwrap_or(0.0);
+            let time_upwind: u64 = row.get("time_upwind").unwrap_or(0);
+            let time_reaching: u64 = row.get("time_reaching").unwrap_or(0);
+            let time_running: u64 = row.get("time_running").unwrap_or(0);
+
+            exec_trip_update(
+                &mut tx,
+                r"total_distance_upwind   = :dist_upwind,
+                  total_distance_reaching = :dist_reaching,
+                  total_distance_running  = :dist_running,
+                  total_time_upwind       = :time_upwind,
+                  total_time_reaching     = :time_reaching,
+                  total_time_running      = :time_running",
+                params! {
+                    "dist_upwind"   => dist_upwind,
+                    "dist_reaching" => dist_reaching,
+                    "dist_running"  => dist_running,
+                    "time_upwind"   => time_upwind,
+                    "time_reaching" => time_reaching,
+                    "time_running"  => time_running,
+                    "trip_id"       => trip_id,
+                },
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Backfill the six point-of-sail columns for every trip in the database.
+    /// Returns the number of trips updated.
+    pub fn backfill_pos_stats_all_trips(&self) -> Result<usize, AppError> {
+        let mut conn = self.pool.get_conn()?;
+
+        let rows: Vec<mysql::Row> = conn.exec(
+            r"SELECT id,
+                     DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f') AS start_ts,
+                     DATE_FORMAT(end_timestamp,   '%Y-%m-%d %H:%i:%S.%f') AS end_ts
+              FROM trips
+              ORDER BY id ASC",
+            mysql::Params::Empty,
+        )?;
+        drop(conn);
+
+        let total = rows.len();
+        let mut updated = 0usize;
+        for row in rows {
+            let id: i64 = row.get("id").ok_or(AppError::Database("missing id".to_string()))?;
+            let start_str: String = row.get("start_ts").ok_or(AppError::Database("missing start_ts".to_string()))?;
+            let end_str: String = row.get("end_ts").ok_or(AppError::Database("missing end_ts".to_string()))?;
+
+            let start_ts = parse_systemtime(&start_str)?;
+            let end_ts = parse_systemtime(&end_str)?;
+
+            self.backfill_trip_pos_stats_only(id, start_ts, end_ts)?;
+            updated += 1;
+            tracing::info!("  [{}/{}] trip {} updated", updated, total, id);
+        }
+
+        Ok(updated)
+    }
+
     /// Recalculate trip totals from vessel_status records in the trip's time range
     /// and update the trips table.
     pub fn recalculate_and_update_trip(

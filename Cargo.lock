@@ -1660,6 +1660,7 @@ name = "nmea2k"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "embedded-can",
  "nmea2000",
  "socketcan",
  "tracing",
@@ -1688,7 +1689,6 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "socketcan",
  "time",
  "tokio",
  "tower 0.4.13",

@@ -1,8 +1,11 @@
-use socketcan::{CanSocket, EmbeddedFrame, ExtendedId, Frame, Socket};
+use socketcan::{EmbeddedFrame, ExtendedId, Frame, Socket};
 use std::{error::Error, time::Duration};
 use tracing::{info, warn};
 
 pub use crate::stream_reader::N2kFrame;
+// Re-exported so callers name the socket type through this module and stay backend-agnostic;
+// `canbus_mock` exposes its own `CanSocket` under the same path on non-Linux targets.
+pub use socketcan::CanSocket;
 
 const CAN_CONNECTION_RETRY_INTERVAL_SECS: u64 = 5; // Interval between CAN connection retries
 

@@ -855,7 +855,17 @@ pub async fn import_trip(
                             }
                         };
 
-                        match state.db().import_trip(json_content, false) {
+                        let json_string = json_content.to_string();
+                        let state_clone = state.clone();
+                        let import_result = tokio::task::spawn_blocking(move || {
+                            state_clone.db().import_trip(&json_string, false)
+                        })
+                        .await
+                        .map_err(|e| {
+                            error!("Import trip task panicked: {:?}", e);
+                            StatusCode::INTERNAL_SERVER_ERROR
+                        })?;
+                        match import_result {
                             Ok(trip_id) => {
                                 info!(trip_id = trip_id, "Trip imported successfully");
                                 return Ok(Json(ApiResponse::ok(format!(
@@ -3204,7 +3214,7 @@ mod tests {
             pgns::{AisClassAStaticData, N2kMessage},
             Identifier, MessageHandler, N2kFrame,
         };
-        use socketcan::ExtendedId;
+        use nmea2k::ExtendedId;
 
         const TEST_MMSI: u32 = 999000001;
         let cache = crate::ais_target_cache::new_ais_cache();

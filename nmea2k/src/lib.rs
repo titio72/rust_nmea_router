@@ -8,7 +8,8 @@
 //!
 //! # Features
 //!
-//! - **CAN Bus Support**: Open, configure, and read from SocketCAN interfaces
+//! - **CAN Bus Support**: Open, configure, and read from SocketCAN interfaces on Linux, with a
+//!   no-op mock backend elsewhere so the same code runs on a development machine
 //! - **Fast Packet Assembly**: Automatic reassembly of multi-frame messages
 //! - **Comprehensive PGN Decoders**: Position, speed, heading, environmental data, and more
 //! - **Message Filtering**: Filter messages by PGN and source
@@ -41,6 +42,17 @@
 pub mod pgns;
 pub mod stream_reader;
 pub mod message_handler;
+
+/// CAN bus I/O.
+///
+/// Two interchangeable backends live behind this path. On Linux it is real SocketCAN; on every
+/// other platform it is `canbus_mock`, a silent stand-in that lets the router run on a
+/// development machine without a CAN interface. Both expose the same functions and the same
+/// `CanSocket` type, so callers never need to know which one they got.
+#[cfg(target_os = "linux")]
+pub mod canbus;
+#[cfg(not(target_os = "linux"))]
+#[path = "canbus_mock.rs"]
 pub mod canbus;
 
 // Re-export commonly used types
@@ -48,7 +60,10 @@ pub use stream_reader::{N2kStreamReader, N2kFrame};
 pub use message_handler::MessageHandler;
 pub use pgns::N2kMessage;
 pub use canbus as CanBus;
+pub use canbus::CanSocket;
 
 // Re-export external types for convenience
 pub use nmea2000::{Identifier, FastPacket};
-pub use socketcan::ExtendedId;
+// `ExtendedId` comes from `embedded-can` (which `socketcan` and `nmea2000` both re-export),
+// so it stays available on platforms without SocketCAN.
+pub use embedded_can::ExtendedId;

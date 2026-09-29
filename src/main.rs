@@ -33,17 +33,9 @@ mod vessel_monitor;
 mod vessel_status_handler;
 mod web;
 
-use app_metrics::{AppMetrics, MetricsLogger};
 use config::Config;
-use db::{HealthCheckManager, VesselDatabase};
-use environmental_monitor::EnvironmentalMonitor;
-use router_loop::RouterLoop;
-use signalk_broadcaster::SignalKBroadcaster;
-use time_monitor::TimeMonitor;
+use db::VesselDatabase;
 use udp_broadcaster::UdpBroadcaster;
-use vessel_monitor::VesselMonitor;
-// Import from nmea2k crate
-use nmea2k::{CanBus, N2kStreamReader};
 
 // ========== Logging Setup ==========
 
@@ -288,89 +280,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // CAN is enabled: open socket and run the NMEA2000 processing loop
-    let interface = &config.can.interface;
-    info!("Opening CAN interface: {}", interface);
-
-    let mut socket = CanBus::open_can_socket_with_retry(interface);
-    if let Err(e) = CanBus::configure_nmea2k_socket(&mut socket) {
-        eprintln!("Fatal: Failed to configure CAN socket: {}", e);
-        eprintln!("CAN interface: {}", interface);
-        std::process::exit(1);
-    }
-
-    info!("Listening for NMEA2000 messages");
-
-    // Create NMEA2000 stream reader
-    let reader = N2kStreamReader::new();
-
-    // Create vessel monitor with config
-    info!(
-        "Creating vessel monitor with underway interval: {} seconds",
-        config.database.vessel_status.interval_underway_seconds
-    );
-    let vessel_monitor = VesselMonitor::new(
-        config.database.vessel_status.interval_underway(),
-        config.database.vessel_status.interval_moored(),
-    );
-
-    // Create time monitor
-    let time_monitor = TimeMonitor::new(config.time.skew_threshold_ms, config.time.set_system_time);
-
-    // Create environmental monitor with config
-    let env_monitor = EnvironmentalMonitor::new();
-
-    // Create vessel status handler
-    let mut vessel_status_handler = vessel_status_handler::VesselStatusHandler::new();
-
-    // Create environmental status handler
-    let environmental_status_handler =
-        environmental_status_handler::EnvironmentalStatusHandler::new(
-            &config.database.environmental,
-        );
-
-    // Load the last trip from database
-    {
-        let db = vessel_db
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        vessel_status_handler.load_last_trip(&db);
-        vessel_status_handler.load_last_vessel_status(&db);
-    }
-
-    // Application metrics tracking
-    let metrics = AppMetrics::new();
-    let metrics_logger = MetricsLogger::new(Duration::from_secs(60));
-
-    // Database health check manager
-    let db_health_check = HealthCheckManager::new(
-        Duration::from_secs(60),
-        config.database.connection.pool_min,
-        config.database.connection.pool_max,
-    );
-
-    // Create SignalK broadcaster (if enabled)
-    let signalk_broadcaster = SignalKBroadcaster::new(
-        config.signalk.rate_limit_ms,
-        config.signalk.vessel_uuid.clone(),
-    );
-
-    RouterLoop::new(
-        socket,
-        reader,
-        config,
-        vessel_monitor,
-        time_monitor,
-        env_monitor,
-        vessel_status_handler,
-        environmental_status_handler,
-        udp_broadcaster,
-        signalk_broadcaster,
-        ais_cache,
-        vessel_db,
-        metrics,
-        metrics_logger,
-        db_health_check,
-    )
-    .run()
+    // CAN is enabled: hand over to the NMEA2000 processing loop, which never returns.
+    router_loop::run_can_pipeline(config, vessel_db, ais_cache, udp_broadcaster)
 }

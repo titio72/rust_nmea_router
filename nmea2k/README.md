@@ -120,7 +120,9 @@ NMEA2000 messages can span multiple CAN frames. The `N2kStreamReader` automatica
 ## Dependencies
 
 - `nmea2000`: Core NMEA2000 protocol types
-- `socketcan`: Linux SocketCAN interface
+- `socketcan`: Linux SocketCAN interface (Linux-only dependency; on other platforms `canbus` resolves
+  to a no-op mock backend that never delivers a frame, so the crate still builds and runs)
+- `embedded-can`: Source of `ExtendedId`, available on every platform
 - `tracing`: Logging framework
 - `chrono`: Date and time handling
 

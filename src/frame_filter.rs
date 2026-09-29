@@ -29,7 +29,7 @@ pub fn should_process_frame_by_id(config: &Config, id: Identifier) -> bool {
 mod tests {
     use super::*;
     use crate::config::SourceFilterConfig;
-    use socketcan::ExtendedId;
+    use nmea2k::ExtendedId;
     use std::collections::HashMap;
 
     /// Helper function to create a test config with source filter
