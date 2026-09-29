@@ -399,17 +399,31 @@ impl VesselDatabase {
         
         let new_trip_id = tx.last_insert_id().ok_or(AppError::Database("Failed to get inserted trip ID".to_string()))? as i64;
         
-        // Insert vessel statuses
+        // Insert vessel statuses using bulk multi-row INSERT (500 rows per statement)
         let mut imported_status_count = 0usize;
         if let Some(statuses) = vessel_statuses.as_array() {
             imported_status_count = statuses.len();
+
+            struct VsRow {
+                ts: String,
+                lat: Option<f64>,
+                lon: Option<f64>,
+                avg_spd: Option<f64>,
+                max_spd: Option<f64>,
+                moored: bool,
+                engine: u8,
+                tot_dist: Option<f64>,
+                tot_time: Option<u64>,
+                wind_spd: Option<f64>,
+                wind_ang: Option<f64>,
+                cog: Option<f64>,
+                hdg: Option<f64>,
+            }
+
+            let mut vs_rows: Vec<VsRow> = Vec::with_capacity(statuses.len());
             for status in statuses {
                 let timestamp = status["ts"].as_str()
                     .ok_or(AppError::Database("Missing ts in vessel_status".to_string()))?;
-                let latitude = status["lat"].as_f64();
-                let longitude = status["lon"].as_f64();
-                let avg_speed = status["sog"].as_f64();
-                let max_speed = status["sog_max"].as_f64();
                 let is_moored = status["moor"].as_bool()
                     .ok_or(AppError::Database("Missing moor in vessel_status".to_string()))?;
                 let engine_on: u8 = match &status["eng"] {
@@ -417,65 +431,106 @@ impl VesselDatabase {
                     v if v.is_u64() => v.as_u64().unwrap_or(2) as u8,
                     _ => 2,
                 };
-                let total_dist = status["dist"].as_f64();
-                let total_time = status["dur"].as_u64();
-                let wind_speed = status["tws"].as_f64();
-                let wind_angle = status["twa"].as_f64();
-                let cog = status["cog"].as_f64();
-                let heading = status["hdg"].as_f64();
-                
                 let ts_datetime = chrono::DateTime::parse_from_rfc3339(timestamp)?
                     .format("%Y-%m-%d %H:%M:%S%.3f").to_string();
-                
-                tx.exec_drop(
-                    "INSERT INTO vessel_status (timestamp, latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on, total_distance_nm, total_time_ms, average_wind_speed_kn, average_wind_angle_deg, cog_deg, average_heading_deg)
-                     VALUES (:ts, :lat, :lon, :avg_spd, :max_spd, :moored, :engine, :tot_dist, :tot_time, :wind_spd, :wind_ang, :cog, :hdg)",
-                    params! {
-                        "ts" => ts_datetime,
-                        "lat" => latitude,
-                        "lon" => longitude,
-                        "avg_spd" => avg_speed,
-                        "max_spd" => max_speed,
-                        "moored" => is_moored,
-                        "engine" => engine_on,
-                        "tot_dist" => total_dist,
-                        "tot_time" => total_time,
-                        "wind_spd" => wind_speed,
-                        "wind_ang" => wind_angle,
-                        "cog" => cog,
-                        "hdg" => heading,
-                    },
-                )?;
+                vs_rows.push(VsRow {
+                    ts: ts_datetime,
+                    lat: status["lat"].as_f64(),
+                    lon: status["lon"].as_f64(),
+                    avg_spd: status["sog"].as_f64(),
+                    max_spd: status["sog_max"].as_f64(),
+                    moored: is_moored,
+                    engine: engine_on,
+                    tot_dist: status["dist"].as_f64(),
+                    tot_time: status["dur"].as_u64(),
+                    wind_spd: status["tws"].as_f64(),
+                    wind_ang: status["twa"].as_f64(),
+                    cog: status["cog"].as_f64(),
+                    hdg: status["hdg"].as_f64(),
+                });
+            }
+
+            const VS_BATCH: usize = 500;
+            for chunk in vs_rows.chunks(VS_BATCH) {
+                let placeholders = chunk.iter()
+                    .map(|_| "(?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let sql = format!(
+                    "INSERT INTO vessel_status (timestamp, latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on, total_distance_nm, total_time_ms, average_wind_speed_kn, average_wind_angle_deg, cog_deg, average_heading_deg) VALUES {}",
+                    placeholders
+                );
+                let flat: Vec<mysql::Value> = chunk.iter().flat_map(|r| {
+                    vec![
+                        mysql::Value::from(r.ts.as_str()),
+                        mysql::Value::from(r.lat),
+                        mysql::Value::from(r.lon),
+                        mysql::Value::from(r.avg_spd),
+                        mysql::Value::from(r.max_spd),
+                        mysql::Value::from(r.moored),
+                        mysql::Value::from(r.engine),
+                        mysql::Value::from(r.tot_dist),
+                        mysql::Value::from(r.tot_time),
+                        mysql::Value::from(r.wind_spd),
+                        mysql::Value::from(r.wind_ang),
+                        mysql::Value::from(r.cog),
+                        mysql::Value::from(r.hdg),
+                    ]
+                }).collect();
+                tx.exec_drop(sql, flat)?;
             }
         }
-        
-        // Insert environmental metrics
+
+        // Insert environmental metrics using bulk multi-row INSERT (500 rows per statement)
         if let Some(metrics) = env_metrics.as_array() {
+            struct EmRow {
+                ts: String,
+                metric_id: u8,
+                val_avg: Option<f32>,
+                val_max: Option<f32>,
+                val_min: Option<f32>,
+                unit: Option<String>,
+            }
+
+            let mut em_rows: Vec<EmRow> = Vec::with_capacity(metrics.len());
             for metric in metrics {
                 let timestamp = metric["ts"].as_str()
                     .ok_or(AppError::Database("Missing ts in environmental_data".to_string()))?;
                 let metric_id = metric["mid"].as_u64()
                     .ok_or(AppError::Database("Missing mid in environmental_data".to_string()))? as u8;
-                let value_avg = metric["avg"].as_f64().map(|v| v as f32);
-                let value_max = metric["max"].as_f64().map(|v| v as f32);
-                let value_min = metric["min"].as_f64().map(|v| v as f32);
-                let unit = metric["unit"].as_str();
-                
                 let ts_datetime = chrono::DateTime::parse_from_rfc3339(timestamp)?
                     .format("%Y-%m-%d %H:%M:%S%.3f").to_string();
-                
-                tx.exec_drop(
-                    "INSERT INTO environmental_data (timestamp, metric_id, value_avg, value_max, value_min, unit)
-                     VALUES (:ts, :metric_id, :val_avg, :val_max, :val_min, :unit)",
-                    params! {
-                        "ts" => ts_datetime,
-                        "metric_id" => metric_id,
-                        "val_avg" => value_avg,
-                        "val_max" => value_max,
-                        "val_min" => value_min,
-                        "unit" => unit,
-                    },
-                )?;
+                em_rows.push(EmRow {
+                    ts: ts_datetime,
+                    metric_id,
+                    val_avg: metric["avg"].as_f64().map(|v| v as f32),
+                    val_max: metric["max"].as_f64().map(|v| v as f32),
+                    val_min: metric["min"].as_f64().map(|v| v as f32),
+                    unit: metric["unit"].as_str().map(|s| s.to_string()),
+                });
+            }
+
+            const EM_BATCH: usize = 500;
+            for chunk in em_rows.chunks(EM_BATCH) {
+                let placeholders = chunk.iter()
+                    .map(|_| "(?,?,?,?,?,?)")
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let sql = format!(
+                    "INSERT INTO environmental_data (timestamp, metric_id, value_avg, value_max, value_min, unit) VALUES {}",
+                    placeholders
+                );
+                let flat: Vec<mysql::Value> = chunk.iter().flat_map(|r| {
+                    vec![
+                        mysql::Value::from(r.ts.as_str()),
+                        mysql::Value::from(r.metric_id),
+                        mysql::Value::from(r.val_avg),
+                        mysql::Value::from(r.val_max),
+                        mysql::Value::from(r.val_min),
+                        mysql::Value::from(r.unit.as_deref()),
+                    ]
+                }).collect();
+                tx.exec_drop(sql, flat)?;
             }
         }
         
