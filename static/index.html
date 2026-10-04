@@ -498,6 +498,11 @@
                 <span>Metrics Tracking:</span>
                 <div class="toggle-switch" id="metricsToggle"></div>
             </div>
+            <div class="tracking-toggle-container" onclick="toggleAutoOn()" data-ro-hidden="true"
+                title="Automatically enable position and metrics tracking when the vessel leaves its mooring">
+                <span>Auto On:</span>
+                <div class="toggle-switch" id="autoOnToggle"></div>
+            </div>
             <div class="tracking-toggle-container" onclick="toggleSignalk()" data-ro-hidden="true">
                 <span>SignalK Broadcasting:</span>
                 <div class="toggle-switch" id="signalkToggle"></div>
@@ -1182,6 +1187,55 @@
             } catch (error) {
                 console.error('Error toggling metrics:', error);
                 alert('Failed to update metrics status. Check console for details.');
+            }
+        }
+
+        // Initialize Auto On (enable tracking when the vessel leaves its mooring)
+        async function initializeAutoOn() {
+            try {
+                const response = await fetch('/api/auto_on/status');
+                if (!response.ok) {
+                    throw new Error('Failed to load auto-on status');
+                }
+                const result = await response.json();
+                const toggle = document.getElementById('autoOnToggle');
+                if (result.data && result.data.enabled) {
+                    toggle.classList.add('active');
+                }
+            } catch (error) {
+                console.error('Error loading auto-on status:', error);
+            }
+        }
+        fetchUiMode().then(readOnly => { if (!readOnly) initializeAutoOn(); });
+
+        async function toggleAutoOn() {
+            const toggle = document.getElementById('autoOnToggle');
+            const newStatus = !toggle.classList.contains('active');
+
+            try {
+                const response = await fetch('/api/auto_on/status', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ enabled: newStatus })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to update auto-on status');
+                }
+
+                const result = await response.json();
+                if (result.status === 'ok' && result.data) {
+                    if (result.data.enabled) {
+                        toggle.classList.add('active');
+                    } else {
+                        toggle.classList.remove('active');
+                    }
+                }
+            } catch (error) {
+                console.error('Error toggling auto-on:', error);
+                alert('Failed to update auto-on status. Check console for details.');
             }
         }
 

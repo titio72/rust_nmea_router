@@ -345,7 +345,8 @@ impl HealthState {
         };
 
         HealthReport {
-            enabled: self.config.enabled,
+            // Monitoring is only active when enabled in config and there is a CAN pipeline.
+            enabled: self.config.enabled && self.can_enabled,
             status,
             can,
             alarms: alarms
@@ -1057,6 +1058,7 @@ mod tests {
         let st = HealthState::new(HealthConfig::default(), false, t0);
         let r = st.report(t0 + Duration::from_secs(500));
         assert_eq!(r.can, "disabled");
+        assert!(!r.enabled, "no alarms are possible without CAN: monitoring is not active");
         assert_eq!(r.status, HealthStatus::Ok);
 
         let cfg = HealthConfig { enabled: false, ..HealthConfig::default() };

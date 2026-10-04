@@ -148,7 +148,7 @@ Edit `config.json` to customize settings:
 
 #### Health Monitor
 Alarms for lost data feeds, failing database writes and a lagging or stalled router loop (see `GET /api/health`). All values in seconds; every field is optional and a value of 0 reverts to the default (except `startup_grace_secs`, where 0 is allowed).
-- `enabled`: Master switch (default: true)
+- `enabled`: Master switch (default: true). Alarms are always disabled when `can.enabled` is false (web-only mode)
 - `startup_grace_secs`: No alarms for this long after start (default: 30)
 - `can_silence_secs`: Alarm when no CAN frame arrives for this long (default: 10)
 - `required_stream_timeout_secs`: Position, COG/SOG and system time must be seen within this window (default: 30)

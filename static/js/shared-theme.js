@@ -145,10 +145,12 @@ document.addEventListener('DOMContentLoaded', applyUiMode);
 // ---------------------------- Health indicator ----------------------------
 
 const HEALTH_POLL_MS = 10000;
+let _healthTimer = null;
 
 async function updateHealthIndicator() {
     const dot = document.getElementById('healthStatus');
     if (!dot) return;
+    const button = dot.parentElement;
     let cls = 'health-down';
     let tip = 'System health: unreachable';
     try {
@@ -156,25 +158,31 @@ async function updateHealthIndicator() {
         const resp = await fetch('/api/health', { credentials: 'same-origin' });
         const health = await resp.json();
         if (health.enabled === false) {
-            cls = '';
-            tip = 'System health: monitoring disabled';
-        } else {
-            cls = 'health-' + health.status;
-            tip = health.alarms.length === 0
-                ? 'System health: OK'
-                : health.alarms.map(a => a.message).join('\n');
+            // Alarms are disabled (config switch, or CAN disabled): no dot, no more polling.
+            button.style.display = 'none';
+            if (_healthTimer !== null) {
+                clearInterval(_healthTimer);
+                _healthTimer = null;
+            }
+            return;
         }
+        cls = 'health-' + health.status;
+        tip = health.alarms.length === 0
+            ? 'System health: OK'
+            : health.alarms.map(a => a.message).join('\n');
     } catch (_) { /* keep the "unreachable" defaults */ }
-    // Swap classes only after the fetch so the dot never flashes grey while polling.
+    // The dot stays hidden until the first answer says monitoring is active; swap classes
+    // only after the fetch so it never flashes grey while polling.
+    button.style.display = '';
     dot.classList.remove('health-ok', 'health-degraded', 'health-down');
-    if (cls) dot.classList.add(cls);
-    dot.parentElement.title = tip;
+    dot.classList.add(cls);
+    button.title = tip;
 }
 
 function startHealthIndicator() {
     if (!document.getElementById('healthStatus')) return;
     updateHealthIndicator();
-    setInterval(updateHealthIndicator, HEALTH_POLL_MS);
+    _healthTimer = setInterval(updateHealthIndicator, HEALTH_POLL_MS);
 }
 
 document.addEventListener('DOMContentLoaded', startHealthIndicator);
@@ -226,7 +234,7 @@ function createHeaderBar(currentPage, showConnectionStatus = false) {
             </button>`;
 
     headerHTML +=
-            `<button class="theme-toggle" title="System health" tabindex="-1">
+            `<button class="theme-toggle" title="System health" tabindex="-1" style="display: none;">
                 <span class="status-dot" id="healthStatus"></span>
             </button>`;
 

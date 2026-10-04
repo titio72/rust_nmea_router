@@ -68,6 +68,11 @@ impl VesselDatabase {
                 )"
             );
             
+            // Auto On is opt-in; an absent key would otherwise read as enabled
+            let _ = conn.query_drop(
+                "INSERT IGNORE INTO system_status (status_key, status_value) VALUES ('auto_on_enabled', '0')"
+            );
+
             // Load cache from database
             if let Ok(rows) = conn.query::<(String, String), _>("SELECT status_key, status_value FROM system_status") {
                 let mut cache = db.system_status_cache.lock()

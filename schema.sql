@@ -28,7 +28,8 @@ COMMENT='Stores persistent system status and runtime configuration';
 -- Initialize default status values:
 INSERT IGNORE INTO system_status (status_key, status_value) VALUES
 ('tracking_enabled', '1'),
-('metrics_enabled', '1');
+('metrics_enabled', '1'),
+('auto_on_enabled', '0');
 
 -- ============================================================================
 -- VESSEL STATUS TABLE

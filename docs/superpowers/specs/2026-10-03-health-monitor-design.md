@@ -146,5 +146,5 @@ A status dot in the shared header built by `static/js/shared-theme.js`: polls `/
 - Mutex poisoned: recover with `into_inner`.
 - Publisher task dies: `/api/health` still evaluates on read.
 - Router loop hangs: detected as `loop_stalled` from the external evaluator.
-- `health.enabled = false`: `evaluate` returns no alarms; endpoint returns `status: "ok"` with `"enabled": false`.
+- `health.enabled = false` or `can.enabled = false`: `evaluate` returns no alarms; the endpoint returns `status: "ok"` with `"enabled": false`, and the dashboard hides the dot and stops polling.
 - Total DB outage: the router exits when reconnection fails (existing behaviour, systemd restarts it), so `db_failing` covers persistent write failures that do not trigger a reconnect. An external poller sees the outage as an unreachable endpoint.

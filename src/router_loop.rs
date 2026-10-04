@@ -113,6 +113,16 @@ pub struct RouterLoop {
     db_health_check: HealthCheckManager,
     // Health monitor (recording side)
     health: HealthHandle,
+    // Last observed moored state, used by "Auto On" to detect moored -> moving edges
+    last_moored: Option<bool>,
+}
+
+/// Records the latest moored state and reports whether it just flipped from moored to
+/// moving. The first observation only seeds the state, so startup never counts as an edge.
+fn mooring_departure(last: &mut Option<bool>, moored: bool) -> bool {
+    let departed = *last == Some(true) && !moored;
+    *last = Some(moored);
+    departed
 }
 
 impl RouterLoop {
@@ -152,6 +162,7 @@ impl RouterLoop {
             metrics_logger,
             db_health_check,
             health,
+            last_moored: None,
         }
     }
 
@@ -273,8 +284,23 @@ impl RouterLoop {
         self.update_signalk_time_sync_status(&sync);
 
         if sync.status == TimeSyncStatus::Synchronized {
-            if self.is_vessel_tracking_enabled() {
+            let tracking_enabled = self.is_vessel_tracking_enabled();
+            let auto_on = self.is_auto_on_enabled();
+            // The vessel monitor must keep running while tracking is off if Auto On is
+            // armed, otherwise it can never see the boat start moving.
+            if tracking_enabled || auto_on {
                 self.vessel_monitor.handle_message(frame, now);
+            }
+            if auto_on {
+                let moored = self.vessel_monitor.is_moored(now);
+                if mooring_departure(&mut self.last_moored, moored) {
+                    self.apply_auto_on();
+                }
+            } else {
+                self.last_moored = None;
+            }
+
+            if tracking_enabled || self.is_vessel_tracking_enabled() {
                 if self.is_signalk_enabled() {
                     let moored = self.vessel_monitor.is_moored(now);
                     self.broadcast_mooring_status(moored, now);
@@ -351,6 +377,25 @@ impl RouterLoop {
     fn is_vessel_tracking_enabled(&self) -> bool {
         let db = read_db(&self.vessel_db);
         db.get_system_status("tracking_enabled").unwrap_or(false)
+    }
+
+    fn is_auto_on_enabled(&self) -> bool {
+        let db = read_db(&self.vessel_db);
+        db.get_system_status("auto_on_enabled").unwrap_or(false)
+    }
+
+    /// Switch position and meteo tracking on after the vessel leaves its mooring.
+    fn apply_auto_on(&self) {
+        let db = read_db(&self.vessel_db);
+        for key in ["tracking_enabled", "metrics_enabled"] {
+            if db.get_system_status(key).unwrap_or(false) {
+                continue;
+            }
+            match db.set_system_status(key, true) {
+                Ok(()) => info!(key, "Auto On: vessel started moving, enabled"),
+                Err(e) => warn!(key, error = %e, "Auto On: failed to enable"),
+            }
+        }
     }
 
     fn is_signalk_enabled(&self) -> bool {
@@ -481,4 +526,30 @@ pub fn run_can_pipeline(
         health,
     )
     .run()
+}
+
+#[cfg(test)]
+mod auto_on_tests {
+    use super::mooring_departure;
+
+    #[test]
+    fn first_observation_is_never_an_edge() {
+        let mut last = None;
+        assert!(!mooring_departure(&mut last, false));
+        assert_eq!(last, Some(false));
+    }
+
+    #[test]
+    fn moored_to_moving_fires_once() {
+        let mut last = Some(true);
+        assert!(mooring_departure(&mut last, false));
+        assert!(!mooring_departure(&mut last, false));
+    }
+
+    #[test]
+    fn staying_moored_or_arriving_does_not_fire() {
+        let mut last = Some(false);
+        assert!(!mooring_departure(&mut last, true));
+        assert!(!mooring_departure(&mut last, true));
+    }
 }

@@ -270,6 +270,8 @@ All responses use the envelope `{ "status": "ok"|"error", "data": ..., "error": 
 
 Feature flags (`tracking_enabled`, `metrics_enabled`, `signalk_enabled`) are read from the `system_status` table in the database and checked on every message, allowing runtime toggling without a restart.
 
+`auto_on_enabled` (default off) arms **Auto On**: while armed, the vessel monitor keeps processing messages even if `tracking_enabled` is off, and on a moored → moving transition the router loop sets both `tracking_enabled` and `metrics_enabled` to true. It never switches tracking off. Toggle via `GET`/`POST /api/auto_on/status` (same request/response shape as `/api/metrics/status`).
+
 ---
 
 ### 6.2 SignalK WebSocket

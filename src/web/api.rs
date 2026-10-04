@@ -236,6 +236,16 @@ pub struct MetricsStatusResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct AutoOnStatusRequest {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AutoOnStatusResponse {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct SignalKStatusRequest {
     pub enabled: bool,
 }
@@ -1059,6 +1069,36 @@ pub async fn set_metrics_status(
 
     info!("Metrics status updated to: {}", request.enabled);
     Ok(Json(ApiResponse::ok(response)))
+}
+
+pub async fn get_auto_on_status(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<AutoOnStatusResponse>>, StatusCode> {
+    let enabled = state
+        .db()
+        .get_system_status("auto_on_enabled")
+        .unwrap_or(false);
+    Ok(Json(ApiResponse::ok(AutoOnStatusResponse { enabled })))
+}
+
+pub async fn set_auto_on_status(
+    State(state): State<AppState>,
+    Json(request): Json<AutoOnStatusRequest>,
+) -> Result<Json<ApiResponse<AutoOnStatusResponse>>, StatusCode> {
+    info!(?request, "POST /api/auto_on/status called");
+
+    if let Err(e) = state
+        .db()
+        .set_system_status("auto_on_enabled", request.enabled)
+    {
+        error!("Failed to save auto-on status to database: {}", e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    info!("Auto On status updated to: {}", request.enabled);
+    Ok(Json(ApiResponse::ok(AutoOnStatusResponse {
+        enabled: request.enabled,
+    })))
 }
 
 pub async fn get_signalk_status(
@@ -2211,6 +2251,8 @@ pub fn create_api_router(state: AppState) -> Router {
             .route("/tracking/status", post(set_tracking_status))
             .route("/metrics/status", get(get_metrics_status))
             .route("/metrics/status", post(set_metrics_status))
+            .route("/auto_on/status", get(get_auto_on_status))
+            .route("/auto_on/status", post(set_auto_on_status))
             .route("/signalk/status", get(get_signalk_status))
             .route("/signalk/status", post(set_signalk_status))
             .route("/udp_broadcast/status", get(get_udp_broadcast_status))
@@ -3065,6 +3107,35 @@ mod tests {
         assert_eq!(json["status"], "ok");
         assert!(json["data"].is_object());
         assert!(json["data"]["enabled"].is_boolean());
+    }
+
+    #[tokio::test]
+    async fn test_set_auto_on_status() {
+        let app = create_test_app();
+
+        let payload = json!({ "enabled": true });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/auto_on/status")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["data"]["enabled"], true);
     }
 
     #[tokio::test]
