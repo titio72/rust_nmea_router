@@ -122,6 +122,14 @@ In this way, the total time, the total distance, and average COG and SOG will be
 The application receives NMEA 2000 messages 126992 and compares the timestamp received with the message with the system time. If the skew is larger than 1 second, the application will try to set the system using the timestamp received with NMEA 2000 message.
 Two global states are continuously updated in memory and available to all the subsystems of the application: the time skew in milliseconds and the boolean status indicating if it is synced up (i.e. skew < 1000ms).
 
+### Health Monitor
+
+`src/health.rs`. The router loop records, via `HealthHandle::record_*`, when each stream (position, COG/SOG, system time, heading, wind), CAN frame, loop iteration and DB write last happened. `HealthState::evaluate(now)` turns that into alarms; it is evaluated by a 1 Hz publisher task (edge-triggered: error log + SignalK `notifications.router.*`) and on every `GET /api/health` (200 when healthy, 503 otherwise; public, no login). A status dot in the shared header polls it.
+
+Alarms: `can_silent`, `stream_stale:<name>`, `db_failing:<vessel|env>` (failing continuously for `db_failure_secs`), `loop_lagging` (one unit of work too slow), `loop_overloaded` (loop busy above `loop_busy_ratio` of a 10 s window), `loop_stalled`, `time_not_synced`. Alarm-severity conditions make `/api/health` report `down`, warn-only ones `degraded`. A stalled loop suppresses the CAN, stream and time alarms; a silent bus suppresses the per-stream and time alarms. Optional streams (heading, wind) only alarm once seen. Engine data is not tracked (engine gateways go silent whenever the engine is off). No alarms during `health.startup_grace_secs` after start, nor when CAN is disabled. Thresholds: `health` section of the config (see README).
+
+Known limit: when the database connection is lost and reconnection fails, the router exits (systemd restarts it), so `db_failing` covers persistent write failures that do not trigger a reconnect, not a total DB outage.
+
 ### Data collection and Boat Status Report generation
 The application uses NMEA messages:
 1. 130306 Wind speed and direction

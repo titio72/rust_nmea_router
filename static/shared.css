@@ -193,6 +193,18 @@ h2 {
     background-color: #e74c3c;
 }
 
+.status-dot.health-ok {
+    background-color: #27ae60;
+}
+
+.status-dot.health-degraded {
+    background-color: #f39c12;
+}
+
+.status-dot.health-down {
+    background-color: #e74c3c;
+}
+
 .sailing-percentage {
     color: var(--sailing-color);
     font-weight: bold;

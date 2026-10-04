@@ -20,6 +20,7 @@ use crate::db::{HealthCheckManager, VesselDatabase, is_connection_error};
 use crate::environmental_monitor::EnvironmentalMonitor;
 use crate::environmental_status_handler::EnvironmentalStatusHandler;
 use crate::frame_filter::{should_process_frame_by_id, should_process_n2k_message};
+use crate::health::{DbKind, HealthHandle, Stream};
 use crate::ais_target_cache::AisTargetCache;
 use crate::signalk_broadcaster::SignalKBroadcaster;
 use crate::time_monitor::TimeSyncStatus;
@@ -34,6 +35,19 @@ fn read_db(vessel_db: &Arc<RwLock<VesselDatabase>>) -> std::sync::RwLockReadGuar
         warn!("VesselDatabase RwLock was poisoned; recovering inner value");
         poisoned.into_inner()
     })
+}
+
+/// Map an assembled message to the stream the health monitor tracks, if any.
+fn stream_of(message: &nmea2k::pgns::N2kMessage) -> Option<Stream> {
+    use nmea2k::pgns::N2kMessage;
+    match message {
+        N2kMessage::PositionRapidUpdate(_) => Some(Stream::Position),
+        N2kMessage::CogSogRapidUpdate(_) => Some(Stream::CogSog),
+        N2kMessage::NMEASystemTime(_) => Some(Stream::SystemTime),
+        N2kMessage::VesselHeading(_) => Some(Stream::Heading),
+        N2kMessage::WindData(_) => Some(Stream::Wind),
+        _ => None,
+    }
 }
 
 /// Run `op` against the database. On a connection error, reconnect once and retry.
@@ -97,6 +111,8 @@ pub struct RouterLoop {
     pub(crate) metrics: AppMetrics,
     metrics_logger: MetricsLogger,
     db_health_check: HealthCheckManager,
+    // Health monitor (recording side)
+    health: HealthHandle,
 }
 
 impl RouterLoop {
@@ -117,6 +133,7 @@ impl RouterLoop {
         metrics: AppMetrics,
         metrics_logger: MetricsLogger,
         db_health_check: HealthCheckManager,
+        health: HealthHandle,
     ) -> Self {
         Self {
             socket,
@@ -134,6 +151,7 @@ impl RouterLoop {
             metrics,
             metrics_logger,
             db_health_check,
+            health,
         }
     }
 
@@ -141,9 +159,11 @@ impl RouterLoop {
     /// `process_n2k_message`, and handles periodic tasks (metrics logging, DB health check).
     pub fn run(&mut self) -> ! {
         loop {
+            self.health.record_heartbeat(Instant::now());
             match CanBus::read_nmea2k_frame(&self.socket) {
                 Ok((extended_id, data)) => {
                     self.metrics.can_frames += 1;
+                    self.health.record_frame(Instant::now());
 
                     let id = Identifier::from_can_id(extended_id);
                     if !should_process_frame_by_id(&self.config, id) {
@@ -163,6 +183,7 @@ impl RouterLoop {
 
                         let now = Instant::now();
                         self.process_n2k_message(&n2k_frame, now);
+                        self.health.record_work(Instant::now(), now.elapsed());
                     }
                 }
                 Err(e) => {
@@ -192,7 +213,10 @@ impl RouterLoop {
             self.metrics_logger.check_and_log(&mut self.metrics);
 
             let db_url = self.config.database.connection.connection_url();
-            match self.db_health_check.check_and_reconnect(&self.vessel_db, &db_url) {
+            let health_check_started = Instant::now();
+            let health_check_result = self.db_health_check.check_and_reconnect(&self.vessel_db, &db_url);
+            self.health.record_work(Instant::now(), health_check_started.elapsed());
+            match health_check_result {
                 Ok(true) => {
                     // Reconnection occurred — reload trip state
                     let db = read_db(&self.vessel_db);
@@ -213,6 +237,10 @@ impl RouterLoop {
     /// going through the CAN socket. `now` must be passed by the caller — never call
     /// `Instant::now()` inside business logic.
     pub(crate) fn process_n2k_message(&mut self, frame: &N2kFrame, now: Instant) {
+        if let Some(stream) = stream_of(&frame.message) {
+            self.health.record_stream(stream, now);
+        }
+
         self.time_monitor.handle_message(frame, now);
 
         if let Ok(mut cache) = self.ais_target_cache.lock() {
@@ -230,6 +258,7 @@ impl RouterLoop {
         let sync = self.time_monitor.time_sync_status();
         self.metrics.gnss_time_skew = sync.skew;
         self.metrics.gnss_time_skew_status = sync.status;
+        self.health.record_time_sync(sync.status, now);
 
         /* debugging stuff */
         /*
@@ -279,29 +308,37 @@ impl RouterLoop {
     fn handle_vessel_status_write(
         &mut self,
         vessel_status: crate::vessel_monitor::VesselStatus,
-        _now: Instant,
+        now: Instant,
     ) {
         let db_url = self.config.database.connection.connection_url();
-        if let Some(true) = with_db_retry(
+        let result = with_db_retry(
             &self.vessel_db,
             &mut self.db_health_check,
             &db_url,
             "vessel status write",
             |db| self.vessel_status_handler.handle_vessel_status(db, &vessel_status),
-        ) {
+        );
+        self.health
+            .record_db_result(DbKind::Vessel, result.is_some(), now);
+        if let Some(true) = result {
             self.metrics.vessel_reports += 1;
         }
     }
 
     fn handle_env_status_write(&mut self, now: Instant) {
         let db_url = self.config.database.connection.connection_url();
-        if let Some(count) = with_db_retry(
+        let result = with_db_retry(
             &self.vessel_db,
             &mut self.db_health_check,
             &db_url,
             "environmental write",
             |db| self.environmental_status_handler.handle_environment_status(db, &mut self.env_monitor, now),
-        ) {
+        );
+        // `Some(0)` means nothing was due, i.e. no write was attempted: not evidence of health.
+        if result.is_none() || result.is_some_and(|count| count > 0) {
+            self.health.record_db_result(DbKind::Env, result.is_some(), now);
+        }
+        if let Some(count) = result {
             self.metrics.env_reports += count as u64;
         }
     }
@@ -358,6 +395,7 @@ pub fn run_can_pipeline(
     vessel_db: Arc<RwLock<VesselDatabase>>,
     ais_target_cache: Arc<Mutex<AisTargetCache>>,
     udp_broadcaster: UdpBroadcaster,
+    health: HealthHandle,
 ) -> ! {
     let interface = &config.can.interface;
     info!("Opening CAN interface: {}", interface);
@@ -440,6 +478,7 @@ pub fn run_can_pipeline(
         metrics,
         metrics_logger,
         db_health_check,
+        health,
     )
     .run()
 }

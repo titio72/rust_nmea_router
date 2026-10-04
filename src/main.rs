@@ -16,6 +16,7 @@ mod environmental_monitor;
 mod environmental_status_handler;
 mod error;
 mod frame_filter;
+mod health;
 mod mooring_detection;
 mod position_utils;
 mod router_loop;
@@ -166,6 +167,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         info!("CAN disabled — forcing read_only mode");
     }
 
+    // Health monitor shared by the router loop (recording) and the web layer (evaluation).
+    let health = health::HealthHandle::new(
+        config.health.clone(),
+        config.can.enabled,
+        std::time::Instant::now(),
+    );
+
     // Create UDP broadcaster with config. Done early (before the web server starts) so the
     // web UI can be told the real, post-bind-attempt status rather than the static config value.
     let mut udp_enabled = config.udp.enabled;
@@ -219,6 +227,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let db_arc = vessel_db.clone(); // Clone the Arc, not the database
         let config_arc = Arc::new(config.clone());
         let ais_cache_web = ais_cache.clone();
+        let health_web = health.clone();
         let web_port = config.web.port;
 
         // Use channel to confirm web server started successfully
@@ -236,7 +245,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 };
                 rt.block_on(async {
-                    match web::start_web_server(db_arc, config_arc, ais_cache_web, web_port, udp_enabled, startup_tx).await {
+                    match web::start_web_server(db_arc, config_arc, ais_cache_web, web_port, udp_enabled, health_web, startup_tx).await {
                         Ok(()) => {}
                         Err(e) => {
                             warn!("Web server error: {}", e);
@@ -281,5 +290,5 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // CAN is enabled: hand over to the NMEA2000 processing loop, which never returns.
-    router_loop::run_can_pipeline(config, vessel_db, ais_cache, udp_broadcaster)
+    router_loop::run_can_pipeline(config, vessel_db, ais_cache, udp_broadcaster, health)
 }

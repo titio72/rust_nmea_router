@@ -146,6 +146,20 @@ Edit `config.json` to customize settings:
   - **Safe parsing**: Accepts boolean (`true`/`false`), strings (`"true"`, `"yes"`, `"1"`, `"on"`, `"enabled"`, or their negatives), or numbers (`1`/`0`)
   - **Error handling**: Any malformed or invalid value defaults to `false` (safe behavior)
 
+#### Health Monitor
+Alarms for lost data feeds, failing database writes and a lagging or stalled router loop (see `GET /api/health`). All values in seconds; every field is optional and a value of 0 reverts to the default (except `startup_grace_secs`, where 0 is allowed).
+- `enabled`: Master switch (default: true)
+- `startup_grace_secs`: No alarms for this long after start (default: 30)
+- `can_silence_secs`: Alarm when no CAN frame arrives for this long (default: 10)
+- `required_stream_timeout_secs`: Position, COG/SOG and system time must be seen within this window (default: 30)
+- `optional_stream_timeout_secs`: Heading, wind and engine; only alarmed once seen at least once (default: 60)
+- `db_failure_secs`: A kind of database write (vessel or environmental) failing continuously for this long raises `db_failing` (default: 60)
+- `loop_lag_secs`: One unit of work taking longer than this raises `loop_lagging` (default: 2)
+- `loop_lag_window_secs`: `loop_lagging` stays active this long after the last slow unit of work (default: 60)
+- `loop_busy_ratio`: Fraction (0-1] of a 10 s window spent processing messages above which `loop_overloaded` is raised (default: 0.8)
+- `loop_stall_secs`: No loop iteration for this long raises `loop_stalled` (default: 10)
+- `time_unsynced_secs`: Time uninitialized or skewed for this long raises `time_not_synced` (default: 60)
+
 #### Database Connection
 - `host`: Database server hostname
 - `port`: Database server port (default: 3306)

@@ -125,11 +125,15 @@ impl VesselStatusHandler {
 
         if status.is_valid() {
             let status_operation = self.generate_vessel_status_operation(status);
-            self.state.set_last_persisted_status(&status_operation);
+
+            // Work on a copy of the trip and commit it (together with the last persisted status)
+            // only once the insert succeeds. A failed write — or the caller retrying this method
+            // after a reconnect — must not leave in-memory state ahead of the database.
+            let mut pending_trip = self.state.current_trip.clone();
 
             // Determine trip operation (create, update, or none)
             let trip_operation = Self::determine_trip_operation(
-                &mut self.state.current_trip,
+                &mut pending_trip,
                 status,
                 status_operation.total_distance_nm,
                 status_operation.total_time_ms,
@@ -142,11 +146,11 @@ impl VesselStatusHandler {
 
                     // Update trip ID if we created a new trip
                     if let Some(trip_id) = new_trip_id {
-                        if let Some(ref mut trip) = self.state.current_trip {
+                        if let Some(ref mut trip) = pending_trip {
                             trip.id = Some(trip_id);
                             info!("Created new trip: {} (ID: {})", trip.description, trip_id);
                         }
-                    } else if let Some(ref trip) = self.state.current_trip {
+                    } else if let Some(ref trip) = pending_trip {
                         debug!(
                             "Updated trip: {} (ID: {}), total_distance={:.3}nm, total_time={}ms",
                             trip.description,
@@ -155,6 +159,9 @@ impl VesselStatusHandler {
                             trip.total_time()
                         );
                     }
+
+                    self.state.current_trip = pending_trip;
+                    self.state.set_last_persisted_status(&status_operation);
 
                     // Note: Realtime data is now broadcast directly from NMEA message processing in main loop,
                     // not from the aggregated vessel status handler, to ensure complete data is sent

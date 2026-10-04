@@ -52,6 +52,8 @@ pub struct AppState {
     /// Whether the UDP broadcaster actually initialized at startup (config-enabled AND socket
     /// bind succeeded). Distinct from `config.udp.enabled`, which only reflects the config file.
     pub udp_broadcast_available: bool,
+    /// Shared health monitor; evaluated on every `/api/health` request.
+    pub health: crate::health::HealthHandle,
 }
 
 impl AppState {
@@ -978,6 +980,14 @@ pub async fn get_heatmap(
             Ok(Json(ApiResponse::error(e.to_string())))
         }
     }
+}
+
+/// GET /api/health — alarms and stream/DB/loop ages. 200 when healthy, 503 otherwise.
+pub async fn get_health(State(state): State<AppState>) -> impl IntoResponse {
+    let report = state.health.report(std::time::Instant::now());
+    let status = StatusCode::from_u16(report.http_status_code())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (status, Json(report))
 }
 
 pub async fn get_tracking_status(
@@ -2172,6 +2182,7 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/nav_analysis", get(get_nav_analysis))
         .route("/ais_targets", get(get_ais_targets))
         .route("/config/read_only", get(get_read_only))
+        .route("/health", get(get_health))
         .route("/config/capabilities", get(get_capabilities))
         .route("/sync/status", get(get_sync_status))
         .route("/sync/manifest", post(post_sync_manifest))
@@ -2286,6 +2297,7 @@ mod tests {
             polars: None,
             land_mask: None,
             udp_broadcast_available: true,
+            health: crate::health::HealthHandle::new(crate::config::HealthConfig::default(), true, std::time::Instant::now()),
         };
         create_api_router(state)
     }
@@ -2978,6 +2990,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_health_ok_inside_startup_grace() {
+        // A freshly created health monitor is inside its startup grace: no alarms, HTTP 200.
+        for app in [create_test_app(), create_test_app_read_only()] {
+            let response = app
+                .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(json["status"], "ok");
+            assert_eq!(json["alarms"].as_array().unwrap().len(), 0);
+            assert!(json["loop"].is_object());
+        }
+    }
+
+    #[tokio::test]
     async fn test_get_tracking_status() {
         let app = create_test_app();
 
@@ -3307,6 +3338,7 @@ mod tests {
             polars: None,
             land_mask: None,
             udp_broadcast_available: true,
+            health: crate::health::HealthHandle::new(crate::config::HealthConfig::default(), true, std::time::Instant::now()),
         };
         (create_api_router(state), db)
     }
@@ -3331,6 +3363,7 @@ mod tests {
             polars,
             land_mask: None,
             udp_broadcast_available: true,
+            health: crate::health::HealthHandle::new(crate::config::HealthConfig::default(), true, std::time::Instant::now()),
         };
         (create_api_router(state), db)
     }
@@ -4120,6 +4153,7 @@ mod tests {
             polars: None,
             land_mask: None,
             udp_broadcast_available: true,
+            health: crate::health::HealthHandle::new(crate::config::HealthConfig::default(), true, std::time::Instant::now()),
         };
         create_api_router(state)
     }

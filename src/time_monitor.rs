@@ -96,10 +96,7 @@ impl TimeMonitor {
         // Calculate time skew in milliseconds
         let nmea_system_time = nmea_time.date_time.to_system_time();
 
-        let time_skew_ms = match now.duration_since(nmea_system_time) {
-            Ok(duration) => duration.as_millis() as i64,
-            Err(e) => -(e.duration().as_millis() as i64), // Negative if NMEA is ahead
-        };
+        let mut time_skew_ms = Self::skew_ms(now, nmea_system_time);
         let abs_skew = time_skew_ms.abs();
 
         if abs_skew > self.time_skew_threshold_ms {
@@ -124,8 +121,11 @@ impl TimeMonitor {
                 self.last_warning_time = Some(now);
 
                 // Attempt to set system time if enabled
-                if self.set_system_time_enabled {
-                    self.set_system_time(nmea_time);
+                if self.set_system_time_enabled && self.set_system_time(nmea_time) {
+                    // Clock was changed: re-measure so the status doesn't stay
+                    // stale (and DB writes blocked) until the next message
+                    time_skew_ms = Self::skew_ms(StdSystemTime::now(), nmea_system_time);
+                    self.has_time_skew = time_skew_ms.abs() > self.time_skew_threshold_ms;
                 }
             }
         } else {
@@ -135,13 +135,22 @@ impl TimeMonitor {
         self.last_measured_skew_ms = time_skew_ms;
     }
 
+    /// Skew in milliseconds: positive if system time is ahead of NMEA time
+    fn skew_ms(now: StdSystemTime, nmea_system_time: StdSystemTime) -> i64 {
+        match now.duration_since(nmea_system_time) {
+            Ok(duration) => duration.as_millis() as i64,
+            Err(e) => -(e.duration().as_millis() as i64), // Negative if NMEA is ahead
+        }
+    }
+
     /// Check if time is synchronized (no skew above threshold)
     /// Returns true if it's safe to write to database
     pub fn is_time_synchronized(&self) -> bool {
         !self.has_time_skew
     }
 
-    fn set_system_time(&self, nmea_time: &NMEASystemTime) {
+    /// Returns true if the system clock was actually changed
+    fn set_system_time(&self, nmea_time: &NMEASystemTime) -> bool {
         let unix_timestamp = nmea_time.date_time.to_unix_timestamp();
         let millis = nmea_time.date_time.milliseconds() as i64;
 
@@ -159,12 +168,14 @@ impl TimeMonitor {
                     "System time successfully set to NMEA time: {} (Unix timestamp)",
                     unix_timestamp
                 );
+                true
             }
             Err(err) => {
                 tracing::error!(
                     "Failed to set system time: {}. This operation requires root/sudo privileges.",
                     err
                 );
+                false
             }
         }
     }

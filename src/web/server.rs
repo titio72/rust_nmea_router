@@ -32,6 +32,7 @@ pub async fn start_web_server(
     ais_cache: Arc<std::sync::Mutex<AisTargetCache>>,
     port: u16,
     udp_broadcast_available: bool,
+    health: crate::health::HealthHandle,
     startup_signal: std::sync::mpsc::Sender<Result<(), String>>,
 ) -> Result<(), crate::error::AppError> {
     match config.web.auth_password.as_deref() {
@@ -90,11 +91,15 @@ pub async fn start_web_server(
         polars,
         land_mask,
         udp_broadcast_available,
+        health: health.clone(),
     };
 
     tokio::spawn(async {
         cleanup_old_exports().await;
     });
+
+    let publisher_uuid = state.config.signalk.vessel_uuid.clone();
+    tokio::spawn(crate::health::run_alarm_publisher(health, publisher_uuid));
 
     let poller_db = db.clone();
     let poller_status_arc = poller_status.clone();

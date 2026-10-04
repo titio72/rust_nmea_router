@@ -53,6 +53,8 @@ pub struct Config {
     pub signalk: SignalKConfig,
     #[serde(default)]
     pub sync: SyncConfig,
+    #[serde(default)]
+    pub health: HealthConfig,
     /// Path to polar diagram CSV, in either the dense `angle,1..20` grid layout or the
     /// ORC-style `TWA,6,8,..` layout with `Beat_Angle`/`Run_Angle` rows; the format is
     /// detected from the header. Optional — when absent the route planner uses a fixed speed.
@@ -378,6 +380,57 @@ impl Default for TimeConfig {
     }
 }
 
+/// Health monitor thresholds. All durations are in seconds (like the other interval
+/// settings); `/api/health` reports ages in milliseconds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HealthConfig {
+    /// Master switch. When false, no alarms are ever reported.
+    pub enabled: bool,
+    /// No alarms for this long after process start (cold boot: bus and sensors need time).
+    pub startup_grace_secs: u64,
+    /// `can_silent` fires when no CAN frame has arrived for this long.
+    pub can_silence_secs: u64,
+    /// Required streams (position, COG/SOG, system time) alarm after this much silence.
+    pub required_stream_timeout_secs: u64,
+    /// Optional streams (heading, wind, engine) alarm after this much silence, but only if
+    /// they have been seen at least once since start.
+    pub optional_stream_timeout_secs: u64,
+    /// `db_failing` fires when writes of one kind have been failing continuously (no success
+    /// since the first failure) for this long. Time-based because write attempts are very
+    /// uneven: environmental writes retry at CAN-message rate, moored vessel writes every 30 min.
+    pub db_failure_secs: u64,
+    /// `loop_lagging` fires when one unit of work takes longer than this.
+    pub loop_lag_secs: u64,
+    /// `loop_lagging` stays active this long after the last slow unit of work.
+    pub loop_lag_window_secs: u64,
+    /// `loop_overloaded` fires when the loop spent more than this fraction (0-1] of a 10 s
+    /// window processing messages: it is saturating and the kernel CAN buffer may overflow.
+    pub loop_busy_ratio: f64,
+    /// `loop_stalled` fires when the router loop has not completed an iteration for this long.
+    pub loop_stall_secs: u64,
+    /// `time_not_synced` fires when time is uninitialized or skewed for this long.
+    pub time_unsynced_secs: u64,
+}
+
+impl Default for HealthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            startup_grace_secs: 30,
+            can_silence_secs: 10,
+            required_stream_timeout_secs: 30,
+            optional_stream_timeout_secs: 60,
+            db_failure_secs: 60,
+            loop_lag_secs: 2,
+            loop_lag_window_secs: 60,
+            loop_busy_ratio: 0.8,
+            loop_stall_secs: 10,
+            time_unsynced_secs: 60,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseConfig {
     pub connection: DatabaseConnectionConfig,
@@ -553,6 +606,7 @@ impl Config {
 
         // Validate environmental intervals (30 seconds - 10 minutes = 30-600 seconds)
         self.validate_environmental_intervals();
+        self.validate_health();
 
         Ok(())
     }
@@ -577,6 +631,29 @@ impl Config {
                 self.database.vessel_status.interval_underway_seconds, defaults.interval_underway_seconds);
             self.database.vessel_status.interval_underway_seconds =
                 defaults.interval_underway_seconds;
+        }
+    }
+
+    fn validate_health(&mut self) {
+        let defaults = HealthConfig::default();
+        let h = &mut self.health;
+        let mut fix = |name: &str, value: &mut u64, default: u64| {
+            if *value == 0 {
+                warn!("Configuration warning: health.{} must be > 0. Reverting to default {}.", name, default);
+                *value = default;
+            }
+        };
+        fix("can_silence_secs", &mut h.can_silence_secs, defaults.can_silence_secs);
+        fix("required_stream_timeout_secs", &mut h.required_stream_timeout_secs, defaults.required_stream_timeout_secs);
+        fix("optional_stream_timeout_secs", &mut h.optional_stream_timeout_secs, defaults.optional_stream_timeout_secs);
+        fix("loop_lag_secs", &mut h.loop_lag_secs, defaults.loop_lag_secs);
+        fix("loop_lag_window_secs", &mut h.loop_lag_window_secs, defaults.loop_lag_window_secs);
+        fix("loop_stall_secs", &mut h.loop_stall_secs, defaults.loop_stall_secs);
+        fix("time_unsynced_secs", &mut h.time_unsynced_secs, defaults.time_unsynced_secs);
+        fix("db_failure_secs", &mut h.db_failure_secs, defaults.db_failure_secs);
+        if !(h.loop_busy_ratio > 0.0 && h.loop_busy_ratio <= 1.0) {
+            warn!("Configuration warning: health.loop_busy_ratio ({}) must be in (0, 1]. Reverting to default {}.", h.loop_busy_ratio, defaults.loop_busy_ratio);
+            h.loop_busy_ratio = defaults.loop_busy_ratio;
         }
     }
 
@@ -751,6 +828,7 @@ impl Config {
             udp: UdpConfig::default(),
             signalk: SignalKConfig::default(),
             sync: SyncConfig::default(),
+            health: HealthConfig::default(),
             polars_file_path: None,
             land_mask_path: None,
             land_mask_resolution_deg: default_land_mask_resolution_deg(),
@@ -811,6 +889,60 @@ impl EnvironmentalConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_health_config_defaults() {
+        let h = HealthConfig::default();
+        assert!(h.enabled);
+        assert_eq!(h.startup_grace_secs, 30);
+        assert_eq!(h.can_silence_secs, 10);
+        assert_eq!(h.required_stream_timeout_secs, 30);
+        assert_eq!(h.optional_stream_timeout_secs, 60);
+        assert_eq!(h.db_failure_secs, 60);
+        assert!((h.loop_busy_ratio - 0.8).abs() < 1e-9);
+        assert_eq!(h.loop_lag_secs, 2);
+        assert_eq!(h.loop_lag_window_secs, 60);
+        assert_eq!(h.loop_stall_secs, 10);
+        assert_eq!(h.time_unsynced_secs, 60);
+    }
+
+    #[test]
+    fn test_health_config_absent_section_uses_defaults() {
+        let json = r#"{
+            "can": {"interface": "vcan0", "enabled": false},
+            "time": {"skew_threshold_ms": 500},
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.health.can_silence_secs, 10);
+    }
+
+    #[test]
+    fn test_health_config_partial_section_keeps_other_defaults() {
+        let h: HealthConfig = serde_json::from_str(r#"{"can_silence_secs": 20}"#).unwrap();
+        assert_eq!(h.can_silence_secs, 20);
+        assert_eq!(h.loop_stall_secs, 10);
+    }
+
+    #[test]
+    fn test_health_config_zero_values_revert_to_defaults() {
+        let mut config = Config::new_default_instance();
+        config.health.can_silence_secs = 0;
+        config.health.db_failure_secs = 0;
+        config.health.loop_busy_ratio = 1.5;
+        config.health.loop_lag_secs = 0;
+        config.health.startup_grace_secs = 0; // zero grace is legitimate
+        config.validate_and_fix().unwrap();
+        assert_eq!(config.health.can_silence_secs, 10);
+        assert_eq!(config.health.db_failure_secs, 60);
+        assert!((config.health.loop_busy_ratio - 0.8).abs() < 1e-9);
+        assert_eq!(config.health.loop_lag_secs, 2);
+        assert_eq!(config.health.startup_grace_secs, 0);
+    }
 
     #[test]
     fn test_time_config_default() {

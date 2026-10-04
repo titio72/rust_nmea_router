@@ -77,6 +77,7 @@ const PUBLIC_PATHS: &[&str] = &[
     "/api/auth/login",
     "/api/auth/logout",
     "/api/auth/status",
+    "/api/health",
     "/api/sync/manifest",
     "/api/sync/trip",
 ];
@@ -190,4 +191,20 @@ pub async fn auth_status_handler(State(state): State<AppState>) -> impl axum::re
         .map(|p| !p.is_empty())
         .unwrap_or(false);
     Json(serde_json::json!({ "auth_required": auth_required }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn health_endpoint_is_public() {
+        assert!(is_public_path("/api/health"));
+    }
+
+    #[test]
+    fn other_api_paths_stay_protected() {
+        assert!(!is_public_path("/api/trips"));
+        assert!(!is_public_path("/api/health/anything"));
+    }
 }

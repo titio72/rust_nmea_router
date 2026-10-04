@@ -142,6 +142,43 @@ async function applyUiMode() {
 
 document.addEventListener('DOMContentLoaded', applyUiMode);
 
+// ---------------------------- Health indicator ----------------------------
+
+const HEALTH_POLL_MS = 10000;
+
+async function updateHealthIndicator() {
+    const dot = document.getElementById('healthStatus');
+    if (!dot) return;
+    let cls = 'health-down';
+    let tip = 'System health: unreachable';
+    try {
+        // /api/health answers 503 when something is wrong, so do not check resp.ok.
+        const resp = await fetch('/api/health', { credentials: 'same-origin' });
+        const health = await resp.json();
+        if (health.enabled === false) {
+            cls = '';
+            tip = 'System health: monitoring disabled';
+        } else {
+            cls = 'health-' + health.status;
+            tip = health.alarms.length === 0
+                ? 'System health: OK'
+                : health.alarms.map(a => a.message).join('\n');
+        }
+    } catch (_) { /* keep the "unreachable" defaults */ }
+    // Swap classes only after the fetch so the dot never flashes grey while polling.
+    dot.classList.remove('health-ok', 'health-degraded', 'health-down');
+    if (cls) dot.classList.add(cls);
+    dot.parentElement.title = tip;
+}
+
+function startHealthIndicator() {
+    if (!document.getElementById('healthStatus')) return;
+    updateHealthIndicator();
+    setInterval(updateHealthIndicator, HEALTH_POLL_MS);
+}
+
+document.addEventListener('DOMContentLoaded', startHealthIndicator);
+
 /**
  * Create the common navigation header for all pages
  * @param {string} currentPage - The current page identifier ('trips', 'monitor', 'stats', 'signalk-browser')
@@ -186,6 +223,11 @@ function createHeaderBar(currentPage, showConnectionStatus = false) {
     headerHTML +=
             `<button class="theme-toggle" id="themeBtn" onclick="baseToggleTheme()">
                 <span id="theme-icon">${ICON_MAP['sun']}</span><span id="theme-text">Dark</span>
+            </button>`;
+
+    headerHTML +=
+            `<button class="theme-toggle" title="System health" tabindex="-1">
+                <span class="status-dot" id="healthStatus"></span>
             </button>`;
 
     if (showConnectionStatus) {
