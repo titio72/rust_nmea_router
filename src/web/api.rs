@@ -2222,7 +2222,6 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/nav_analysis", get(get_nav_analysis))
         .route("/ais_targets", get(get_ais_targets))
         .route("/config/read_only", get(get_read_only))
-        .route("/health", get(get_health))
         .route("/config/capabilities", get(get_capabilities))
         .route("/sync/status", get(get_sync_status))
         .route("/sync/manifest", post(post_sync_manifest))
@@ -2296,6 +2295,9 @@ pub fn create_api_router(state: AppState) -> Router {
                     },
                 ),
         )
+        // Registered after the trace layer on purpose: the dashboard polls this every 10 s and
+        // it answers 503 while an alarm is active, which the layer would log as an ERROR.
+        .route("/health", get(get_health))
         .with_state(state)
 }
 #[cfg(test)]
