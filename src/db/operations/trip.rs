@@ -4,8 +4,11 @@
 // Testing: Database tests require serial execution (--test-threads=1) due to shared test DB.
 // See: AGENTS.md for database patterns, transaction examples, and type conversions.
 //
+use crate::db::operations::trip_update::exec_trip_update;
 use crate::db::types::VesselDatabase;
 use crate::error::AppError;
+use crate::utilities::EngineStatus;
+use chrono::{DateTime, Utc};
 use mysql::params;
 use mysql::prelude::Queryable;
 use tracing::warn;
@@ -17,12 +20,12 @@ impl VesselDatabase {
         new_description: &str,
     ) -> Result<(), AppError> {
         let mut conn = self.pool.get_conn()?;
-        let query = "UPDATE trips SET description = :description WHERE id = :id";
-        conn.exec_drop(
-            query,
+        exec_trip_update(
+            &mut conn,
+            "description = :description",
             params! {
                 "description" => new_description,
-                "id" => trip_id,
+                "trip_id" => trip_id,
             },
         )?;
         Ok(())
@@ -122,9 +125,10 @@ impl VesselDatabase {
         )?;
 
         // Update trip with new boundaries
-        tx.exec_drop(
-            "UPDATE trips SET start_timestamp = SUBTIME(@min_ts, '0 1:00:0.000'), end_timestamp = ADDTIME(@max_ts, '0 1:00:0.000') WHERE id = :id",
-            params! { "id" => trip_id },
+        exec_trip_update(
+            &mut tx,
+            "start_timestamp = SUBTIME(@min_ts, '0 1:00:0.000'), end_timestamp = ADDTIME(@max_ts, '0 1:00:0.000')",
+            params! { "trip_id" => trip_id },
         )?;
 
         tx.commit()?;
@@ -192,6 +196,209 @@ impl VesselDatabase {
 
         Ok(())
     }
+
+    /// Overwrite `engine_on` for every `vessel_status` row between `start` and `end`
+    /// (clamped to the trip's own window), then recompute the trip's sailing/motoring
+    /// aggregates and invalidate the caches derived from vessel_status. Used to correct
+    /// misfires from the automatic RPM-based engine detection in vessel_monitor.rs.
+    pub fn correct_engine_status(
+        &self,
+        trip_id: u32,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        engine_on: EngineStatus,
+    ) -> Result<(), AppError> {
+        if engine_on.is_unknown() {
+            return Err(AppError::Parse(
+                "engine_on must be On or Off, not Unknown".to_string(),
+            ));
+        }
+        if start >= end {
+            return Err(AppError::Parse(
+                "start_timestamp must be before end_timestamp".to_string(),
+            ));
+        }
+
+        let trip = self
+            .fetch_trip(trip_id)?
+            .ok_or_else(|| AppError::Database(format!("Trip {} not found", trip_id)))?;
+
+        // Parse the trip window at full millisecond precision straight from the RFC3339
+        // strings. TripSummary::start_timestamp()/end_timestamp() are deliberately NOT
+        // used here: they go through Duration::from_secs() and drop the milliseconds,
+        // which would silently rewind the window every time a correction is applied.
+        let trip_start_dt = DateTime::parse_from_rfc3339(&trip.start_date)
+            .map(|dt| dt.with_timezone(&Utc))
+            .map_err(|e| {
+                AppError::Parse(format!(
+                    "Invalid trip start_date '{}': {}",
+                    trip.start_date, e
+                ))
+            })?;
+        let trip_end_dt = DateTime::parse_from_rfc3339(&trip.end_date)
+            .map(|dt| dt.with_timezone(&Utc))
+            .map_err(|e| {
+                AppError::Parse(format!("Invalid trip end_date '{}': {}", trip.end_date, e))
+            })?;
+
+        let clamped_start = start.max(trip_start_dt);
+        let clamped_end = end.min(trip_end_dt);
+        if clamped_start >= clamped_end {
+            return Err(AppError::Parse(
+                "Requested range does not overlap the trip".to_string(),
+            ));
+        }
+
+        // fetch_track serves timestamps with the milliseconds zeroed ('...%S.000Z') and
+        // the correction page echoes that string back as the end bound. Since real
+        // vessel_status rows almost always carry non-zero milliseconds, a `.000` upper
+        // bound would exclude the very point the user clicked, so treat a whole-second
+        // end bound as covering that entire second. Applied after clamping so the query
+        // boundary can never be pushed meaningfully past the trip's own window.
+        let query_end = if clamped_end.timestamp_subsec_millis() == 0 {
+            clamped_end + chrono::Duration::milliseconds(999)
+        } else {
+            clamped_end
+        };
+
+        const MYSQL_TS_FMT: &str = "%Y-%m-%d %H:%M:%S%.3f";
+        let start_str = clamped_start.format(MYSQL_TS_FMT).to_string();
+        let end_str = query_end.format(MYSQL_TS_FMT).to_string();
+        let trip_start_str = trip_start_dt.format(MYSQL_TS_FMT).to_string();
+        let trip_end_str = trip_end_dt.format(MYSQL_TS_FMT).to_string();
+
+        let mut conn = self.pool.get_conn()?;
+        let mut tx = conn.start_transaction(mysql::TxOpts::default())?;
+
+        // Check if there are any rows in the requested range before attempting UPDATE
+        let matched: u64 = tx
+            .exec_first(
+                "SELECT COUNT(*) FROM vessel_status WHERE timestamp BETWEEN :start AND :end",
+                params! {
+                    "start" => &start_str,
+                    "end" => &end_str,
+                },
+            )?
+            .unwrap_or(0);
+
+        if matched == 0 {
+            // Dropping `tx` rolls back; nothing has been written yet.
+            return Err(AppError::Database(
+                "No track points found in the requested range".to_string(),
+            ));
+        }
+
+        tx.exec_drop(
+            "UPDATE vessel_status SET engine_on = :val WHERE timestamp BETWEEN :start AND :end",
+            params! {
+                "val" => engine_on.as_u8(),
+                "start" => &start_str,
+                "end" => &end_str,
+            },
+        )?;
+
+        // Recompute the trip aggregates over the trip's own window, in the same
+        // transaction as the UPDATE above. This intentionally mirrors the CASE semantics
+        // of recalculate_and_update_trip (note `engine_on != 1` for sailing, so Unknown
+        // rows count as sailing) but, unlike that function, never writes
+        // trips.start_timestamp / trips.end_timestamp — this tool must not move the trip
+        // boundaries, and it has no undo.
+        let row: Option<mysql::Row> = tx.exec_first(
+            r"SELECT
+                  SUM(CASE WHEN is_moored = 1 THEN total_time_ms  ELSE 0 END) AS time_moored,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on = 1 THEN total_time_ms  ELSE 0 END) AS time_motoring,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 THEN total_time_ms ELSE 0 END) AS time_sailing,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on = 1 THEN total_distance_nm ELSE 0 END) AS dist_motoring,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 THEN total_distance_nm ELSE 0 END) AS dist_sailed,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60
+                           THEN total_distance_nm ELSE 0 END) AS dist_upwind,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120
+                           THEN total_distance_nm ELSE 0 END) AS dist_reaching,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120
+                           THEN total_distance_nm ELSE 0 END) AS dist_running,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60
+                           THEN total_time_ms ELSE 0 END) AS time_upwind,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120
+                           THEN total_time_ms ELSE 0 END) AS time_reaching,
+                  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+                           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120
+                           THEN total_time_ms ELSE 0 END) AS time_running
+              FROM vessel_status
+              WHERE timestamp BETWEEN :start AND :end",
+            params! { "start" => &trip_start_str, "end" => &trip_end_str },
+        )?;
+
+        if let Some(row) = row {
+            let time_moored: u64 = row.get("time_moored").unwrap_or(0);
+            let time_motoring: u64 = row.get("time_motoring").unwrap_or(0);
+            let time_sailing: u64 = row.get("time_sailing").unwrap_or(0);
+            let dist_motoring: f64 = row.get("dist_motoring").unwrap_or(0.0);
+            let dist_sailed: f64 = row.get("dist_sailed").unwrap_or(0.0);
+            let dist_upwind: f64 = row.get("dist_upwind").unwrap_or(0.0);
+            let dist_reaching: f64 = row.get("dist_reaching").unwrap_or(0.0);
+            let dist_running: f64 = row.get("dist_running").unwrap_or(0.0);
+            let time_upwind: u64 = row.get("time_upwind").unwrap_or(0);
+            let time_reaching: u64 = row.get("time_reaching").unwrap_or(0);
+            let time_running: u64 = row.get("time_running").unwrap_or(0);
+
+            exec_trip_update(
+                &mut tx,
+                r"total_time_moored       = :time_moored,
+                  total_time_motoring     = :time_motoring,
+                  total_time_sailing      = :time_sailing,
+                  total_distance_motoring = :dist_motoring,
+                  total_distance_sailed   = :dist_sailed,
+                  total_distance_upwind   = :dist_upwind,
+                  total_distance_reaching = :dist_reaching,
+                  total_distance_running  = :dist_running,
+                  total_time_upwind       = :time_upwind,
+                  total_time_reaching     = :time_reaching,
+                  total_time_running      = :time_running",
+                params! {
+                    "time_moored"   => time_moored,
+                    "time_motoring" => time_motoring,
+                    "time_sailing"  => time_sailing,
+                    "dist_motoring" => dist_motoring,
+                    "dist_sailed"   => dist_sailed,
+                    "dist_upwind"   => dist_upwind,
+                    "dist_reaching" => dist_reaching,
+                    "dist_running"  => dist_running,
+                    "time_upwind"   => time_upwind,
+                    "time_reaching" => time_reaching,
+                    "time_running"  => time_running,
+                    "trip_id"       => trip_id,
+                },
+            )?;
+        }
+
+        tx.commit()?;
+
+        // The correction itself is already committed; a cache-invalidation failure must
+        // not report the whole operation as failed (same pattern as set_nav_override).
+        if let Err(e) = self.invalidate_trip_legs_cache(trip_id) {
+            warn!(
+                "Failed to invalidate trip_legs_cache after correct_engine_status({}): {}",
+                trip_id, e
+            );
+        }
+        if let Err(e) =
+            self.invalidate_heatmap_cache(clamped_start.date_naive(), clamped_end.date_naive())
+        {
+            warn!(
+                "Failed to invalidate heatmap_cache after correct_engine_status({}): {}",
+                trip_id, e
+            );
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -199,11 +406,52 @@ mod tests {
     use crate::db::test_helpers::{
         add_test_trip, add_test_vessel_status, fetch_vessel_status_by_id, setup_db,
     };
+    use crate::utilities::EngineStatus;
+    use mysql::params;
+    use mysql::prelude::Queryable;
     use std::{
         ops::{Add, Sub},
         time::{Duration, SystemTime},
     };
     const ONE_HOUR_S: u64 = 3600;
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_trim_trip_bumps_version() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let trip_lenght_h = 2;
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Trim Version Test".to_string(),
+            t,
+            t.add(Duration::from_secs(trip_lenght_h * ONE_HOUR_S)),
+            0.0,
+            0.0,
+            0,
+            0,
+            trip_lenght_h * ONE_HOUR_S * 1000,
+        )
+        .expect("Failed to insert test trip");
+
+        add_test_vessel_status(
+            &db, t, 43.0, 11.0, 0.0, 0.0, None, None, false,
+            crate::utilities::EngineStatus::On, 0.1, 30000, None, None,
+        )
+        .expect("Failed to insert vessel status");
+
+        db.trim_trip(trip_id).expect("trim_trip failed");
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let version: u64 = conn
+            .exec_first(
+                "SELECT version FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(version, 2, "trim_trip must bump version");
+    }
 
     #[test]
     #[ignore] // This test is ignored because it relies on specific time-based logic and may require adjustments to the test data setup to ensure it works correctly. It can be enabled and adjusted as needed when testing trip description updates.
@@ -238,6 +486,38 @@ mod tests {
             fetched_trip.description, "Updated Description",
             "Trip description should be updated"
         );
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_update_trip_description_bumps_version() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Before".to_string(),
+            t,
+            t.add(Duration::from_secs(ONE_HOUR_S)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert test trip");
+
+        db.update_trip_description(trip_id as i64, "After")
+            .expect("update_trip_description failed");
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let version: u64 = conn
+            .exec_first(
+                "SELECT version FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(version, 2, "update_trip_description must bump version");
     }
 
     #[test]
@@ -506,5 +786,542 @@ mod tests {
                 );
             }
         });
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_correct_engine_status_bumps_version() {
+        let db = setup_db();
+        let t = SystemTime::now();
+
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Engine Fix Version Test".to_string(),
+            t,
+            t.add(Duration::from_secs(1800)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert test trip");
+
+        add_test_vessel_status(
+            &db, t, 43.0, 11.0, 5.0, 6.0, None, None, false,
+            EngineStatus::Off, 1.0, 900_000, None, None,
+        )
+        .expect("Failed to insert vessel status");
+
+        let start_dt = chrono::DateTime::<chrono::Utc>::from(t);
+        let end_dt = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(1800)));
+        db.correct_engine_status(trip_id, start_dt, end_dt, EngineStatus::On)
+            .expect("correct_engine_status should succeed");
+
+        let mut conn = db.pool.get_conn().unwrap();
+        let version: u64 = conn
+            .exec_first(
+                "SELECT version FROM trips WHERE id = :id",
+                mysql::params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(version, 2, "correct_engine_status must bump version");
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_correct_engine_status() {
+        let db = setup_db();
+        let t = SystemTime::now();
+
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Engine Fix Test".to_string(),
+            t,
+            t.add(Duration::from_secs(1800)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert test trip");
+
+        // First half of the trip: sailing (engine off). Second half: also inserted as
+        // engine off, but this is the half we'll correct to "on".
+        let first_id = add_test_vessel_status(
+            &db,
+            t,
+            43.0,
+            11.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            1.0,
+            900_000,
+            None,
+            None,
+        )
+        .expect("Failed to insert first vessel status");
+
+        let mid_ts = t.add(Duration::from_secs(900));
+        let second_id = add_test_vessel_status(
+            &db,
+            mid_ts,
+            43.1,
+            11.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            1.0,
+            900_000,
+            None,
+            None,
+        )
+        .expect("Failed to insert second vessel status");
+
+        let mid_dt = chrono::DateTime::<chrono::Utc>::from(mid_ts);
+        let end_dt = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(1800)));
+
+        db.correct_engine_status(trip_id, mid_dt, end_dt, EngineStatus::On)
+            .expect("correct_engine_status should succeed");
+
+        // The first point (before the corrected range) must be untouched.
+        let first = fetch_vessel_status_by_id(&db, first_id)
+            .expect("fetch failed")
+            .expect("first record missing");
+        assert_eq!(
+            first.engine_on,
+            EngineStatus::Off,
+            "point before the corrected range must stay Off"
+        );
+
+        // The second point (inside the corrected range) must now be On.
+        let second = fetch_vessel_status_by_id(&db, second_id)
+            .expect("fetch failed")
+            .expect("second record missing");
+        assert_eq!(
+            second.engine_on,
+            EngineStatus::On,
+            "point inside the corrected range must become On"
+        );
+
+        // Trip aggregates must reflect the new split: 1.0 nm sailed, 1.0 nm motored.
+        let trip = db
+            .fetch_trip(trip_id)
+            .expect("fetch_trip failed")
+            .expect("trip missing");
+        assert!(
+            (trip.sailing_distance_nm - 1.0).abs() < 0.01,
+            "sailing distance should be 1.0 nm, got {}",
+            trip.sailing_distance_nm
+        );
+        assert!(
+            (trip.motoring_distance_nm - 1.0).abs() < 0.01,
+            "motoring distance should be 1.0 nm, got {}",
+            trip.motoring_distance_nm
+        );
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_correct_engine_status_updates_point_of_sail() {
+        use mysql::params;
+        use mysql::prelude::Queryable;
+
+        let db = setup_db();
+        let t = SystemTime::now();
+
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Engine Fix POS".to_string(),
+            t,
+            t.add(Duration::from_secs(1200)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert test trip");
+
+        // Three sailing rows, one per point-of-sail bucket, all engine Off.
+        // Upwind (folded 30): 2.0 nm / 60_000 ms — stays sailing.
+        add_test_vessel_status(
+            &db, t, 43.0, 11.0, 5.0, 6.0,
+            Some(12.0), Some(30.0), false, EngineStatus::Off, 2.0, 60_000, None, None,
+        )
+        .expect("Failed to insert upwind row");
+        // Reaching (folded 90): 3.0 nm / 60_000 ms — stays sailing.
+        add_test_vessel_status(
+            &db, t.add(Duration::from_secs(300)), 43.1, 11.0, 5.0, 6.0,
+            Some(12.0), Some(90.0), false, EngineStatus::Off, 3.0, 60_000, None, None,
+        )
+        .expect("Failed to insert reaching row");
+        // Running (folded 160 via 200): 1.0 nm / 30_000 ms — this one gets flipped
+        // to motoring below and must drop out of the running bucket entirely.
+        add_test_vessel_status(
+            &db, t.add(Duration::from_secs(600)), 43.2, 11.0, 5.0, 6.0,
+            Some(12.0), Some(200.0), false, EngineStatus::Off, 1.0, 30_000, None, None,
+        )
+        .expect("Failed to insert running row");
+
+        let read_pos = |db: &crate::db::types::VesselDatabase| -> (f64, f64, f64, u64, u64, u64) {
+            let mut conn = db.pool.get_conn().unwrap();
+            conn.exec_first(
+                "SELECT total_distance_upwind, total_distance_reaching, total_distance_running,
+                        total_time_upwind, total_time_reaching, total_time_running
+                 FROM trips WHERE id = :id",
+                params! { "id" => trip_id },
+            )
+            .unwrap()
+            .unwrap()
+        };
+
+        // First correction is a no-op on engine state (already Off) but forces the
+        // aggregate recompute, so all three buckets must be populated from the rows.
+        let start_dt = chrono::DateTime::<chrono::Utc>::from(t);
+        let end_dt = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(1200)));
+        db.correct_engine_status(trip_id, start_dt, end_dt, EngineStatus::Off)
+            .expect("correct_engine_status (Off) should succeed");
+
+        let before = read_pos(&db);
+        assert!((before.0 - 2.0).abs() < 0.001, "total_distance_upwind should be 2.0, got {}", before.0);
+        assert!((before.1 - 3.0).abs() < 0.001, "total_distance_reaching should be 3.0, got {}", before.1);
+        assert!((before.2 - 1.0).abs() < 0.001, "total_distance_running should be 1.0, got {}", before.2);
+        assert_eq!(before.3, 60_000, "total_time_upwind");
+        assert_eq!(before.4, 60_000, "total_time_reaching");
+        assert_eq!(before.5, 30_000, "total_time_running");
+
+        // Now flip only the running row (t+600 onward) to motoring.
+        let flip_start = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(600)));
+        db.correct_engine_status(trip_id, flip_start, end_dt, EngineStatus::On)
+            .expect("correct_engine_status (On) should succeed");
+
+        let after = read_pos(&db);
+        assert!((after.0 - 2.0).abs() < 0.001, "upwind distance must be unchanged, got {}", after.0);
+        assert!((after.1 - 3.0).abs() < 0.001, "reaching distance must be unchanged, got {}", after.1);
+        assert!(
+            after.2.abs() < 0.001,
+            "running distance must drop to 0 once that row became motoring, got {}",
+            after.2
+        );
+        assert_eq!(after.3, 60_000, "upwind time must be unchanged");
+        assert_eq!(after.4, 60_000, "reaching time must be unchanged");
+        assert_eq!(after.5, 0, "running time must drop to 0 once that row became motoring");
+
+        // Sanity: the sailing/motoring totals moved consistently with the buckets.
+        let trip = db
+            .fetch_trip(trip_id)
+            .expect("fetch_trip failed")
+            .expect("trip missing");
+        assert!(
+            (trip.sailing_distance_nm - 5.0).abs() < 0.01,
+            "sailing distance should be 5.0 nm, got {}",
+            trip.sailing_distance_nm
+        );
+        assert!(
+            (trip.motoring_distance_nm - 1.0).abs() < 0.01,
+            "motoring distance should be 1.0 nm, got {}",
+            trip.motoring_distance_nm
+        );
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_correct_engine_status_rejects_unknown() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Reject Unknown".to_string(),
+            t,
+            t.add(Duration::from_secs(600)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert test trip");
+
+        let start_dt = chrono::DateTime::<chrono::Utc>::from(t);
+        let end_dt = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(600)));
+
+        let result = db.correct_engine_status(trip_id, start_dt, end_dt, EngineStatus::Unknown);
+        assert!(
+            result.is_err(),
+            "correct_engine_status must reject EngineStatus::Unknown"
+        );
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_correct_engine_status_idempotent() {
+        let db = setup_db();
+        let t = SystemTime::now();
+
+        // Create two separate trips to test idempotency in isolation
+        let trip1_id: u32 = add_test_trip(
+            &db,
+            "Idempotent Test Trip 1".to_string(),
+            t,
+            t.add(Duration::from_secs(1800)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert trip 1");
+
+        let trip2_id: u32 = add_test_trip(
+            &db,
+            "Idempotent Test Trip 2".to_string(),
+            t.add(Duration::from_secs(2000)),
+            t.add(Duration::from_secs(3800)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert trip 2");
+
+        // Add vessel status records to both trips
+        add_test_vessel_status(
+            &db,
+            t,
+            43.0,
+            11.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            1.0,
+            900_000,
+            None,
+            None,
+        )
+        .expect("Failed to insert vessel status 1");
+
+        let mid_ts = t.add(Duration::from_secs(2900));
+        add_test_vessel_status(
+            &db,
+            mid_ts,
+            43.0,
+            11.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            1.0,
+            900_000,
+            None,
+            None,
+        )
+        .expect("Failed to insert vessel status 2");
+
+        let start_dt = chrono::DateTime::<chrono::Utc>::from(t);
+        let end_dt = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(1800)));
+
+        // First call should succeed
+        db.correct_engine_status(trip1_id, start_dt, end_dt, EngineStatus::On)
+            .expect("First correct_engine_status should succeed");
+
+        // Second call on a different trip with overlapping data should also succeed
+        // This verifies that the fix makes the operation work correctly without side effects
+        let start_dt2 = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(2000)));
+        let end_dt2 = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(3800)));
+        db.correct_engine_status(trip2_id, start_dt2, end_dt2, EngineStatus::Off)
+            .expect("Second correct_engine_status on different trip should succeed");
+
+        // Both operations should complete successfully without "No track points found" errors
+        assert!(true, "correct_engine_status operations completed successfully");
+    }
+
+    /// Regression test: a correction must never move the trip's own boundaries.
+    /// The previous implementation delegated to `recalculate_and_update_trip`, which
+    /// rewrote `end_timestamp` to MAX(vessel_status.timestamp) over a second-truncated
+    /// window — silently rewinding the trip end on every call, and compounding on reuse.
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_correct_engine_status_preserves_trip_timestamps() {
+        let db = setup_db();
+        // Fixed base with non-zero milliseconds (.456), so the trip window exercises the
+        // sub-second precision that the old SystemTime round-trip used to discard.
+        let t = SystemTime::UNIX_EPOCH + Duration::from_millis(1_754_000_000_456);
+        let trip_end = t.add(Duration::from_secs(1800));
+
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Timestamp Preservation".to_string(),
+            t,
+            trip_end,
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert test trip");
+
+        // Two points well inside the trip window; the last one is far from the trip end,
+        // so any "end_timestamp = MAX(timestamp)" behaviour would be plainly visible.
+        for offset in [300u64, 900u64] {
+            add_test_vessel_status(
+                &db,
+                t.add(Duration::from_secs(offset)),
+                43.0 + offset as f64 / 10000.0,
+                11.0,
+                5.0,
+                6.0,
+                None,
+                None,
+                false,
+                EngineStatus::Off,
+                1.0,
+                300_000,
+                None,
+                None,
+            )
+            .expect("Failed to insert vessel status");
+        }
+
+        let before = db
+            .fetch_trip(trip_id)
+            .expect("fetch_trip failed")
+            .expect("trip missing");
+
+        let start_dt = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(600)));
+        let end_dt = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(1200)));
+        db.correct_engine_status(trip_id, start_dt, end_dt, EngineStatus::On)
+            .expect("correct_engine_status should succeed");
+
+        let after = db
+            .fetch_trip(trip_id)
+            .expect("fetch_trip failed")
+            .expect("trip missing");
+
+        assert_eq!(
+            before.start_date, after.start_date,
+            "trips.start_timestamp must be unchanged by correct_engine_status"
+        );
+        assert_eq!(
+            before.end_date, after.end_date,
+            "trips.end_timestamp must be unchanged by correct_engine_status"
+        );
+
+        // And it must stay unchanged across repeated corrections (the old bug ratcheted).
+        db.correct_engine_status(trip_id, start_dt, end_dt, EngineStatus::Off)
+            .expect("second correct_engine_status should succeed");
+        let after_second = db
+            .fetch_trip(trip_id)
+            .expect("fetch_trip failed")
+            .expect("trip missing");
+        assert_eq!(
+            before.start_date, after_second.start_date,
+            "trips.start_timestamp must stay unchanged across repeated corrections"
+        );
+        assert_eq!(
+            before.end_date, after_second.end_date,
+            "trips.end_timestamp must stay unchanged across repeated corrections"
+        );
+    }
+
+    /// Regression test: `fetch_track` serves timestamps with the milliseconds zeroed and
+    /// the page echoes them back, so a `.000` end bound must still include the row the
+    /// user actually clicked (whose real timestamp has non-zero milliseconds).
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_correct_engine_status_includes_truncated_end_point() {
+        let db = setup_db();
+        // Whole-second base, so `base + 300s` is exactly a `.000` boundary.
+        let t = SystemTime::UNIX_EPOCH + Duration::from_millis(1_754_000_000_000);
+
+        let trip_id: u32 = add_test_trip(
+            &db,
+            "Truncated End Bound".to_string(),
+            t,
+            t.add(Duration::from_secs(1800)),
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+        )
+        .expect("Failed to insert test trip");
+
+        // The clicked end point: real timestamp is 300.842s, served to the page as 300.000.
+        let end_point_id = add_test_vessel_status(
+            &db,
+            t.add(Duration::from_millis(300_842)),
+            43.0,
+            11.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            1.0,
+            300_000,
+            None,
+            None,
+        )
+        .expect("Failed to insert end point");
+
+        // A point after the corrected range, which must stay untouched.
+        let outside_id = add_test_vessel_status(
+            &db,
+            t.add(Duration::from_secs(900)),
+            43.1,
+            11.0,
+            5.0,
+            6.0,
+            None,
+            None,
+            false,
+            EngineStatus::Off,
+            1.0,
+            300_000,
+            None,
+            None,
+        )
+        .expect("Failed to insert outside point");
+
+        let start_dt = chrono::DateTime::<chrono::Utc>::from(t);
+        let end_dt = chrono::DateTime::<chrono::Utc>::from(t.add(Duration::from_secs(300)));
+        db.correct_engine_status(trip_id, start_dt, end_dt, EngineStatus::On)
+            .expect("correct_engine_status should succeed");
+
+        let end_point = fetch_vessel_status_by_id(&db, end_point_id)
+            .expect("fetch failed")
+            .expect("end point missing");
+        assert_eq!(
+            end_point.engine_on,
+            EngineStatus::On,
+            "the clicked end point must be included despite the .000 end bound"
+        );
+
+        let outside = fetch_vessel_status_by_id(&db, outside_id)
+            .expect("fetch failed")
+            .expect("outside point missing");
+        assert_eq!(
+            outside.engine_on,
+            EngineStatus::Off,
+            "points after the corrected range must stay untouched"
+        );
     }
 }

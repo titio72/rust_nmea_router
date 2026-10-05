@@ -5,20 +5,46 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use tracing::{info, warn};
 
-/// Payload sent from boat to viewer's `/api/sync/manifest` endpoint.
-/// Contains all UUID the boat has (for orphan deletion) and the sync timestamp.
+/// Payload sent from boat to viewer's `/api/sync/manifest` endpoint: every
+/// local trip's UUID and current version. Replaces the old UUID-list-plus-
+/// timestamp-cursor exchange — the receiving side diffs this directly
+/// against its own stored versions.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncManifestPayload {
-    pub all_uuids: Vec<String>,
-    pub synced_at: String,
+    pub trip_versions: std::collections::HashMap<String, u64>,
+    /// Preview mode: compute what would change without writing anything —
+    /// no orphan deletion, no trip push, no last_synced_at update.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// Minimal human-readable identity for a trip, used in dry-run reports.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TripInfo {
+    pub uuid: String,
+    pub description: String,
+    pub start: String,
+    pub end: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncManifestResult {
     pub deleted_count: usize,
-    /// UUIDs from the manifest payload that the viewer does not yet have.
-    /// The boat should send exactly these trips.
-    pub missing_uuids: Vec<String>,
+    /// UUIDs the boat should push: unknown to the remote, or known at a
+    /// lower version than the boat just reported. Populated in both real
+    /// and dry-run mode (real mode: what will be pushed; dry-run: what
+    /// would be pushed).
+    pub uuids_to_push: Vec<String>,
+    /// Dry-run only: `uuids_to_push` split by reason — unknown to the remote.
+    #[serde(default)]
+    pub to_add: Vec<String>,
+    /// Dry-run only: `uuids_to_push` split by reason — known at a lower version.
+    #[serde(default)]
+    pub to_update: Vec<String>,
+    /// Dry-run only: full identity of the trips that would be deleted
+    /// (real mode only reports the count, via `deleted_count`).
+    #[serde(default)]
+    pub to_delete: Vec<TripInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,6 +52,17 @@ pub struct SyncResult {
     pub deleted_count: usize,
     pub upserted_count: usize,
     pub synced_at: String,
+    #[serde(default)]
+    pub dry_run: bool,
+    /// Dry-run only: trips unknown to the remote.
+    #[serde(default)]
+    pub to_add: Vec<TripInfo>,
+    /// Dry-run only: trips known to the remote at a lower version.
+    #[serde(default)]
+    pub to_update: Vec<TripInfo>,
+    /// Dry-run only: trips the remote would delete as orphans.
+    #[serde(default)]
+    pub to_delete: Vec<TripInfo>,
 }
 
 #[derive(Debug, Serialize)]
@@ -34,16 +71,6 @@ pub struct SyncStatus {
 }
 
 impl VesselDatabase {
-    /// Returns all trip UUIDs. Used by the push side to populate `all_uuids`.
-    pub fn get_all_trip_uuids(&self) -> Result<Vec<String>, Box<dyn Error>> {
-        let mut conn = self.pool.get_conn()?;
-        let uuids: Vec<String> = conn.exec(
-            "SELECT uuid FROM trips WHERE uuid IS NOT NULL ORDER BY end_timestamp ASC",
-            (),
-        )?;
-        Ok(uuids)
-    }
-
     /// Returns export-format JSON values for the trips whose UUID is in the given list.
     pub fn get_trips_by_uuids(
         &self,
@@ -161,11 +188,155 @@ impl VesselDatabase {
         Ok(count)
     }
 
+    /// Dry-run counterpart to `delete_trips_not_in_uuids`: same orphan
+    /// selection, but read-only — returns the trips' identity instead of
+    /// deleting them.
+    pub fn find_orphan_trip_details(
+        &self,
+        keep_uuids: &[String],
+    ) -> Result<Vec<TripInfo>, Box<dyn Error>> {
+        let valid_uuids: Vec<&String> = keep_uuids.iter().filter(|u| is_valid_uuid(u)).collect();
+
+        let mut conn = self.pool.get_conn()?;
+
+        let orphan_rows: Vec<(String, Option<String>, String, String)> = if valid_uuids.is_empty()
+        {
+            conn.exec(
+                "SELECT COALESCE(uuid, ''), description, \
+                        DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f'), \
+                        DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S.%f') FROM trips",
+                (),
+            )?
+        } else {
+            let uuid_list = valid_uuids
+                .iter()
+                .map(|u| format!("'{}'", u))
+                .collect::<Vec<_>>()
+                .join(",");
+            conn.exec(
+                format!(
+                    "SELECT COALESCE(uuid, ''), description, \
+                            DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f'), \
+                            DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S.%f') \
+                     FROM trips WHERE uuid IS NULL OR uuid NOT IN ({})",
+                    uuid_list
+                ),
+                (),
+            )?
+        };
+
+        Ok(orphan_rows
+            .into_iter()
+            .map(|(uuid, description, start, end)| TripInfo {
+                uuid,
+                description: description.unwrap_or_default(),
+                start,
+                end,
+            })
+            .collect())
+    }
+
+    /// Lightweight trip identity lookup by UUID — just enough for a dry-run
+    /// report (unlike `get_trips_by_uuids`, does not fetch vessel_status or
+    /// environmental_data).
+    pub fn get_trip_summaries_by_uuids(
+        &self,
+        uuids: &[String],
+    ) -> Result<Vec<TripInfo>, Box<dyn Error>> {
+        if uuids.is_empty() {
+            return Ok(vec![]);
+        }
+        let valid_uuids: Vec<&String> = uuids.iter().filter(|u| is_valid_uuid(u)).collect();
+        if valid_uuids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let uuid_list = valid_uuids
+            .iter()
+            .map(|u| format!("'{}'", u))
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let mut conn = self.pool.get_conn()?;
+        let rows: Vec<(String, String, String, String)> = conn.exec(
+            format!(
+                "SELECT uuid, description, \
+                        DATE_FORMAT(start_timestamp, '%Y-%m-%d %H:%i:%S.%f'), \
+                        DATE_FORMAT(end_timestamp, '%Y-%m-%d %H:%i:%S.%f') \
+                 FROM trips WHERE uuid IN ({})",
+                uuid_list
+            ),
+            (),
+        )?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(uuid, description, start, end)| TripInfo {
+                uuid,
+                description,
+                start,
+                end,
+            })
+            .collect())
+    }
+
     /// Read last sync timestamp from system_status.
     pub fn get_sync_status(&self) -> Result<SyncStatus, Box<dyn Error>> {
         let last_synced_at = self.get_system_status_string("last_synced_at")?;
         Ok(SyncStatus { last_synced_at })
     }
+
+    /// Returns `{uuid: version}` for every trip with a non-null UUID. Sent as
+    /// the manifest payload; the receiving side diffs it directly against its
+    /// own stored versions — no cursor or timestamp involved.
+    pub fn get_trip_versions(&self) -> Result<std::collections::HashMap<String, u64>, Box<dyn Error>> {
+        let mut conn = self.pool.get_conn()?;
+        let rows: Vec<(String, u64)> = conn.exec(
+            "SELECT uuid, version FROM trips WHERE uuid IS NOT NULL",
+            (),
+        )?;
+        Ok(rows.into_iter().collect())
+    }
+}
+
+/// Diff two version maps and return the UUIDs from `payload_versions` that
+/// the receiving side (whose own state is `local_versions`) needs pushed:
+/// UUIDs it doesn't have at all, or has at a lower version than the payload.
+/// Pure and DB-free so it's fully unit-testable without a live database.
+pub(crate) fn compute_uuids_to_push(
+    local_versions: &std::collections::HashMap<String, u64>,
+    payload_versions: &std::collections::HashMap<String, u64>,
+) -> Vec<String> {
+    payload_versions
+        .iter()
+        .filter(|(uuid, &payload_version)| match local_versions.get(*uuid) {
+            None => true,
+            Some(&local_version) => local_version < payload_version,
+        })
+        .map(|(uuid, _)| uuid.clone())
+        .collect()
+}
+
+/// Dry-run counterpart to `compute_uuids_to_push`: same comparison, but
+/// splits the result by reason instead of returning one flat list — the
+/// two are always in sync since both compare `local_versions` against
+/// `payload_versions` the same way, just partitioned differently.
+pub(crate) fn classify_uuids_to_push(
+    local_versions: &std::collections::HashMap<String, u64>,
+    payload_versions: &std::collections::HashMap<String, u64>,
+) -> (Vec<String>, Vec<String>) {
+    let mut to_add = Vec::new();
+    let mut to_update = Vec::new();
+    for (uuid, &payload_version) in payload_versions {
+        match local_versions.get(uuid) {
+            None => to_add.push(uuid.clone()),
+            Some(&local_version) if local_version < payload_version => {
+                to_update.push(uuid.clone())
+            }
+            Some(_) => {}
+        }
+    }
+    (to_add, to_update)
 }
 
 fn is_valid_uuid(s: &str) -> bool {
@@ -184,6 +355,7 @@ mod tests {
     };
     use crate::utilities::EngineStatus;
     use mysql::prelude::Queryable;
+    use std::collections::HashMap;
     use std::ops::Add;
     use std::time::{Duration, SystemTime};
 
@@ -243,28 +415,6 @@ mod tests {
     // -------------------------------------------------------------------------
     // Database tests — require running MySQL and test_config.json
     // -------------------------------------------------------------------------
-
-    #[test]
-    #[ignore]
-    fn test_get_all_trip_uuids_empty() {
-        let db = setup_db();
-        let uuids = db.get_all_trip_uuids().expect("should succeed");
-        assert!(uuids.is_empty(), "fresh DB has no UUIDs");
-    }
-
-    #[test]
-    #[ignore]
-    fn test_get_all_trip_uuids_returns_all() {
-        let db = setup_db();
-        let t = SystemTime::now();
-        let (_, uuid1) = make_trip(&db, "Trip 1", t, 2);
-        let (_, uuid2) = make_trip(&db, "Trip 2", t.add(Duration::from_secs(3 * ONE_HOUR_S)), 2);
-
-        let uuids = db.get_all_trip_uuids().expect("should succeed");
-        assert_eq!(uuids.len(), 2);
-        assert!(uuids.contains(&uuid1));
-        assert!(uuids.contains(&uuid2));
-    }
 
     #[test]
     #[ignore]
@@ -340,9 +490,9 @@ mod tests {
         assert_eq!(deleted, 1, "one orphan deleted");
         assert_eq!(count_rows(&db, "trips"), 2);
 
-        let remaining = db.get_all_trip_uuids().expect("should succeed");
-        assert!(remaining.contains(&uuid1));
-        assert!(remaining.contains(&uuid2));
+        let remaining = db.get_trip_versions().expect("should succeed");
+        assert!(remaining.contains_key(&uuid1));
+        assert!(remaining.contains_key(&uuid2));
     }
 
     #[test]
@@ -463,6 +613,186 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_uuids_to_push_flags_missing_uuid() {
+        let local: HashMap<String, u64> = HashMap::new();
+        let mut payload = HashMap::new();
+        payload.insert("uuid-1".to_string(), 1u64);
+
+        let result = compute_uuids_to_push(&local, &payload);
+        assert_eq!(result, vec!["uuid-1".to_string()]);
+    }
+
+    #[test]
+    fn test_compute_uuids_to_push_flags_stale_local_version() {
+        let mut local = HashMap::new();
+        local.insert("uuid-1".to_string(), 3u64);
+        let mut payload = HashMap::new();
+        payload.insert("uuid-1".to_string(), 5u64);
+
+        let result = compute_uuids_to_push(&local, &payload);
+        assert_eq!(result, vec!["uuid-1".to_string()]);
+    }
+
+    #[test]
+    fn test_compute_uuids_to_push_skips_up_to_date_trip() {
+        let mut local = HashMap::new();
+        local.insert("uuid-1".to_string(), 5u64);
+        let mut payload = HashMap::new();
+        payload.insert("uuid-1".to_string(), 5u64);
+
+        let result = compute_uuids_to_push(&local, &payload);
+        assert!(result.is_empty(), "equal versions must not be re-pushed");
+    }
+
+    #[test]
+    fn test_compute_uuids_to_push_skips_when_local_is_ahead() {
+        // Should not happen in the boat-authoritative one-way flow, but the
+        // function must not treat "local newer than payload" as needing a push.
+        let mut local = HashMap::new();
+        local.insert("uuid-1".to_string(), 9u64);
+        let mut payload = HashMap::new();
+        payload.insert("uuid-1".to_string(), 5u64);
+
+        let result = compute_uuids_to_push(&local, &payload);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_classify_uuids_to_push_splits_add_and_update() {
+        let mut local = HashMap::new();
+        local.insert("uuid-stale".to_string(), 3u64);
+        let mut payload = HashMap::new();
+        payload.insert("uuid-new".to_string(), 1u64);
+        payload.insert("uuid-stale".to_string(), 5u64);
+        payload.insert("uuid-current".to_string(), 2u64);
+        local.insert("uuid-current".to_string(), 2u64);
+
+        let (to_add, to_update) = classify_uuids_to_push(&local, &payload);
+        assert_eq!(to_add, vec!["uuid-new".to_string()]);
+        assert_eq!(to_update, vec!["uuid-stale".to_string()]);
+    }
+
+    #[test]
+    fn test_classify_uuids_to_push_matches_compute_uuids_to_push() {
+        // The two functions must always agree: classify's to_add+to_update,
+        // as a set, equals compute_uuids_to_push's flat result.
+        let mut local = HashMap::new();
+        local.insert("uuid-stale".to_string(), 1u64);
+        local.insert("uuid-current".to_string(), 2u64);
+        local.insert("uuid-ahead".to_string(), 9u64);
+        let mut payload = HashMap::new();
+        payload.insert("uuid-new".to_string(), 1u64);
+        payload.insert("uuid-stale".to_string(), 2u64);
+        payload.insert("uuid-current".to_string(), 2u64);
+        payload.insert("uuid-ahead".to_string(), 5u64);
+
+        let flat = compute_uuids_to_push(&local, &payload);
+        let (to_add, to_update) = classify_uuids_to_push(&local, &payload);
+        let mut combined: Vec<String> = to_add.into_iter().chain(to_update).collect();
+        combined.sort();
+        let mut flat_sorted = flat;
+        flat_sorted.sort();
+        assert_eq!(combined, flat_sorted);
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_find_orphan_trip_details_returns_identity_without_deleting() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let (_, uuid_keep) = make_trip(&db, "Keep", t, 2);
+        make_trip(&db, "Orphan", t.add(Duration::from_secs(6 * ONE_HOUR_S)), 2);
+
+        let orphans = db
+            .find_orphan_trip_details(&[uuid_keep.clone()])
+            .expect("find_orphan_trip_details failed");
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].description, "Orphan");
+
+        // Nothing was actually deleted.
+        assert_eq!(count_rows(&db, "trips"), 2);
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_get_trip_summaries_by_uuids_returns_identity() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let (_, uuid1) = make_trip(&db, "Trip A", t, 2);
+        make_trip(&db, "Trip B", t.add(Duration::from_secs(3 * ONE_HOUR_S)), 2);
+
+        let summaries = db
+            .get_trip_summaries_by_uuids(&[uuid1.clone()])
+            .expect("get_trip_summaries_by_uuids failed");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].uuid, uuid1);
+        assert_eq!(summaries[0].description, "Trip A");
+    }
+
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_get_trip_versions_returns_all() {
+        let db = setup_db();
+        let t = SystemTime::now();
+        let (_, uuid1) = make_trip(&db, "Trip 1", t, 2);
+        let (_, uuid2) = make_trip(&db, "Trip 2", t.add(Duration::from_secs(3 * ONE_HOUR_S)), 2);
+
+        let versions = db.get_trip_versions().expect("get_trip_versions failed");
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions.get(&uuid1), Some(&1));
+        assert_eq!(versions.get(&uuid2), Some(&1));
+    }
+
+    /// Regression test for the original bug: a trip edited locally after its
+    /// first successful sync must be flagged for re-push on the next manifest
+    /// diff, with no cursor/timestamp bookkeeping involved at all.
+    #[test]
+    #[ignore] // Requires a live MariaDB test database (see CLAUDE.md / DB_ANALYST.md).
+    fn test_edit_after_initial_sync_is_flagged_by_version_diff() {
+        let boat = setup_db();
+        let remote = setup_db();
+        let t = SystemTime::now();
+        let (trip_id, uuid) = make_trip(&boat, "Round Trip", t, 2);
+
+        // Initial sync: remote adopts the boat's export verbatim (is_sync = true).
+        let json = boat.export_trip_to_string(trip_id as i64).unwrap();
+        remote.import_trip(&json, true).expect("initial sync import failed");
+
+        let boat_versions = boat.get_trip_versions().expect("boat versions failed");
+        let remote_versions = remote.get_trip_versions().expect("remote versions failed");
+        assert!(
+            compute_uuids_to_push(&remote_versions, &boat_versions).is_empty(),
+            "freshly synced trip must not need re-push"
+        );
+
+        // Boat edits the trip locally (any exec_trip_update-backed write bumps version).
+        //
+        // Note: `boat` and `remote` share the single physical test schema (there is
+        // no two-database test harness in this codebase), and `import_trip`'s
+        // is_sync replace semantics delete-and-reinsert the row on UUID match, so
+        // the original numeric `trip_id` no longer resolves after the "remote"
+        // import above. Re-resolve it by UUID before editing — a real, physically
+        // separate boat DB would never have had its own row's id touched by a
+        // remote's import in the first place.
+        let current_trip_id = boat
+            .fetch_trip_by_uuid(&uuid)
+            .expect("fetch_trip_by_uuid failed")
+            .expect("trip not found by uuid")
+            .id;
+        boat.update_trip_description(current_trip_id as i64, "Round Trip (edited)")
+            .expect("update_trip_description failed");
+
+        let boat_versions = boat.get_trip_versions().expect("boat versions failed");
+        let to_push = compute_uuids_to_push(&remote_versions, &boat_versions);
+        assert_eq!(
+            to_push,
+            vec![uuid],
+            "an edit after the initial sync must be flagged for push, with no \
+             timestamp cursor involved"
+        );
+    }
+
+    #[test]
     #[ignore]
     fn test_sync_round_trip_per_trip() {
         let db = setup_db();
@@ -493,7 +823,11 @@ mod tests {
         )
         .expect("add vessel_status failed");
 
-        let all_uuids = db.get_all_trip_uuids().expect("get UUIDs");
+        let all_uuids: Vec<String> = db
+            .get_trip_versions()
+            .expect("get trip versions")
+            .into_keys()
+            .collect();
         let updated_trips = db.get_trips_by_uuids(&all_uuids).expect("get trips");
         assert_eq!(updated_trips.len(), 2);
 
@@ -512,7 +846,7 @@ mod tests {
         // Per-trip step
         for trip_value in &updated_trips {
             let json_str = serde_json::to_string(trip_value).unwrap();
-            db.import_trip(&json_str).expect("import_trip failed");
+            db.import_trip(&json_str, true).expect("import_trip failed");
         }
 
         assert_eq!(count_rows(&db, "trips"), 2);
@@ -522,9 +856,9 @@ mod tests {
             "vessel_status row restored"
         );
 
-        let uuids_after = db.get_all_trip_uuids().expect("get UUIDs after");
-        assert!(uuids_after.contains(&uuid1));
-        assert!(uuids_after.contains(&uuid2));
+        let uuids_after = db.get_trip_versions().expect("get UUIDs after");
+        assert!(uuids_after.contains_key(&uuid1));
+        assert!(uuids_after.contains_key(&uuid2));
 
         let status = db.get_sync_status().expect("get sync status");
         assert_eq!(
@@ -555,9 +889,9 @@ mod tests {
         assert_eq!(deleted, 1, "trip 3 should be deleted");
         assert_eq!(count_rows(&db, "trips"), 2, "only 2 trips remain");
 
-        let remaining = db.get_all_trip_uuids().expect("get UUIDs");
-        assert!(remaining.contains(&uuid1));
-        assert!(remaining.contains(&uuid2));
+        let remaining = db.get_trip_versions().expect("get UUIDs");
+        assert!(remaining.contains_key(&uuid1));
+        assert!(remaining.contains_key(&uuid2));
     }
 
     #[test]
@@ -572,11 +906,11 @@ mod tests {
         let json_str = serde_json::to_string(&trip_json).unwrap();
 
         // Import twice — second call must produce the same DB state
-        db.import_trip(&json_str).expect("first import failed");
-        db.import_trip(&json_str).expect("second import failed");
+        db.import_trip(&json_str, true).expect("first import failed");
+        db.import_trip(&json_str, true).expect("second import failed");
         assert_eq!(count_rows(&db, "trips"), 1, "still exactly one trip");
 
-        let uuids = db.get_all_trip_uuids().expect("get UUIDs");
+        let uuids: Vec<String> = db.get_trip_versions().expect("get UUIDs").into_keys().collect();
         assert_eq!(uuids, vec![uuid]);
     }
 }

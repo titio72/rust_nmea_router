@@ -8,8 +8,14 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 nmea2000 = "0.2.2"
-socketcan = "3.0"
+embedded-can = "0.4"
 tracing = "0.1"
 chrono = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# SocketCAN is a Linux kernel interface and its build script refuses to build on any other OS.
+# On those platforms `canbus_mock` stands in for the `canbus` module, so the rest of the crate —
+# and everything that depends on it — still builds and runs.
+socketcan = "3.0"
 
 [dev-dependencies]

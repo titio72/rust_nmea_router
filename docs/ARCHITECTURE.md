@@ -40,7 +40,7 @@ CAN Bus (NMEA2000)
  nmea2k crate                 ← decoding library (workspace crate)
       │
       ▼
- main.rs (event loop)
+ router_loop.rs (event loop)
       ├──► TimeMonitor         ← gate: block data until UTC is synced
       ├──► VesselMonitor       ── state machine ──► VesselStatusHandler ──► MariaDB
       ├──► EnvironmentalMonitor ──────────────────► EnvStatusHandler    ──► MariaDB
@@ -59,7 +59,7 @@ The application follows a **layered, event-driven** design:
 | Layer | Files | Responsibility |
 |---|---|---|
 | **Transport** | `nmea2k/` | CAN frame assembly, NMEA2000 PGN parsing |
-| **Event loop** | `src/main.rs` | Message dispatch, reconnection, metrics |
+| **Event loop** | `src/router_loop.rs` | Message dispatch, reconnection, metrics |
 | **Business logic** | `src/vessel_monitor.rs`, `src/environmental_monitor.rs`, `src/trip.rs`, `src/mooring_detection.rs` | Aggregation, state machines, calculations |
 | **Persistence** | `src/vessel_status_handler.rs`, `src/environmental_status_handler.rs`, `src/db/` | DB writes, trip lifecycle |
 | **Output** | `src/signalk_broadcaster.rs`, `src/udp_broadcaster.rs` | Real-time broadcast |
@@ -134,7 +134,7 @@ The `TimeSyncStatus` enum has three states:
 | `TimeSkewDetected` | A skew was found; attempted correction |
 | `Synchronized` | Skew < threshold; data processing is allowed |
 
-The current status and last skew value are read by `main.rs` after every message and used to gate vessel/environmental processing.
+The current status and last skew value are read by `router_loop.rs` after every message and used to gate vessel/environmental processing.
 
 ---
 
@@ -269,6 +269,8 @@ Key endpoint groups:
 All responses use the envelope `{ "status": "ok"|"error", "data": ..., "error": ... }`.
 
 Feature flags (`tracking_enabled`, `metrics_enabled`, `signalk_enabled`) are read from the `system_status` table in the database and checked on every message, allowing runtime toggling without a restart.
+
+`auto_on_enabled` (default off) arms **Auto On**: while armed, the vessel monitor keeps processing messages even if `tracking_enabled` is off, and on a moored → moving transition the router loop sets both `tracking_enabled` and `metrics_enabled` to true. It never switches tracking off. Toggle via `GET`/`POST /api/auto_on/status` (same request/response shape as `/api/metrics/status`).
 
 ---
 

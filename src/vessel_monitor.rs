@@ -11,8 +11,8 @@ use nmea2k::pgns::{CogSogRapidUpdate, HeadingReference, PositionRapidUpdate};
 use std::time::{Duration, Instant};
 
 const MOORING_DETECTION_WINDOW: Duration = Duration::from_secs(180); // 3 minutes
-#[allow(dead_code)] // Used in mooring detection logic based on position (but we switched to VMG-based detection, so this is now unused)
-const MOORING_THRESHOLD_METERS: f64 = 30.0; // 30 meters radius
+const MOORING_POSITION_REFERENCE_WINDOW: Duration = Duration::from_secs(600); // 10 minutes
+const MOORING_THRESHOLD_METERS: f64 = 45.0; // 45 meters radius
 const MOORING_THRESHOLD_VMG_KNOTS: f64 = 0.25; // 0.25 knots
 const MOORING_ACCURACY: f64 = 0.85; // 85% of positions within threshold
 const MAX_VALID_SOG_KN: f64 = 25.0; // 25 knots (noise filter)
@@ -112,8 +112,11 @@ impl VesselMonitor {
     pub fn new(status_report_period: Duration, status_report_moored_period: Duration) -> Self {
         let now = Instant::now();
         let time_window_secs = std::cmp::max(
-            status_report_moored_period.as_secs(),
-            status_report_period.as_secs(),
+            std::cmp::max(
+                status_report_moored_period.as_secs(),
+                status_report_period.as_secs(),
+            ),
+            MOORING_POSITION_REFERENCE_WINDOW.as_secs(),
         ) + 30;
         let sample_age_window = Duration::from_secs(time_window_secs);
         VesselMonitor {
@@ -300,8 +303,20 @@ impl VesselMonitor {
     }
 
     pub fn is_moored(&self, now: Instant) -> bool {
-        //self.positions.is_stationary(MOORING_DETECTION_WINDOW, MOORING_ACCURACY, MOORING_THRESHOLD_METERS, now)
+        // VMG alone is unreliable at anchor: COG becomes noisy/near-random once SOG drops
+        // near the GPS receiver's noise floor, so the VMG projection can stay above threshold
+        // even though the boat isn't actually going anywhere. Position stability is immune to
+        // that noise (it looks at net displacement, not instantaneous course), so treat the
+        // vessel as moored if either signal indicates it.
         self.vmg_for_mooring.is_stationary(now)
+            || self.positions.is_stationary(
+                MOORING_DETECTION_WINDOW,
+                MOORING_POSITION_REFERENCE_WINDOW,
+                MIN_SAMPLES_FOR_VALIDATION,
+                MOORING_ACCURACY,
+                MOORING_THRESHOLD_METERS,
+                now,
+            )
     }
 
     /// Generate a vessel status event
@@ -762,6 +777,8 @@ mod tests {
         // Check mooring detection using the PositionQueue method
         let is_moored = monitor.positions.is_stationary(
             Duration::from_secs(180), // MOORING_DETECTION_WINDOW
+            Duration::from_secs(600), // MOORING_POSITION_REFERENCE_WINDOW
+            10,                       // MIN_SAMPLES_FOR_VALIDATION
             0.90,                     // MOORING_ACCURACY
             30.0,                     // MOORING_THRESHOLD_METERS
             Instant::now(),
@@ -770,6 +787,90 @@ mod tests {
         assert!(is_moored);
         // Should have at least 10 samples accepted
         assert!(monitor.positions.len() >= 10);
+    }
+
+    #[test]
+    fn test_mooring_detection_survives_noisy_sog_at_anchor() {
+        // Reproduces the 2026-07-25 anchoring incident: the boat's GPS position is
+        // fixed (genuinely stationary), but SOG noise near the GPS receiver's zero-speed
+        // floor keeps popping above the VMG threshold, so VMG-based detection alone never
+        // reaches the required accuracy. Position stability must catch this instead.
+        let mut monitor = VesselMonitor::default();
+        let base_time = Instant::now();
+
+        let position_msg = PositionRapidUpdate {
+            pgn: 129025,
+            latitude: 45.0,
+            longitude: -122.0,
+        };
+
+        for i in 0..150u64 {
+            let t = base_time + Duration::from_millis(i * 1000);
+            monitor.process_position(&position_msg, t);
+            // Alternate between calm and noisy SOG readings, mirroring the real
+            // anchor-swing data where ~40-50% of samples exceeded the 0.25 kn threshold.
+            let sog_kn = if i % 2 == 0 { 0.05 } else { 0.35 };
+            make_speed_sample(&mut monitor, sog_kn, t);
+        }
+
+        let now = base_time + Duration::from_millis(150 * 1000);
+
+        // VMG alone fails to detect mooring due to SOG noise.
+        assert!(!monitor.vmg_for_mooring.is_stationary(now));
+        // But is_moored() must still report moored via the position fallback.
+        assert!(monitor.is_moored(now));
+    }
+
+    #[test]
+    fn test_mooring_detection_survives_slow_swing_wider_than_window() {
+        // Reproduces the 2026-07-26 anchoring incident: a moderate current pushed the
+        // boat through a genuine ~20m-radius circular swing with a period (~5 min)
+        // longer than the 180s check window. A reference point computed from just that
+        // window only ever sees part of one arc, so it's biased toward whichever side
+        // of the swing the window happened to catch, making later samples look "far
+        // from center" even though the true center never moves. VMG can't help either:
+        // a real swing produces real (non-noise) speed the whole time, so it never
+        // reads stationary. The position reference must stay stable across a full
+        // swing cycle instead.
+        let mut monitor = VesselMonitor::default();
+        let base_time = Instant::now();
+
+        let center_lat = 45.0;
+        let center_lon = -122.0;
+        let radius_m = 20.0;
+        let period_s = 300.0; // 5 minutes, longer than the 180s check window
+        let total_s = 900.0; // 3 full periods, enough to fill the 600s reference window
+        let step_s = 5.0;
+
+        let mut t = 0.0;
+        while t <= total_s {
+            let angle = 2.0 * std::f64::consts::PI * t / period_s;
+            let lat = center_lat + (radius_m / 111_320.0) * angle.sin();
+            let lon = center_lon
+                + (radius_m / (111_320.0 * center_lat.to_radians().cos())) * angle.cos();
+            let timestamp = base_time + Duration::from_millis((t * 1000.0) as u64);
+
+            monitor.process_position(
+                &PositionRapidUpdate {
+                    pgn: 129025,
+                    latitude: lat,
+                    longitude: lon,
+                },
+                timestamp,
+            );
+            // Genuine swing speed, consistently above the 0.25 kn VMG threshold —
+            // real motion, not noise, so VMG can never call this stationary.
+            make_speed_sample(&mut monitor, 0.35, timestamp);
+
+            t += step_s;
+        }
+
+        let now = base_time + Duration::from_millis((total_s * 1000.0) as u64);
+
+        // VMG can't help: the swing speed is real, not noise.
+        assert!(!monitor.vmg_for_mooring.is_stationary(now));
+        // But is_moored() must still report moored via the stabilized position reference.
+        assert!(monitor.is_moored(now));
     }
 
     #[test]

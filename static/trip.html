@@ -13,6 +13,8 @@
     <script src="/libs/chartjs-adapter-date-fns.bundle.min.js"></script>
     <script src="/libs/leaflet.min.js"></script>
     <script src="/libs/leaflet.fullscreen.js"></script>
+    <script src="/js/map-lat-lon-panel.js"></script>
+    <script src="/js/map-measure-tool.js"></script>
     <style>
         #tripDetails {
             width: 100%;
@@ -138,6 +140,30 @@
         .chartToggleBtn:hover {
             background-color: var(--bg-hover);
         }
+
+        .chartInfoIcon {
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background-color: var(--bg-tertiary);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+            font-style: italic;
+            cursor: help;
+            user-select: none;
+        }
+        .chartInfoIcon:hover {
+            background-color: var(--bg-hover);
+            color: var(--text-primary);
+        }
         .loading {
             text-align: center;
             padding: 50px;
@@ -220,6 +246,7 @@
                                 <div id="legDisplay" class="legDisplay"></div>
                                 <button class="app-btn" onclick="nextLeg()" title="Next">&gt;&gt;</button>
                                 <button class="app-btn" data-ro-hidden onclick="recalculateLegs(event)" title="Recalculate Legs">&#x21BA;</button>
+                                <button class="app-btn" data-ro-hidden onclick="goToFixEngineStatus()" title="Fix Engine Status"><app-icon name="wrench"></app-icon></button>
                             </div>
                         </div>
                     </div>
@@ -260,6 +287,25 @@
                         </div>
                     </div>
                     <div class="card-stats">
+                        <div class="card-stat" id="upwindTimeStat">
+                            <div class="card-stat-label">Upwind</div>
+                            <div id="upwindTimeValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="upwindTimePercentageValue" class="sailing-percentage"></span></div>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="card-stat" id="reachingTimeStat">
+                            <div class="card-stat-label">Reaching</div>
+                            <div id="reachingTimeValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="reachingTimePercentageValue" class="sailing-percentage"></span></div>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="card-stat" id="runningTimeStat">
+                            <div class="card-stat-label">Running</div>
+                            <div id="runningTimeValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="runningTimePercentageValue" class="sailing-percentage"></span></div>
+                        </div>
+                    </div>
+                    <div class="card-stats">
                         <div class="card-stat" id="totalDistanceStat">
                             <div class="card-stat-label">Total Distance</div>
                             <div id="totalDistanceValue" class="card-stat-value"></div>
@@ -275,6 +321,25 @@
                             <div class="card-stat-label">Motoring</div>
                             <div id="motoringDistanceValue" class="card-stat-value"></div>
                             <div class="card-stat-detail"><span id="motoringDistancePercentageValue" class="motoring-percentage"></span></div>
+                        </div>
+                    </div>
+                    <div class="card-stats">
+                        <div class="card-stat" id="upwindDistanceStat">
+                            <div class="card-stat-label">Upwind</div>
+                            <div id="upwindDistanceValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="upwindDistancePercentageValue" class="sailing-percentage"></span></div>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="card-stat" id="reachingDistanceStat">
+                            <div class="card-stat-label">Reaching</div>
+                            <div id="reachingDistanceValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="reachingDistancePercentageValue" class="sailing-percentage"></span></div>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="card-stat" id="runningDistanceStat">
+                            <div class="card-stat-label">Running</div>
+                            <div id="runningDistanceValue" class="card-stat-value"></div>
+                            <div class="card-stat-detail"><span id="runningDistancePercentageValue" class="sailing-percentage"></span></div>
                         </div>
                     </div>
                     <voyage-bar id="voyageBar"></voyage-bar>
@@ -319,6 +384,47 @@
         document.getElementById('headerContainer').innerHTML = createHeaderBar('trips');
         initializeTheme();
 
+        // This page always displays timestamps in UTC (vessel data has no meaningful
+        // "local" timezone), overriding the local-time formatters from shared-theme.js.
+        // Every formatted timestamp is suffixed " UTC" so it's never mistaken for local time.
+        function formatDate(dateStr) {
+            if (!dateStr) return 'Unknown';
+            try {
+                const date = new Date(dateStr);
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit', timeZone: 'UTC' }) + ' UTC';
+            } catch (e) {
+                return dateStr;
+            }
+        }
+
+        function formatTime(dateStr) {
+            if (!dateStr) return '';
+            try {
+                return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
+            } catch (e) {
+                return dateStr;
+            }
+        }
+
+        function formatDateTime(dateStr) {
+            if (!dateStr) return '';
+            try {
+                const date = new Date(dateStr);
+                return date.toLocaleDateString('en-US', { timeZone: 'UTC' }) + ' ' +
+                    date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
+            } catch (e) {
+                return dateStr;
+            }
+        }
+
+        // Chart.js's date-fns time adapter always renders using the browser's local
+        // timezone with no UTC option, so chart axis/tooltip dates are shifted by the
+        // local UTC offset before being handed to Chart.js, making them display as UTC.
+        function chartUtcDate(dateStr) {
+            const d = new Date(dateStr);
+            return new Date(d.getTime() + d.getTimezoneOffset() * 60000);
+        }
+
         function showMapFallback(message) {
             const mapElement = document.getElementById('map');
             if (mapElement) {
@@ -354,7 +460,7 @@
             }
         }
 
-        function addChart(container, id, switchAngleBtnId, toggleFunction) {
+        function addChart(container, id, switchAngleBtnId, toggleFunction, description) {
             const appCard = document.createElement('div');
             appCard.className = 'app-card';
 
@@ -363,6 +469,14 @@
             const canvas = document.createElement('canvas');
             canvas.id = id;
             chartWrapper.appendChild(canvas);
+
+            if (description) {
+                const infoIcon = document.createElement('div');
+                infoIcon.className = 'chartInfoIcon';
+                infoIcon.textContent = 'i';
+                infoIcon.title = description;
+                chartWrapper.appendChild(infoIcon);
+            }
 
             if (switchAngleBtnId && toggleFunction) {
                 const toolbar = document.createElement('div');
@@ -385,24 +499,48 @@
             const legChartsContainer = document.getElementById('chartsContainerLeg');
             legChartsContainer.innerHTML = ''; // Clear any existing charts
             if (!isVisible) return;
-            addChart(legChartsContainer, 'speedChart');
-            addChart(legChartsContainer, 'headingChart', 'headingScaleBtn', toggleHeadingScale);
-            addChart(legChartsContainer, 'windSpeedChart');
-            addChart(legChartsContainer, 'windDirectionChart', 'windDirectionScaleBtn', toggleWindDirectionScale);
-            addChart(legChartsContainer, 'rollAngleChart');
-            addChart(legChartsContainer, 'heelDistributionChart');
-            addChart(legChartsContainer, 'speedDistributionChart');
-            addChart(legChartsContainer, 'windStatisticsChart');
+            addChart(legChartsContainer, 'speedChart', null, null,
+                'Speed over ground (SOG) through the leg, in knots.');
+            addChart(legChartsContainer, 'speedDistributionChart', null, null,
+                'Distance sailed, bucketed by speed over ground (0.5 kn buckets), split between sailing and motoring.');
+            addChart(legChartsContainer, 'headingChart', 'headingScaleBtn', toggleHeadingScale,
+                'True heading over time. Use the button to switch between a 0–360° and a −180…180° scale.');
+            addChart(legChartsContainer, 'windSpeedChart', null, null,
+                'True wind speed (left axis, knots) and true wind angle (right axis, degrees, negative = port / positive = starboard) over time.');
+            addChart(legChartsContainer, 'twaDistributionChart', null, null,
+                'Distance sailed by True Wind Angle, in 5° buckets, shown as a compass rose: dead ahead at top, starboard tacks to the right, port tacks to the left.');
+            addChart(legChartsContainer, 'windStatisticsChart', null, null,
+                'Measures the "amount of wind" from each True Wind Direction (absolute compass bearing, 5° buckets): wind speed integrated over time (hours × knots), not distance sailed. E.g. 20 kn of wind for 1h scores 20, the same as 5 kn for 4h. Segment color reflects the max wind speed recorded from that direction.');
+            addChart(legChartsContainer, 'rollAngleChart', null, null,
+                'Boat roll (heel) angle over time, in degrees.');
+            addChart(legChartsContainer, 'heelDistributionChart', null, null,
+                'Distribution of time spent at each heel angle.');
         }
 
         function initializeChartsTrip(isVisible) {
             chartsContainer = document.getElementById('chartsContainerTrip');
             chartsContainer.innerHTML = ''; // Clear any existing charts
             if (!isVisible) return;
-            addChart(chartsContainer, 'atmosphericPressureChart');
-            addChart(chartsContainer, 'absoluteWindDirectionChart', 'absoluteWindDirectionScaleBtn', toggleAbsoluteWindDirectionScale);
-            addChart(chartsContainer, 'cabinTemperatureChart');
-            addChart(chartsContainer, 'humidityChart');
+            addChart(chartsContainer, 'atmosphericPressureChart', null, null,
+                'Barometric pressure over the trip, in millibars.');
+            addChart(chartsContainer, 'absoluteWindDirectionChart', 'absoluteWindDirectionScaleBtn', toggleAbsoluteWindDirectionScale,
+                'Absolute wind direction (compass bearing) and wind speed over the trip. Use the button to switch between a 0–360° and a −180…180° scale.');
+            addChart(chartsContainer, 'cabinTemperatureChart', null, null,
+                'Cabin temperature over the trip, in °C.');
+            addChart(chartsContainer, 'humidityChart', null, null,
+                'Cabin relative humidity over the trip, in %.');
+        }
+
+        // A chart can't usefully render more distinct data points than it has pixels of
+        // width — anything beyond that is fetched, parsed and thrown away by Chart.js's
+        // own decimation. The canvas is already in the DOM (and CSS-forced to
+        // width:100% of its container, see shared.css) by the time chart data is
+        // fetched, so its rendered width is a known quantity we can ask the server for
+        // directly instead of guessing a fixed point count.
+        function getChartMaxPoints(canvasId, fallback) {
+            const el = document.getElementById(canvasId);
+            const width = el ? Math.round(el.clientWidth) : 0;
+            return width > 0 ? width : fallback;
         }
 
         function getChartColors() {
@@ -431,7 +569,12 @@
                     maxRotation: 45,
                     minRotation: 45
                 },
-                grid: { color: colors.grid }
+                grid: { color: colors.grid },
+                title: {
+                    display: true,
+                    text: 'Time (UTC)',
+                    color: colors.text
+                }
             };
         }
 
@@ -447,20 +590,20 @@
             // Mooring gap before first leg
             const firstLegStart = new Date(sortedLegs[0].start_timestamp).getTime();
             if (firstLegStart > tripStartMs) {
-                bands.push({ start: new Date(tripStart), end: new Date(sortedLegs[0].start_timestamp), type: 'moored' });
+                bands.push({ start: chartUtcDate(tripStart), end: chartUtcDate(sortedLegs[0].start_timestamp), type: 'moored' });
             }
 
             for (let i = 0; i < sortedLegs.length; i++) {
-                bands.push({ start: new Date(sortedLegs[i].start_timestamp), end: new Date(sortedLegs[i].end_timestamp), type: 'nav' });
+                bands.push({ start: chartUtcDate(sortedLegs[i].start_timestamp), end: chartUtcDate(sortedLegs[i].end_timestamp), type: 'nav' });
                 if (i + 1 < sortedLegs.length) {
-                    bands.push({ start: new Date(sortedLegs[i].end_timestamp), end: new Date(sortedLegs[i + 1].start_timestamp), type: 'moored' });
+                    bands.push({ start: chartUtcDate(sortedLegs[i].end_timestamp), end: chartUtcDate(sortedLegs[i + 1].start_timestamp), type: 'moored' });
                 }
             }
 
             // Mooring gap after last leg
             const lastLegEnd = new Date(sortedLegs[sortedLegs.length - 1].end_timestamp).getTime();
             if (lastLegEnd < tripEndMs) {
-                bands.push({ start: new Date(sortedLegs[sortedLegs.length - 1].end_timestamp), end: new Date(tripEnd), type: 'moored' });
+                bands.push({ start: chartUtcDate(sortedLegs[sortedLegs.length - 1].end_timestamp), end: chartUtcDate(tripEnd), type: 'moored' });
             }
 
             return bands;
@@ -511,10 +654,36 @@
         let fullTrackData = null; // Global reference to full trip track data (loaded once)
         let segmentMarkers = []; // Array to store segment start/end markers
         let headingScaleNormalized = false; // Toggle for heading chart scale (0-360 vs -180 to 180)
-        let windDirectionNormalized = false; // Toggle for wind direction chart scale (0-360 vs -180 to 180)
         let absoluteWindDirectionNormalized = false; // Toggle for absolute wind direction chart scale (0-360 vs -180 to 180)
         let currentAbsoluteWindData = null; // Metric data for absolute wind direction (for scale toggling)
         let currentWindSpeedData = null; // Metric data for wind speed (for chart toggling)
+
+        // --- Perf instrumentation: time from the first server call to charts/map fully populated. ---
+        // perfStart is reset in loadTripAndLegs (the actual first fetch of a page load / recalc reload).
+        // Leg-selector switches call loadTripDetails directly without going through loadTripAndLegs
+        // again, so their marks land on the same timeline as whatever load most recently reset it.
+        let perfStart = null;
+        let perfMarks = [];
+        function markTime(label, meta) {
+            if (perfStart === null) return;
+            const now = performance.now();
+            const elapsed = now - perfStart;
+            const prevElapsed = perfMarks.length ? perfMarks[perfMarks.length - 1].elapsed : 0;
+            perfMarks.push({ label, elapsed, delta: elapsed - prevElapsed, meta: meta || {} });
+            console.log(
+                '[timing] ' + label + ': +' + elapsed.toFixed(1) + 'ms (Δ' + (elapsed - prevElapsed).toFixed(1) + 'ms) ' +
+                JSON.stringify(meta || {})
+            );
+        }
+        function summarizePerf(finalLabel, meta) {
+            markTime(finalLabel, meta);
+            console.table(perfMarks.map(m => ({
+                label: m.label,
+                elapsed_ms: m.elapsed.toFixed(1),
+                delta_ms: m.delta.toFixed(1),
+                ...m.meta
+            })));
+        }
 
         if (!tripId) {
             //document.getElementById('tripDetails').innerHTML =
@@ -524,15 +693,19 @@
         }
 
         async function loadTripAndLegs(tripId) {
+            perfStart = performance.now();
+            perfMarks = [];
+            markTime('fetch_start');
             try {
                 const legsPromise = fetch('/api/trip_legs?id=' + tripId);
 
-                // Load trip summary and full track in parallel; use max_points=600 for
+                // Load trip summary and full track in parallel; use max_points=1800 for
                 // the full-trip view — the map polyline does not need 1-second resolution
                 const [tripResponse, legsResponse, trackResponse] = await Promise.all([
                     fetch('/api/trip?id=' + tripId),
                     legsPromise,
-                    fetch('/api/track?trip_id=' + tripId + '&max_points=600', { priority: 'high' })
+//                    fetch('/api/track?trip_id=' + tripId + '&max_points=1800', { priority: 'high' })
+                    fetch('/api/track?trip_id=' + tripId, { priority: 'high' })
                 ]);
 
                 if (!tripResponse.ok) {
@@ -562,6 +735,10 @@
                 if (trackResult.status === 'ok' && trackResult.data) {
                     fullTrackData = trackResult.data;
                 }
+                markTime('initial_fetches_resolved', {
+                    track_points: fullTrackData ? fullTrackData.length : 0,
+                    legs: currentLegs.length
+                });
 
                 // Determine initial leg from URL parameter (validate against loaded legs)
                 let initialLeg = null;
@@ -602,6 +779,14 @@
                 btn.disabled = false;
                 btn.textContent = original;
             }
+        }
+
+        function goToFixEngineStatus() {
+            let url = '/fix-engine-status.html?id=' + tripId;
+            if (selectedLeg !== null) {
+                url += '&leg=' + selectedLeg;
+            }
+            window.location.href = url;
         }
 
         function updateLegSelector(initialLegNumber) {
@@ -696,6 +881,12 @@
                         motoring_distance_nm: selectedLeg.motoring_distance_nm,
                         sailing_time_ms: selectedLeg.sailing_time_ms,
                         motoring_time_ms: selectedLeg.motoring_time_ms,
+                        upwind_distance_nm: selectedLeg.upwind_distance_nm,
+                        reaching_distance_nm: selectedLeg.reaching_distance_nm,
+                        running_distance_nm: selectedLeg.running_distance_nm,
+                        upwind_time_ms: selectedLeg.upwind_time_ms,
+                        reaching_time_ms: selectedLeg.reaching_time_ms,
+                        running_time_ms: selectedLeg.running_time_ms,
                         total_time_ms: selectedLeg.sailing_time_ms + selectedLeg.motoring_time_ms,
                         nav_start_timestamp: selectedLeg.nav_start_timestamp || null,
                         nav_end_timestamp: selectedLeg.nav_end_timestamp || null
@@ -718,7 +909,9 @@
                 }
 
                 // Render basic UI with map and trip info
+                markTime('before_map_render', { track_points: trackData.length });
                 displayTripInfoAndMap(tripData, trackData, isFullTrip);
+                markTime('map_render_done', { track_points: trackData.length });
 
                 // Destroy existing charts
                 Object.values(allCharts).forEach(chart => {
@@ -728,9 +921,13 @@
                 });
                 allCharts = {};
 
-                renderAnalytics(startTime, endTime).catch(error => {
-                    console.error('Failed to load analytics:', error);
-                });
+                try {
+                    currentAnalyticsData = buildAnalyticsFromLegs(currentTrip, currentLegs, selectedLeg);
+                    renderAnalyticsCards(currentAnalyticsData);
+                } catch (error) {
+                    console.error('Failed to render analytics cards:', error);
+                }
+                markTime('analytics_rendered_client_side');
 
                 // reset charts
                 initializeChartsLeg(!isFullTrip);
@@ -748,6 +945,7 @@
                     console.error('Failed to load trip charts:', error);
                 });
 
+                summarizePerf('ALL_CHARTS_AND_MAP_POPULATED', { track_points: trackData.length });
             } catch (error) {
                 console.error('Failed to load trip details:', error);
             }
@@ -780,6 +978,33 @@
             document.getElementById('sailingDistancePercentageValue').textContent = sailingPercent.toFixed(1) + '%';
             document.getElementById('motoringDistanceValue').textContent = motoringDistance.toFixed(1) + ' NM';
             document.getElementById('motoringDistancePercentageValue').textContent = (100 - sailingPercent).toFixed(1) + '%';
+            const upwindTime = trip.upwind_time_ms || 0;
+            const reachingTime = trip.reaching_time_ms || 0;
+            const runningTime = trip.running_time_ms || 0;
+            const upwindDistance = trip.upwind_distance_nm || 0;
+            const reachingDistance = trip.reaching_distance_nm || 0;
+            const runningDistance = trip.running_distance_nm || 0;
+            // Point-of-sail is a subdivision of sailing, so percentages are relative to
+            // sailing time/distance, not total trip time/distance.
+            const upwindTimePercent = sailingTime > 0 ? (upwindTime / sailingTime * 100) : 0;
+            const reachingTimePercent = sailingTime > 0 ? (reachingTime / sailingTime * 100) : 0;
+            const runningTimePercent = sailingTime > 0 ? (runningTime / sailingTime * 100) : 0;
+            const upwindDistancePercent = sailingDistance > 0 ? (upwindDistance / sailingDistance * 100) : 0;
+            const reachingDistancePercent = sailingDistance > 0 ? (reachingDistance / sailingDistance * 100) : 0;
+            const runningDistancePercent = sailingDistance > 0 ? (runningDistance / sailingDistance * 100) : 0;
+
+            document.getElementById('upwindTimeValue').textContent = formatDuration(upwindTime);
+            document.getElementById('upwindTimePercentageValue').textContent = upwindTimePercent.toFixed(1) + '%';
+            document.getElementById('reachingTimeValue').textContent = formatDuration(reachingTime);
+            document.getElementById('reachingTimePercentageValue').textContent = reachingTimePercent.toFixed(1) + '%';
+            document.getElementById('runningTimeValue').textContent = formatDuration(runningTime);
+            document.getElementById('runningTimePercentageValue').textContent = runningTimePercent.toFixed(1) + '%';
+            document.getElementById('upwindDistanceValue').textContent = upwindDistance.toFixed(1) + ' NM';
+            document.getElementById('upwindDistancePercentageValue').textContent = upwindDistancePercent.toFixed(1) + '%';
+            document.getElementById('reachingDistanceValue').textContent = reachingDistance.toFixed(1) + ' NM';
+            document.getElementById('reachingDistancePercentageValue').textContent = reachingDistancePercent.toFixed(1) + '%';
+            document.getElementById('runningDistanceValue').textContent = runningDistance.toFixed(1) + ' NM';
+            document.getElementById('runningDistancePercentageValue').textContent = runningDistancePercent.toFixed(1) + '%';
             const voyageBarEl = document.getElementById('voyageBar');
             voyageBarEl.setAttribute('sailing-distance', sailingDistance.toFixed(1));
             voyageBarEl.setAttribute('motoring-distance', motoringDistance.toFixed(1));
@@ -796,21 +1021,25 @@
         }
 
         async function renderLegCharts(trackData, startTime, endTime) {
+            markTime('leg_charts_start', { track_points: trackData.length });
             // Create time series charts
             allCharts.speed = createSpeedChart(trackData);
             allCharts.heading = createHeadingChart(trackData, headingScaleNormalized);
             allCharts.windSpeed = createWindSpeedChart(trackData);
-            allCharts.windDirection = createWindDirectionChart(trackData, windDirectionNormalized);
+            markTime('leg_timeseries_charts_rendered', { track_points: trackData.length });
 
             const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
             const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
+            const rollChartMaxPoints = getChartMaxPoints('rollAngleChart', 1000);
             speedDistQuery = '/api/speed_distribution?start=' + formattedStart + '&end=' + formattedEnd;
             windStatsQuery = '/api/wind_statistics?start=' + formattedStart + '&end=' + formattedEnd;
-            rollQuery = '/api/metrics?metric=7&start=' + formattedStart + '&end=' + formattedEnd + '&max_points=1000';
+            twaDistQuery = '/api/twa_distribution?start=' + formattedStart + '&end=' + formattedEnd;
+            rollQuery = '/api/metrics?metric=7&start=' + formattedStart + '&end=' + formattedEnd + '&max_points=' + rollChartMaxPoints;
 
-            const [speedDistResponse, windStatsResponse, rollResponse] = await Promise.all([
+            const [speedDistResponse, windStatsResponse, twaDistResponse, rollResponse] = await Promise.all([
                 fetch(speedDistQuery),
                 fetch(windStatsQuery),
+                fetch(twaDistQuery),
                 fetch(rollQuery)
             ]);
 
@@ -832,6 +1061,15 @@
                 }
             }
 
+            // Process TWA distribution
+            let twaDistData = null;
+            if (twaDistResponse && twaDistResponse.ok) {
+                const result = await twaDistResponse.json();
+                if (result.status === 'ok' && result.data) {
+                    twaDistData = result.data;
+                }
+            }
+
             let rollData = null;
             if (rollResponse && rollResponse.ok) {
                 const result = await rollResponse.json();
@@ -840,41 +1078,93 @@
                 }
             }
 
+            markTime('leg_charts_fetch_resolved', {
+                speed_dist_buckets: speedDistData ? speedDistData.labels.length : 0,
+                wind_stats_buckets: windStatsData ? windStatsData.directions.length : 0,
+                twa_dist_buckets: twaDistData ? twaDistData.angles.length : 0,
+                roll_points: rollData ? rollData.length : 0
+            });
+
             allCharts.speedDistribution = createSpeedDistributionChart(speedDistData);
             allCharts.windStatistics = createWindStatisticsChart(windStatsData);
+            allCharts.twaDistribution = createTwaDistributionChart(twaDistData);
             allCharts.rollAngle = createRollAngleChart(rollData);
             allCharts.heelDistribution = createHeelDistributionChart(rollData);
+            markTime('leg_distribution_charts_rendered');
         }
 
-        async function renderAnalytics(startTime, endTime) {
-            let analyticsQuery;
-            const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
-            const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
-            analyticsQuery = '/api/track_analytics?start=' + formattedStart + '&end=' + formattedEnd;
-            try {
-                const analyticsResponse = await fetch(analyticsQuery);
-                let analyticsData = null;
-                if (analyticsResponse.ok) {
-                    const result = await analyticsResponse.json();
-                    if (result.status === 'ok' && result.data) {
-                        analyticsData = result.data;
+        function averageSpeed(distanceNm, timeMs) {
+            if (!timeMs || timeMs <= 0) return null;
+            return distanceNm / (timeMs / 3600000);
+        }
+
+        // Builds the same shape /api/track_analytics used to return, from data already loaded via
+        // /api/trip and /api/trip_legs — no network request needed. selectedLeg is the TripLeg object
+        // for a single-leg view, or null for the full-trip view (best-of across all legs).
+        function buildAnalyticsFromLegs(trip, legs, selectedLeg) {
+            if (selectedLeg) {
+                const sailingMs = selectedLeg.sailing_time_ms || 0;
+                const motoringMs = selectedLeg.motoring_time_ms || 0;
+                return {
+                    max_speed_kn: selectedLeg.max_speed_kn ?? null,
+                    max_speed_timestamp: selectedLeg.max_speed_timestamp ?? null,
+                    fastest_1nm: selectedLeg.fastest_1nm ?? null,
+                    fastest_5nm: selectedLeg.fastest_5nm ?? null,
+                    fastest_10nm: selectedLeg.fastest_10nm ?? null,
+                    fastest_25nm: selectedLeg.fastest_25nm ?? null,
+                    average_speed_kn: averageSpeed(
+                        (selectedLeg.sailing_distance_nm || 0) + (selectedLeg.motoring_distance_nm || 0),
+                        sailingMs + motoringMs
+                    ),
+                    average_speed_sailing_kn: averageSpeed(selectedLeg.sailing_distance_nm || 0, sailingMs),
+                    average_speed_motoring_kn: averageSpeed(selectedLeg.motoring_distance_nm || 0, motoringMs)
+                };
+            }
+
+            let maxSpeedKn = null;
+            let maxSpeedTimestamp = null;
+            const best = { fastest_1nm: null, fastest_5nm: null, fastest_10nm: null, fastest_25nm: null };
+            for (const leg of legs) {
+                if (leg.max_speed_kn !== null && leg.max_speed_kn !== undefined &&
+                    (maxSpeedKn === null || leg.max_speed_kn > maxSpeedKn)) {
+                    maxSpeedKn = leg.max_speed_kn;
+                    maxSpeedTimestamp = leg.max_speed_timestamp;
+                }
+                for (const key of ['fastest_1nm', 'fastest_5nm', 'fastest_10nm', 'fastest_25nm']) {
+                    const candidate = leg[key];
+                    if (candidate && (!best[key] || candidate.average_speed_kn > best[key].average_speed_kn)) {
+                        best[key] = candidate;
                     }
                 }
-                // Save analytics data globally for segment marker handling
-                currentAnalyticsData = analyticsData;
-                renderAnalyticsCards(analyticsData);
-            } catch (error) {
-                console.error('Failed to fetch analytics data:', error);
             }
+
+            const sailingMs = trip.sailing_time_ms || 0;
+            const motoringMs = trip.motoring_time_ms || 0;
+            return {
+                max_speed_kn: maxSpeedKn,
+                max_speed_timestamp: maxSpeedTimestamp,
+                fastest_1nm: best.fastest_1nm,
+                fastest_5nm: best.fastest_5nm,
+                fastest_10nm: best.fastest_10nm,
+                fastest_25nm: best.fastest_25nm,
+                average_speed_kn: averageSpeed(
+                    (trip.sailing_distance_nm || 0) + (trip.motoring_distance_nm || 0),
+                    sailingMs + motoringMs
+                ),
+                average_speed_sailing_kn: averageSpeed(trip.sailing_distance_nm || 0, sailingMs),
+                average_speed_motoring_kn: averageSpeed(trip.motoring_distance_nm || 0, motoringMs)
+            };
         }
 
         async function renderTripCharts(trip, trackData, startTime, endTime, isFullTrip) {
+            markTime('trip_charts_start');
             try {
                 const formattedStart = encodeURIComponent(startTime.split('.')[0].replace('T', ' '));
                 const formattedEnd = encodeURIComponent(endTime.split('.')[0].replace('T', ' '));
+                const tripChartMaxPoints = getChartMaxPoints('atmosphericPressureChart', 1000);
 
                 // Fetch all trip-level environmental metrics in a single batch request
-                const batchQuery = '/api/metrics/batch?metrics=1,2,4,5,6&start=' + formattedStart + '&end=' + formattedEnd + '&max_points=1000';
+                const batchQuery = '/api/metrics/batch?metrics=1,2,4,5,6&start=' + formattedStart + '&end=' + formattedEnd + '&max_points=' + tripChartMaxPoints;
                 const batchResponse = await fetch(batchQuery);
 
                 let pressureData = null;
@@ -893,6 +1183,13 @@
                         absoluteWindData = result.data.metrics['6'] || null;
                     }
                 }
+                markTime('trip_charts_fetch_resolved', {
+                    pressure_points: pressureData ? pressureData.length : 0,
+                    wind_speed_points: windSpeedData ? windSpeedData.length : 0,
+                    abs_wind_points: absoluteWindData ? absoluteWindData.length : 0,
+                    cabin_temp_points: cabinTempData ? cabinTempData.length : 0,
+                    humidity_points: humidityData ? humidityData.length : 0
+                });
 
                 // Compute leg bands for full-trip view
                 const legBands = isFullTrip ? build_leg_bands(startTime, endTime) : [];
@@ -902,6 +1199,7 @@
                 allCharts.absoluteWindDirection = createAbsoluteWindDirectionChartFromMetric(absoluteWindData, windSpeedData, absoluteWindDirectionNormalized, legBands);
                 allCharts.cabinTemperature = createCabinTemperatureChart(cabinTempData, legBands);
                 allCharts.humidity = createHumidityChart(humidityData, legBands);
+                markTime('trip_charts_rendered');
 
                 // Save absolute wind data globally for scale toggling
                 currentAbsoluteWindData = absoluteWindData;
@@ -976,8 +1274,8 @@
                 html += '<div class="analyticsCard">' +
                     '<div class="analyticsCardTitle">Average Speed</div>' +
                     '<div class="analyticsValue">' + analyticsData.average_speed_kn.toFixed(2) + ' knots</div>' +
-                    '<div class="analyticsDetail">' + analyticsData.average_speed_sailing_kn.toFixed(2) + ' knots <span class="analyticsLabel">Sailing</span></div>' +
-                    '<div class="analyticsDetail">' + analyticsData.average_speed_motoring_kn.toFixed(2) + ' knots <span class="analyticsLabel">Motoring</span></div>' +
+                    '<div class="analyticsDetail">' + (analyticsData.average_speed_sailing_kn ?? 0).toFixed(2) + ' knots <span class="analyticsLabel">Sailing</span></div>' +
+                    '<div class="analyticsDetail">' + (analyticsData.average_speed_motoring_kn ?? 0).toFixed(2) + ' knots <span class="analyticsLabel">Motoring</span></div>' +
                     '</div>';
             }
 
@@ -1121,27 +1419,6 @@
             }
         }
 
-        function toggleWindDirectionScale() {
-            // Toggle the normalized scale flag
-            windDirectionNormalized = !windDirectionNormalized;
-
-            // Update the button label
-            const btn = document.getElementById('windDirectionScaleBtn');
-            if (btn) {
-                btn.textContent = windDirectionNormalized ? 'Switch to 0…360' : 'Switch to −180…180';
-            }
-
-            // Destroy the existing wind direction chart
-            if (allCharts.windDirection && typeof allCharts.windDirection.destroy === 'function') {
-                allCharts.windDirection.destroy();
-            }
-
-            // Recreate the wind direction chart with the new scale
-            if (currentTrackData) {
-                allCharts.windDirection = createWindDirectionChart(currentTrackData, windDirectionNormalized);
-            }
-        }
-
         function toggleAbsoluteWindDirectionScale() {
             // Toggle the normalized scale flag
             absoluteWindDirectionNormalized = !absoluteWindDirectionNormalized;
@@ -1164,6 +1441,20 @@
             }
         }
 
+        function smoothSeries(values, windowSize) {
+            const half = Math.floor(windowSize / 2);
+            return values.map((_, i) => {
+                let sum = 0, count = 0;
+                for (let j = Math.max(0, i - half); j <= Math.min(values.length - 1, i + half); j++) {
+                    if (values[j] != null) {
+                        sum += values[j];
+                        count++;
+                    }
+                }
+                return count > 0 ? sum / count : null;
+            });
+        }
+
         function createSpeedChart(trackData) {
             const ctx = document.getElementById('speedChart').getContext('2d');
             const colors = getChartColors();
@@ -1171,11 +1462,13 @@
             const validData = trackData.filter(point => !point.moored && point.avg_speed_kn > 0.1);
 
             const chartData = validData.map(point => ({
-                x: new Date(point.timestamp),
+                x: chartUtcDate(point.timestamp),
                 y: point.avg_speed_kn
             }));
 
-            const hasPolar = validData.some(p => p.polar_ratio != null);
+            const hasPolar = validData.some(p => p.polar_speed_kn != null);
+
+            const smoothedSpeed = smoothSeries(validData.map(p => p.avg_speed_kn), 15);
 
             const datasets = [{
                 label: 'Average Speed (knots)',
@@ -1187,31 +1480,32 @@
                 pointRadius: 0,
                 borderWidth: 1,
                 pointHoverRadius: 5,
-                yAxisID: 'y'
+                yAxisID: 'y',
+                order: 2
+            }, {
+                label: 'Smoothed Speed (knots)',
+                data: validData.map((p, i) => ({ x: chartUtcDate(p.timestamp), y: smoothedSpeed[i] })),
+                borderColor: '#f39c12',
+                borderWidth: 3,
+                pointRadius: 0,
+                fill: false,
+                tension: 0.3,
+                yAxisID: 'y',
+                order: 1
             }];
 
             if (hasPolar) {
+                const smoothedPolar = smoothSeries(validData.map(p => p.polar_speed_kn), 15);
                 datasets.push({
-                    label: '_polar_ref',
-                    data: validData.map(p => ({ x: new Date(p.timestamp), y: 100 })),
-                    borderColor: 'rgba(76, 175, 80, 0.25)',
-                    borderDash: [4, 4],
-                    borderWidth: 1,
-                    pointRadius: 0,
-                    fill: false,
-                    tension: 0,
-                    yAxisID: 'y1'
-                });
-                datasets.push({
-                    label: 'Polar %',
-                    data: validData.map(p => ({ x: new Date(p.timestamp), y: p.polar_ratio })),
+                    label: 'Polar Target Speed (knots)',
+                    data: validData.map((p, i) => ({ x: chartUtcDate(p.timestamp), y: smoothedPolar[i] })),
                     borderColor: '#4caf50',
                     borderDash: [5, 3],
                     borderWidth: 1.5,
                     pointRadius: 0,
                     fill: false,
                     tension: 0.4,
-                    yAxisID: 'y1'
+                    yAxisID: 'y'
                 });
             }
 
@@ -1225,24 +1519,11 @@
                 x: getTimeXScale(colors)
             };
 
-            if (hasPolar) {
-                scales.y1 = {
-                    type: 'linear',
-                    position: 'right',
-                    min: 0,
-                    max: 150,
-                    title: { display: true, text: 'Polar %', color: colors.text },
-                    ticks: { color: colors.text, callback: function(v) { return v + '%'; } },
-                    grid: { display: false }
-                };
-            }
-
             const plugins = {
                 legend: {
                     display: hasPolar,
                     labels: {
-                        color: colors.text,
-                        filter: item => item.text !== '_polar_ref'
+                        color: colors.text
                     }
                 },
                 title: {
@@ -1294,7 +1575,7 @@
                     heading = heading - 360;
                 }
                 return {
-                    x: new Date(point.timestamp),
+                    x: chartUtcDate(point.timestamp),
                     y: heading
                 };
             });
@@ -1365,24 +1646,47 @@
             const colors = getChartColors();
 
             // Filter out data points where wind speed is not available
-            const validData = trackData.filter(point => point.average_wind_speed_kn !== null && point.average_wind_speed_kn !== undefined);
-
-            // Convert data to time-scale format with proper Date objects
-            const chartData = validData.map(point => ({
-                x: new Date(point.timestamp),
+            const validSpeedData = trackData.filter(point => point.average_wind_speed_kn !== null && point.average_wind_speed_kn !== undefined);
+            const speedChartData = validSpeedData.map(point => ({
+                x: chartUtcDate(point.timestamp),
                 y: point.average_wind_speed_kn
             }));
 
+            // Filter out data points where wind angle is not available
+            const validAngleData = trackData.filter(point => point.average_wind_angle_deg !== null && point.average_wind_angle_deg !== undefined);
+            const angleChartData = validAngleData.map(point => {
+                let direction = point.average_wind_angle_deg;
+                if (direction > 180) {
+                    direction = direction - 360;
+                }
+                return {
+                    x: chartUtcDate(point.timestamp),
+                    y: direction
+                };
+            });
+
             const datasets = [{
                 label: 'Wind Speed (knots)',
-                data: chartData,
+                data: speedChartData,
                 borderColor: '#27ae60',
                 backgroundColor: 'rgba(39, 174, 96, 0.1)',
                 fill: true,
                 tension: 0.1,
                 pointRadius: 0,
                 borderWidth: 1,
-                pointHoverRadius: 5
+                pointHoverRadius: 5,
+                yAxisID: 'y'
+            }, {
+                label: 'Wind Angle (degrees)',
+                data: angleChartData,
+                borderColor: '#f39c12',
+                backgroundColor: 'rgba(243, 156, 18, 0.1)',
+                fill: false,
+                tension: 0.1,
+                pointRadius: 0,
+                pointHoverRadius: 5,
+                borderWidth: 1,
+                yAxisID: 'y1'
             }];
 
             return new Chart(ctx, {
@@ -1390,8 +1694,11 @@
                 data: { datasets },
                 options: {
                     maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
                     scales: {
                         y: {
+                            type: 'linear',
+                            position: 'left',
                             beginAtZero: true,
                             title: {
                                 display: true,
@@ -1401,98 +1708,40 @@
                             ticks: { color: colors.text },
                             grid: { color: colors.grid }
                         },
-                        x: getTimeXScale(colors)
-                    },
-                    plugins: {
-                        legend: {
-                            display: false,
-                            labels: { color: colors.text }
-                        },
-                        title: {
-                            display: true,
-                            text: 'True Wind Speed (TWS)',
-                            color: colors.text
-                        }
-                    }
-                }
-            });
-        }
-
-        function createWindDirectionChart(trackData, normalized = false) {
-            const ctx = document.getElementById('windDirectionChart').getContext('2d');
-            const colors = getChartColors();
-
-            // Filter out data points where wind direction is not available
-            const validData = trackData.filter(point => point.average_wind_angle_deg !== null && point.average_wind_angle_deg !== undefined);
-
-            // Convert data to time-scale format with proper Date objects
-            const chartData = validData.map(point => {
-                let direction = point.average_wind_angle_deg;
-                if (normalized && direction > 180) {
-                    direction = direction - 360;
-                }
-                return {
-                    x: new Date(point.timestamp),
-                    y: direction
-                };
-            });
-
-            const datasets = [{
-                label: 'Wind Direction (degrees)',
-                data: chartData,
-                borderColor: '#f39c12',
-                backgroundColor: 'rgba(243, 156, 18, 0.1)',
-                fill: true,
-                tension: 0.1,
-                pointRadius: 0,
-                pointHoverRadius: 5,
-                borderWidth: 1
-            }];
-
-            const showLegend = false;
-
-            return new Chart(ctx, {
-                type: 'line',
-                data: { datasets },
-                options: {
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: {
-                            min: normalized ? -180 : 0,
-                            max: normalized ? 180 : 360,
+                        y1: {
+                            type: 'linear',
+                            position: 'right',
+                            min: -180,
+                            max: 180,
                             title: {
                                 display: true,
-                                text: 'Wind Direction (degrees)',
+                                text: 'Wind Angle (degrees)',
                                 color: colors.text
                             },
                             ticks: {
                                 stepSize: 30,
                                 color: colors.text,
                                 callback: function(value) {
-                                    if (normalized) {
-                                        // For normalized scale: -180..180 where 0=N, ±180=S
-                                        const normalizedValue = (value + 360) % 360;
-                                        const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
-                                        return directions[Math.round(normalizedValue / 45) % 8] + ' (' + value + '°)';
-                                    } else {
-                                        // For standard scale: 0..360
-                                        const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
-                                        return directions[Math.round(value / 45) % 8] + ' (' + value + '°)';
+                                    if (value === 0 || value === 180 || value === -180) {
+                                        return value + '°';
                                     }
+                                    const side = value > 0 ? 'S' : 'P';
+                                    return Math.abs(value) + '° ' + side;
                                 }
                             },
-                            grid: { color: colors.grid }
+                            grid: { display: false }
                         },
                         x: getTimeXScale(colors)
                     },
                     plugins: {
                         legend: {
-                            display: showLegend,
-                            labels: { color: colors.text }
+                            display: true,
+                            labels: { color: colors.text },
+                            position: 'bottom'
                         },
                         title: {
                             display: true,
-                            text: 'True Wind Direction (TWD)',
+                            text: 'True Wind Speed (TWS) & Angle (TWA)',
                             color: colors.text
                         }
                     }
@@ -1519,7 +1768,7 @@
 
             // Convert from Pascals to millibars (1 mbar = 100 Pa), use time-based x-axis
             const chartData = pressureData.map(point => ({
-                x: new Date(point.timestamp),
+                x: chartUtcDate(point.timestamp),
                 y: point.avg_value / 100
             }));
 
@@ -1582,7 +1831,7 @@
             const windDirData = metricData.map(point => {
                 let direction = point.avg_value;
                 if (normalized && direction > 180) direction = direction - 360;
-                return { x: new Date(point.timestamp), y: direction };
+                return { x: chartUtcDate(point.timestamp), y: direction };
             });
 
             // Build datasets for wind direction
@@ -1601,7 +1850,7 @@
 
             // Add wind speed dataset if available (also time-based)
             if (windSpeedData && windSpeedData.length > 0) {
-                const windSpeedChartData = windSpeedData.map(point => ({ x: new Date(point.timestamp), y: point.avg_value }));
+                const windSpeedChartData = windSpeedData.map(point => ({ x: chartUtcDate(point.timestamp), y: point.avg_value }));
                 datasets.push({
                     label: 'Wind Speed (knots)',
                     data: windSpeedChartData,
@@ -1784,7 +2033,7 @@
                                     const distance = context.parsed.r;
                                     const maxSpeed = maxSpeeds[context.dataIndex];
                                     return [
-                                        `Direction: ${direction}°`,
+                                        `TWD: ${direction}°`,
                                         `Wind Distance: ${distance.toFixed(3)} hours·knots`,
                                         `Max Wind Speed: ${maxSpeed.toFixed(1)} knots`
                                     ];
@@ -1793,7 +2042,7 @@
                         },
                         title: {
                             display: true,
-                            text: 'Wind Speed Analytics (NM)',
+                            text: 'Wind Analytics (NM)',
                             color: colors.text
                         }
                     },
@@ -1807,6 +2056,104 @@
                             },
                             grid: { color: colors.grid },
                             ticks: { color: colors.text, backdropColor: colors.background },
+                            // Buckets are ordered 0..355° clockwise from top (index i = i*5°);
+                            // only label every 15° to keep the ring readable.
+                            pointLabels: {
+                                display: true,
+                                color: colors.text,
+                                font: { size: 10 },
+                                callback: function(_label, index) {
+                                    const angle = index * 5;
+                                    return angle % 15 === 0 ? angle + '°' : '';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function createTwaDistributionChart(twaDistData) {
+            const ctx = document.getElementById('twaDistributionChart').getContext('2d');
+            const colors = getChartColors();
+
+            // Buckets come back as the signed lower bound (-180..175). Chart.js polarArea
+            // places index 0 at the top and lays out slices clockwise, so reorder buckets
+            // into compass order (0..355) to get a wind-rose layout: dead ahead at top,
+            // starboard (positive TWA) to the right, port (negative TWA) to the left.
+            const indices = twaDistData.angles.map((_, i) => i);
+            indices.sort((i, j) => {
+                const na = (twaDistData.angles[i] + 360) % 360;
+                const nb = (twaDistData.angles[j] + 360) % 360;
+                return na - nb;
+            });
+
+            const labels = indices.map(i => {
+                const a = twaDistData.angles[i];
+                const mid = a + 2.5;
+                const side = mid < 0 ? 'P' : 'S';
+                const lower = Math.abs(a);
+                const upper = Math.abs(a + 5);
+                return Math.min(lower, upper) + '-' + Math.max(lower, upper) + '° ' + side;
+            });
+            const data = indices.map(i => twaDistData.distance[i]);
+
+            return new Chart(ctx, {
+                type: 'polarArea',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'Distance Sailed (NM)',
+                        data,
+                        backgroundColor: getComputedStyle(document.documentElement).getPropertyValue('--sailing-color').trim(),
+                        borderColor: getComputedStyle(document.documentElement).getPropertyValue('--sailing-color').trim(),
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    maintainAspectRatio: true,
+                    backgroundColor: colors.background,
+                    plugins: {
+                        legend: { display: false, labels: { color: colors.text } },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return 'Distance Sailed: ' + context.parsed.r.toFixed(2) + ' NM';
+                                }
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Distance Sailed by True Wind Angle (TWA)',
+                            color: colors.text
+                        }
+                    },
+                    scales: {
+                        r: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Distance (nautical miles)',
+                                color: colors.text
+                            },
+                            grid: { color: colors.grid },
+                            ticks: { color: colors.text, backdropColor: colors.background },
+                            // Reordered buckets sit at index*5° clockwise from top (0=dead
+                            // ahead, 180=dead astern). Label every 15°, magnitude only,
+                            // with S on the starboard (right) half and P on the port (left) half.
+                            pointLabels: {
+                                display: true,
+                                color: colors.text,
+                                font: { size: 10 },
+                                callback: function(_label, index) {
+                                    const position = index * 5;
+                                    if (position % 15 !== 0) return '';
+                                    if (position === 0 || position === 180) return position + '°';
+                                    return position < 180
+                                        ? position + '° S'
+                                        : (360 - position) + '° P';
+                                }
+                            }
                         }
                     }
                 }
@@ -1830,7 +2177,7 @@
                 });
             }
 
-            const chartData = cabinTempData.map(point => ({ x: new Date(point.timestamp), y: point.avg_value }));
+            const chartData = cabinTempData.map(point => ({ x: chartUtcDate(point.timestamp), y: point.avg_value }));
 
             return new Chart(ctx, {
                 type: 'line',
@@ -1884,7 +2231,7 @@
                 });
             }
 
-            const chartData = humidityData.map(point => ({ x: new Date(point.timestamp), y: point.avg_value }));
+            const chartData = humidityData.map(point => ({ x: chartUtcDate(point.timestamp), y: point.avg_value }));
 
             return new Chart(ctx, {
                 type: 'line',
@@ -1940,7 +2287,7 @@
                 });
             }
 
-            const chartData = rollData.map(point => ({ x: new Date(point.timestamp), y: point.avg_value }));
+            const chartData = rollData.map(point => ({ x: chartUtcDate(point.timestamp), y: point.avg_value }));
 
             return new Chart(ctx, {
                 type: 'line',
@@ -2112,7 +2459,9 @@
                 }
                 if (!closest) continue;
 
-                const hourLabel = new Date(hourMs).toISOString().slice(11, 16); // HH:MM UTC
+                // "Z" (Zulu time) is the compact maritime notation for UTC — used here
+                // instead of " UTC" because the badge is only 48px wide.
+                const hourLabel = new Date(hourMs).toISOString().slice(11, 16) + 'Z';
 
                 const svg = [
                     '<svg xmlns="http://www.w3.org/2000/svg" width="50" height="32">',
@@ -2129,10 +2478,105 @@
                         iconSize: [50, 32],
                         iconAnchor: [25, 28]
                     }),
-                    title: hourLabel + ' UTC',
+                    title: hourLabel,
                     zIndexOffset: 500
                 }).addTo(map);
             }
+        }
+
+        // Wind arrows: originate at track points, pointing toward the direction
+        // the wind is blowing. Length scales with wind speed; color follows the
+        // same blue-green-yellow-red wind intensity scale used in plan.html.
+        // Density (spacing between arrows) is fixed in screen pixels, so it is
+        // re-sampled on zoom to keep ~20-30px between arrows at any zoom level.
+        const WIND_ARROW_MIN_SPACING_PX = 25;
+        const WIND_ARROW_MIN_LEN_PX = 14;
+        const WIND_ARROW_MAX_LEN_PX = 46;
+        const WIND_ARROW_SPEED_SCALE_PX_PER_KN = 2.5;
+        const WIND_ARROW_HEAD_PX = 8;
+
+        function interpolateColorStops(speed, stops) {
+            const kn = Math.max(speed || 0, 0);
+            if (kn <= stops[0][0]) return `rgb(${stops[0][1].join(',')})`;
+            if (kn >= stops[stops.length - 1][0]) return `rgb(${stops[stops.length - 1][1].join(',')})`;
+            for (let i = 1; i < stops.length; i++) {
+                if (kn <= stops[i][0]) {
+                    const t = (kn - stops[i-1][0]) / (stops[i][0] - stops[i-1][0]);
+                    const c = stops[i-1][1].map((a, j) => Math.round(a + t * (stops[i][1][j] - a)));
+                    return `rgb(${c.join(',')})`;
+                }
+            }
+        }
+
+        function windColor(speed) {
+            return interpolateColorStops(speed, [
+                [0,  [170, 170, 170]],
+                [4,  [30,  160, 255]],
+                [7,  [0,   210, 180]],
+                [10, [0,   190,  60]],
+                [16, [220, 210,   0]],
+                [22, [255, 140,   0]],
+                [28, [220,  30,   0]],
+            ]);
+        }
+
+        function windArrowIcon(bearingDeg, lenPx, color) {
+            const R = WIND_ARROW_MAX_LEN_PX + WIND_ARROW_HEAD_PX + 2;
+            const headW = WIND_ARROW_HEAD_PX * 0.7;
+            const svg = [
+                '<svg xmlns="http://www.w3.org/2000/svg" width="' + (2 * R) + '" height="' + (2 * R) +
+                    '" viewBox="' + (-R) + ' ' + (-R) + ' ' + (2 * R) + ' ' + (2 * R) + '">',
+                '<g transform="rotate(' + bearingDeg.toFixed(1) + ')">',
+                '<line x1="0" y1="0" x2="0" y2="' + (-lenPx) + '" stroke="' + color + '" stroke-width="2.5" stroke-linecap="round"/>',
+                '<path d="M 0,' + (-lenPx - WIND_ARROW_HEAD_PX) + ' L ' + (-headW) + ',' + (-lenPx + 2) +
+                    ' L ' + headW + ',' + (-lenPx + 2) + ' Z" fill="' + color + '"/>',
+                '</g>',
+                '</svg>'
+            ].join('');
+
+            return L.icon({
+                iconUrl: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
+                iconSize: [2 * R, 2 * R],
+                iconAnchor: [R, R]
+            });
+        }
+
+        function initWindArrows(map, trackPoints) {
+            const validPoints = trackPoints.filter(p =>
+                p.average_wind_speed_kn != null &&
+                p.average_wind_angle_deg != null &&
+                p.average_heading_deg != null
+            );
+            if (validPoints.length === 0) return;
+
+            const layer = L.layerGroup().addTo(map);
+
+            function redraw() {
+                layer.clearLayers();
+                let lastPixel = null;
+                for (const pt of validPoints) {
+                    const pixel = map.latLngToLayerPoint([pt.latitude, pt.longitude]);
+                    if (lastPixel && pixel.distanceTo(lastPixel) < WIND_ARROW_MIN_SPACING_PX) continue;
+                    lastPixel = pixel;
+
+                    let bearing = (pt.average_heading_deg + pt.average_wind_angle_deg + 180) % 360;
+                    if (bearing < 0) bearing += 360;
+
+                    const len = Math.min(
+                        WIND_ARROW_MAX_LEN_PX,
+                        WIND_ARROW_MIN_LEN_PX + pt.average_wind_speed_kn * WIND_ARROW_SPEED_SCALE_PX_PER_KN
+                    );
+
+                    L.marker([pt.latitude, pt.longitude], {
+                        icon: windArrowIcon(bearing, len, windColor(pt.average_wind_speed_kn)),
+                        interactive: false,
+                        zIndexOffset: -100
+                    }).addTo(layer);
+                }
+            }
+
+            redraw();
+            map.on('zoomend', redraw);
         }
 
         function initializeMap(trackData, isFullTrip, navStartTs, navEndTs) {
@@ -2181,7 +2625,13 @@
             currentMap = map;
 
             L.control.fullscreen({ position: 'topleft' }).addTo(map);
-            map.on('click', () => resetSegmentMarkers());
+            const measureTool = addMeasureTool(map, { position: 'topleft' });
+            map.on('click', (e) => {
+                if (measureTool.active) { measureTool.handleClick(e.latlng); return; }
+                resetSegmentMarkers();
+            });
+
+            addLatLonPanel(map, 'bottomleft');
 
             map.fitBounds([
                 [minLat - latPadding, minLng - lngPadding],
@@ -2189,10 +2639,13 @@
             ]);
 
             const hoverPopup = L.popup({ closeButton: false, autoPan: false });
+            markTime('map_before_colored_track', { points: validTrackPoints.length });
             createColoredTrack(map, validTrackPoints, hoverPopup, isFullTrip ? 4.0 : 1.0);
+            markTime('map_after_colored_track', { points: validTrackPoints.length });
 
             if (!isFullTrip) {
                 addHourlyMarkers(map, validTrackPoints);
+                initWindArrows(map, validTrackPoints);
             }
 
             if (validTrackPoints.length > 0) {
@@ -2300,8 +2753,8 @@
                 const heading = nearest.average_heading_deg != null ? nearest.average_heading_deg.toFixed(0) + '°' : 'N/A';
                 const wind    = nearest.average_wind_speed_kn != null ? nearest.average_wind_speed_kn.toFixed(1) + ' kn' : 'N/A';
                 let absWindDir = 'N/A';
-                if (nearest.absolute_wind_direction_deg != null && nearest.average_heading_deg != null) {
-                    let d = (nearest.absolute_wind_direction_deg + nearest.average_heading_deg) % 360;
+                if (nearest.average_wind_angle_deg != null && nearest.average_heading_deg != null) {
+                    let d = (nearest.average_wind_angle_deg + nearest.average_heading_deg) % 360;
                     if (d < 0) d += 360;
                     absWindDir = d.toFixed(0) + '°';
                 }

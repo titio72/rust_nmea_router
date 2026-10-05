@@ -10,8 +10,9 @@ use std::{
 };
 use tracing::{info, warn};
 
-use socketcan::CanSocket;
-use nmea2k::{CanBus, Identifier, MessageHandler, N2kFrame, N2kStreamReader};
+// `CanSocket` comes from nmea2k rather than socketcan directly: off Linux it resolves to the
+// crate's no-op mock backend, which keeps this loop platform-independent.
+use nmea2k::{CanBus, CanSocket, Identifier, MessageHandler, N2kFrame, N2kStreamReader};
 
 use crate::app_metrics::{AppMetrics, MetricsLogger};
 use crate::config::Config;
@@ -19,6 +20,7 @@ use crate::db::{HealthCheckManager, VesselDatabase, is_connection_error};
 use crate::environmental_monitor::EnvironmentalMonitor;
 use crate::environmental_status_handler::EnvironmentalStatusHandler;
 use crate::frame_filter::{should_process_frame_by_id, should_process_n2k_message};
+use crate::health::{DbKind, HealthHandle, Stream};
 use crate::ais_target_cache::AisTargetCache;
 use crate::signalk_broadcaster::SignalKBroadcaster;
 use crate::time_monitor::TimeSyncStatus;
@@ -33,6 +35,19 @@ fn read_db(vessel_db: &Arc<RwLock<VesselDatabase>>) -> std::sync::RwLockReadGuar
         warn!("VesselDatabase RwLock was poisoned; recovering inner value");
         poisoned.into_inner()
     })
+}
+
+/// Map an assembled message to the stream the health monitor tracks, if any.
+fn stream_of(message: &nmea2k::pgns::N2kMessage) -> Option<Stream> {
+    use nmea2k::pgns::N2kMessage;
+    match message {
+        N2kMessage::PositionRapidUpdate(_) => Some(Stream::Position),
+        N2kMessage::CogSogRapidUpdate(_) => Some(Stream::CogSog),
+        N2kMessage::NMEASystemTime(_) => Some(Stream::SystemTime),
+        N2kMessage::VesselHeading(_) => Some(Stream::Heading),
+        N2kMessage::WindData(_) => Some(Stream::Wind),
+        _ => None,
+    }
 }
 
 /// Run `op` against the database. On a connection error, reconnect once and retry.
@@ -96,6 +111,18 @@ pub struct RouterLoop {
     pub(crate) metrics: AppMetrics,
     metrics_logger: MetricsLogger,
     db_health_check: HealthCheckManager,
+    // Health monitor (recording side)
+    health: HealthHandle,
+    // Last observed moored state, used by "Auto On" to detect moored -> moving edges
+    last_moored: Option<bool>,
+}
+
+/// Records the latest moored state and reports whether it just flipped from moored to
+/// moving. The first observation only seeds the state, so startup never counts as an edge.
+fn mooring_departure(last: &mut Option<bool>, moored: bool) -> bool {
+    let departed = *last == Some(true) && !moored;
+    *last = Some(moored);
+    departed
 }
 
 impl RouterLoop {
@@ -116,6 +143,7 @@ impl RouterLoop {
         metrics: AppMetrics,
         metrics_logger: MetricsLogger,
         db_health_check: HealthCheckManager,
+        health: HealthHandle,
     ) -> Self {
         Self {
             socket,
@@ -133,6 +161,8 @@ impl RouterLoop {
             metrics,
             metrics_logger,
             db_health_check,
+            health,
+            last_moored: None,
         }
     }
 
@@ -140,9 +170,11 @@ impl RouterLoop {
     /// `process_n2k_message`, and handles periodic tasks (metrics logging, DB health check).
     pub fn run(&mut self) -> ! {
         loop {
+            self.health.record_heartbeat(Instant::now());
             match CanBus::read_nmea2k_frame(&self.socket) {
                 Ok((extended_id, data)) => {
                     self.metrics.can_frames += 1;
+                    self.health.record_frame(Instant::now());
 
                     let id = Identifier::from_can_id(extended_id);
                     if !should_process_frame_by_id(&self.config, id) {
@@ -162,6 +194,7 @@ impl RouterLoop {
 
                         let now = Instant::now();
                         self.process_n2k_message(&n2k_frame, now);
+                        self.health.record_work(Instant::now(), now.elapsed());
                     }
                 }
                 Err(e) => {
@@ -191,7 +224,10 @@ impl RouterLoop {
             self.metrics_logger.check_and_log(&mut self.metrics);
 
             let db_url = self.config.database.connection.connection_url();
-            match self.db_health_check.check_and_reconnect(&self.vessel_db, &db_url) {
+            let health_check_started = Instant::now();
+            let health_check_result = self.db_health_check.check_and_reconnect(&self.vessel_db, &db_url);
+            self.health.record_work(Instant::now(), health_check_started.elapsed());
+            match health_check_result {
                 Ok(true) => {
                     // Reconnection occurred — reload trip state
                     let db = read_db(&self.vessel_db);
@@ -212,6 +248,10 @@ impl RouterLoop {
     /// going through the CAN socket. `now` must be passed by the caller — never call
     /// `Instant::now()` inside business logic.
     pub(crate) fn process_n2k_message(&mut self, frame: &N2kFrame, now: Instant) {
+        if let Some(stream) = stream_of(&frame.message) {
+            self.health.record_stream(stream, now);
+        }
+
         self.time_monitor.handle_message(frame, now);
 
         if let Ok(mut cache) = self.ais_target_cache.lock() {
@@ -229,6 +269,7 @@ impl RouterLoop {
         let sync = self.time_monitor.time_sync_status();
         self.metrics.gnss_time_skew = sync.skew;
         self.metrics.gnss_time_skew_status = sync.status;
+        self.health.record_time_sync(sync.status, now);
 
         /* debugging stuff */
         /*
@@ -243,8 +284,23 @@ impl RouterLoop {
         self.update_signalk_time_sync_status(&sync);
 
         if sync.status == TimeSyncStatus::Synchronized {
-            if self.is_vessel_tracking_enabled() {
+            let tracking_enabled = self.is_vessel_tracking_enabled();
+            let auto_on = self.is_auto_on_enabled();
+            // The vessel monitor must keep running while tracking is off if Auto On is
+            // armed, otherwise it can never see the boat start moving.
+            if tracking_enabled || auto_on {
                 self.vessel_monitor.handle_message(frame, now);
+            }
+            if auto_on {
+                let moored = self.vessel_monitor.is_moored(now);
+                if mooring_departure(&mut self.last_moored, moored) {
+                    self.apply_auto_on();
+                }
+            } else {
+                self.last_moored = None;
+            }
+
+            if tracking_enabled || self.is_vessel_tracking_enabled() {
                 if self.is_signalk_enabled() {
                     let moored = self.vessel_monitor.is_moored(now);
                     self.broadcast_mooring_status(moored, now);
@@ -278,29 +334,37 @@ impl RouterLoop {
     fn handle_vessel_status_write(
         &mut self,
         vessel_status: crate::vessel_monitor::VesselStatus,
-        _now: Instant,
+        now: Instant,
     ) {
         let db_url = self.config.database.connection.connection_url();
-        if let Some(true) = with_db_retry(
+        let result = with_db_retry(
             &self.vessel_db,
             &mut self.db_health_check,
             &db_url,
             "vessel status write",
             |db| self.vessel_status_handler.handle_vessel_status(db, &vessel_status),
-        ) {
+        );
+        self.health
+            .record_db_result(DbKind::Vessel, result.is_some(), now);
+        if let Some(true) = result {
             self.metrics.vessel_reports += 1;
         }
     }
 
     fn handle_env_status_write(&mut self, now: Instant) {
         let db_url = self.config.database.connection.connection_url();
-        if let Some(count) = with_db_retry(
+        let result = with_db_retry(
             &self.vessel_db,
             &mut self.db_health_check,
             &db_url,
             "environmental write",
             |db| self.environmental_status_handler.handle_environment_status(db, &mut self.env_monitor, now),
-        ) {
+        );
+        // `Some(0)` means nothing was due, i.e. no write was attempted: not evidence of health.
+        if result.is_none() || result.is_some_and(|count| count > 0) {
+            self.health.record_db_result(DbKind::Env, result.is_some(), now);
+        }
+        if let Some(count) = result {
             self.metrics.env_reports += count as u64;
         }
     }
@@ -313,6 +377,25 @@ impl RouterLoop {
     fn is_vessel_tracking_enabled(&self) -> bool {
         let db = read_db(&self.vessel_db);
         db.get_system_status("tracking_enabled").unwrap_or(false)
+    }
+
+    fn is_auto_on_enabled(&self) -> bool {
+        let db = read_db(&self.vessel_db);
+        db.get_system_status("auto_on_enabled").unwrap_or(false)
+    }
+
+    /// Switch position and meteo tracking on after the vessel leaves its mooring.
+    fn apply_auto_on(&self) {
+        let db = read_db(&self.vessel_db);
+        for key in ["tracking_enabled", "metrics_enabled"] {
+            if db.get_system_status(key).unwrap_or(false) {
+                continue;
+            }
+            match db.set_system_status(key, true) {
+                Ok(()) => info!(key, "Auto On: vessel started moving, enabled"),
+                Err(e) => warn!(key, error = %e, "Auto On: failed to enable"),
+            }
+        }
     }
 
     fn is_signalk_enabled(&self) -> bool {
@@ -345,5 +428,128 @@ impl RouterLoop {
             }],
         };
         let _ = channels.send(delta);
+    }
+}
+
+/// Open the configured CAN interface, build every monitor and handler the pipeline needs,
+/// and hand control to [`RouterLoop::run`]. Never returns.
+///
+/// Called by `main` once the database and web server are up and `can.enabled` is true.
+pub fn run_can_pipeline(
+    config: Config,
+    vessel_db: Arc<RwLock<VesselDatabase>>,
+    ais_target_cache: Arc<Mutex<AisTargetCache>>,
+    udp_broadcaster: UdpBroadcaster,
+    health: HealthHandle,
+) -> ! {
+    let interface = &config.can.interface;
+    info!("Opening CAN interface: {}", interface);
+
+    let mut socket = CanBus::open_can_socket_with_retry(interface);
+    if let Err(e) = CanBus::configure_nmea2k_socket(&mut socket) {
+        eprintln!("Fatal: Failed to configure CAN socket: {}", e);
+        eprintln!("CAN interface: {}", interface);
+        std::process::exit(1);
+    }
+
+    info!("Listening for NMEA2000 messages");
+
+    // Create NMEA2000 stream reader
+    let reader = N2kStreamReader::new();
+
+    // Create vessel monitor with config
+    info!(
+        "Creating vessel monitor with underway interval: {} seconds",
+        config.database.vessel_status.interval_underway_seconds
+    );
+    let vessel_monitor = VesselMonitor::new(
+        config.database.vessel_status.interval_underway(),
+        config.database.vessel_status.interval_moored(),
+    );
+
+    // Create time monitor
+    let time_monitor = crate::time_monitor::TimeMonitor::new(
+        config.time.skew_threshold_ms,
+        config.time.set_system_time,
+    );
+
+    // Create environmental monitor with config
+    let env_monitor = EnvironmentalMonitor::new();
+
+    // Create vessel status handler
+    let mut vessel_status_handler = VesselStatusHandler::new();
+
+    // Create environmental status handler
+    let environmental_status_handler =
+        EnvironmentalStatusHandler::new(&config.database.environmental);
+
+    // Load the last trip from database
+    {
+        let db = read_db(&vessel_db);
+        vessel_status_handler.load_last_trip(&db);
+        vessel_status_handler.load_last_vessel_status(&db);
+    }
+
+    // Application metrics tracking
+    let metrics = AppMetrics::new();
+    let metrics_logger = MetricsLogger::new(Duration::from_secs(60));
+
+    // Database health check manager
+    let db_health_check = HealthCheckManager::new(
+        Duration::from_secs(60),
+        config.database.connection.pool_min,
+        config.database.connection.pool_max,
+    );
+
+    // Create SignalK broadcaster (if enabled)
+    let signalk_broadcaster = SignalKBroadcaster::new(
+        config.signalk.rate_limit_ms,
+        config.signalk.vessel_uuid.clone(),
+    );
+
+    RouterLoop::new(
+        socket,
+        reader,
+        config,
+        vessel_monitor,
+        time_monitor,
+        env_monitor,
+        vessel_status_handler,
+        environmental_status_handler,
+        udp_broadcaster,
+        signalk_broadcaster,
+        ais_target_cache,
+        vessel_db,
+        metrics,
+        metrics_logger,
+        db_health_check,
+        health,
+    )
+    .run()
+}
+
+#[cfg(test)]
+mod auto_on_tests {
+    use super::mooring_departure;
+
+    #[test]
+    fn first_observation_is_never_an_edge() {
+        let mut last = None;
+        assert!(!mooring_departure(&mut last, false));
+        assert_eq!(last, Some(false));
+    }
+
+    #[test]
+    fn moored_to_moving_fires_once() {
+        let mut last = Some(true);
+        assert!(mooring_departure(&mut last, false));
+        assert!(!mooring_departure(&mut last, false));
+    }
+
+    #[test]
+    fn staying_moored_or_arriving_does_not_fire() {
+        let mut last = Some(false);
+        assert!(!mooring_departure(&mut last, true));
+        assert!(!mooring_departure(&mut last, true));
     }
 }

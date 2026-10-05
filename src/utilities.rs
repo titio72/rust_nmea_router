@@ -138,6 +138,27 @@ pub fn average_angle(angles_deg: &[f64]) -> f64 {
     (avg_radians.to_degrees() + 360.0) % 360.0
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointOfSail {
+    Upwind,
+    Reaching,
+    Running,
+}
+
+/// Classify a point of sail from a true wind angle (0-360 deg, relative to the bow).
+/// Folds to 0-180 deg (symmetric port/starboard), then buckets on fixed thresholds:
+/// upwind <=60 deg, reaching 60-120 deg, running >=120 deg.
+pub fn point_of_sail_from_twa(wind_angle_deg: f64) -> PointOfSail {
+    let folded = wind_angle_deg.min(360.0 - wind_angle_deg);
+    if folded <= 60.0 {
+        PointOfSail::Upwind
+    } else if folded < 120.0 {
+        PointOfSail::Reaching
+    } else {
+        PointOfSail::Running
+    }
+}
+
 /// Calculate the initial heading (bearing) from position1 to position2 using the haversine formula.
 /// All lat/lon values are in degrees. Returns heading in degrees (0 = North, 90 = East).
 pub fn haversine_heading(lat1_deg: f64, lon1_deg: f64, lat2_deg: f64, lon2_deg: f64) -> f64 {
@@ -805,5 +826,27 @@ mod tests {
         let (lat, lon) = advance_position(0.0, 0.0, 90.0, 60.0);
         assert!(lat.abs() < 0.01, "lat should stay near 0, got {}", lat);
         assert!(lon > 0.5, "lon should increase, got {}", lon);
+    }
+
+    #[test]
+    fn test_point_of_sail_upwind_boundaries() {
+        assert_eq!(point_of_sail_from_twa(0.0), PointOfSail::Upwind);
+        assert_eq!(point_of_sail_from_twa(60.0), PointOfSail::Upwind);
+        assert_eq!(point_of_sail_from_twa(300.0), PointOfSail::Upwind); // folds to 60
+    }
+
+    #[test]
+    fn test_point_of_sail_reaching_boundaries() {
+        assert_eq!(point_of_sail_from_twa(60.1), PointOfSail::Reaching);
+        assert_eq!(point_of_sail_from_twa(90.0), PointOfSail::Reaching);
+        assert_eq!(point_of_sail_from_twa(119.9), PointOfSail::Reaching);
+        assert_eq!(point_of_sail_from_twa(270.0), PointOfSail::Reaching); // folds to 90
+    }
+
+    #[test]
+    fn test_point_of_sail_running_boundaries() {
+        assert_eq!(point_of_sail_from_twa(120.0), PointOfSail::Running);
+        assert_eq!(point_of_sail_from_twa(180.0), PointOfSail::Running);
+        assert_eq!(point_of_sail_from_twa(185.0), PointOfSail::Running); // folds to 175
     }
 }

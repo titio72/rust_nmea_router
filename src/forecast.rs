@@ -31,6 +31,8 @@ pub struct RouteOverlayPoint {
     pub speed_kn: Option<f64>,
     pub twa_deg: Option<f64>,
     pub wind_model: Option<String>,
+    pub relative_wind_deg: Option<f64>,
+    pub heading_deg: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +42,8 @@ pub struct RouteTrackPoint {
     pub time: DateTime<Utc>,
     pub speed_kn: Option<f64>,
     pub twa_deg: Option<f64>,
+    pub relative_wind_deg: Option<f64>,
+    pub heading_deg: Option<f64>,
 }
 
 // ── Open-Meteo deserialisation types (private) ────────────────────────────────
@@ -98,6 +102,38 @@ impl<T> OneOrMany<T> {
 
 const MAX_DISTANCE_NM: f64 = 25.0;
 
+// ── Pre-parsed forecast lookup ────────────────────────────────────────────────
+
+/// A `FetchWithHourly` with its hourly timestamps parsed once. Wind lookups run many times
+/// (up to tens of thousands per isochrone route) against the same, unchanging fetch data —
+/// re-parsing each `ForecastHourlyPoint.timestamp` string on every lookup dominates isochrone
+/// runtime. Callers should `parse_fetches()` once per request and reuse the result.
+pub(crate) struct ParsedFetch<'a> {
+    lat: f64,
+    lon: f64,
+    model: &'a str,
+    hourly: Vec<(DateTime<Utc>, &'a ForecastHourlyPoint)>,
+}
+
+pub(crate) fn parse_fetches(fetches: &[FetchWithHourly]) -> Vec<ParsedFetch<'_>> {
+    fetches
+        .iter()
+        .map(|f| ParsedFetch {
+            lat: f.lat,
+            lon: f.lon,
+            model: &f.model,
+            hourly: f.hourly
+                .iter()
+                .filter_map(|p| {
+                    DateTime::parse_from_rfc3339(&p.timestamp)
+                        .ok()
+                        .map(|t| (t.with_timezone(&Utc), p))
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 // ── Public functions ──────────────────────────────────────────────────────────
 
 /// Normalise true wind angle to 0–180°.
@@ -129,11 +165,14 @@ pub(crate) fn build_marine_bbox_url(lat_min: f64, lat_max: f64, lon_min: f64, lo
 }
 
 pub(crate) fn build_arome_bbox_url(lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) -> String {
-    // AROME France HD (~1.5 km via Open-Meteo) — short-term, wind only, no waves.
+    // AROME France (~2.5 km via Open-Meteo) — short-term, wind only, no waves.
+    // The 1.5 km "_hd" variant hits Open-Meteo's 1000-location cap on our configured
+    // forecast areas (a 0.7°×0.5° box already yields ~1900 HD grid points); this 2.5 km
+    // variant covers the same area in ~600 points, comfortably under the cap.
     format!(
         "https://api.open-meteo.com/v1/forecast\
          ?bounding_box={lat_min},{lon_min},{lat_max},{lon_max}\
-         &models=meteofrance_arome_france_hd\
+         &models=meteofrance_arome_france\
          &hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,cape\
          &wind_speed_unit=kn&forecast_days=2&timezone=UTC",
     )
@@ -291,22 +330,26 @@ pub fn parse_waypoints(s: &str) -> Result<Vec<(f64, f64)>, String> {
 }
 
 pub(crate) fn nearest_forecast_wind(
-    fetches: &[FetchWithHourly],
+    fetches: &[ParsedFetch],
     lat: f64,
     lon: f64,
     time: DateTime<Utc>,
-) -> Option<(f64, f64)> {
+) -> Option<(f64, f64, Option<f64>)> {
     let collect = |model: &str| -> Vec<(f64, f64, ForecastHourlyPoint)> {
         fetches
             .iter()
             .filter(|f| f.model == model)
+            // Cheap distance check before the per-point timestamp scan, so grid points far
+            // outside interpolation range (interpolate_idw's own MAX_DISTANCE_NM cutoff below)
+            // never pay for a nearest_hourly lookup they'd be discarded after anyway.
+            .filter(|f| haversine_distance_nm(lat, lon, f.lat, f.lon) <= MAX_DISTANCE_NM)
             .filter_map(|f| nearest_hourly(&f.hourly, time).map(|pt| (f.lat, f.lon, pt)))
             .collect()
     };
     let arome = collect("arome");
     let ecmwf = collect("ecmwf");
     let interp = interpolate_blended(lat, lon, &arome, &ecmwf)?;
-    Some((interp.wind_speed_kn?, interp.wind_direction_deg?))
+    Some((interp.wind_speed_kn?, interp.wind_direction_deg?, interp.wind_gust_kn))
 }
 
 /// Wind-aware step simulation: advances the vessel along the route, using polar performance
@@ -323,6 +366,7 @@ pub fn generate_route_track(
     motoring_speed_kn: f64,
     polar_efficiency: f64,
     min_sail_speed_kn: f64,
+    min_twa_deg: f64,
     polars: Option<&crate::polars::PolarTable>,
     fetches: &[FetchWithHourly],
 ) -> Vec<RouteTrackPoint> {
@@ -330,6 +374,7 @@ pub fn generate_route_track(
         return vec![];
     }
     let efficiency = polar_efficiency.clamp(0.01, 1.0);
+    let parsed = parse_fetches(fetches);
 
     let mut track: Vec<RouteTrackPoint> = Vec::new();
     let mut leg_start_time = departure;
@@ -342,7 +387,7 @@ pub fn generate_route_track(
         let mut t = leg_start_time;
 
         if track.is_empty() {
-            track.push(RouteTrackPoint { lat: pos.0, lon: pos.1, time: t, speed_kn: None, twa_deg: None });
+            track.push(RouteTrackPoint { lat: pos.0, lon: pos.1, time: t, speed_kn: None, twa_deg: None, relative_wind_deg: None, heading_deg: None });
         }
 
         loop {
@@ -352,35 +397,46 @@ pub fn generate_route_track(
             }
 
             let bearing = crate::utilities::haversine_heading(pos.0, pos.1, to_lat, to_lon);
+            // Single wind sample for this step, taken at its start position/time — reused for
+            // both the sail/motor decision below AND relative_wind_deg, so the two can never
+            // disagree (a prior version recomputed relative_wind_deg later from a separately
+            // re-interpolated end-of-step sample, which could silently differ from the sample
+            // that actually drove the decision).
+            let wind = nearest_forecast_wind(&parsed, pos.0, pos.1, t);
+            let relative_wind_deg = wind.map(|(_, wind_dir, _)| compute_twa(bearing, wind_dir));
 
-            let (speed_kn, twa) = match (nearest_forecast_wind(fetches, pos.0, pos.1, t), polars) {
-                (Some((wind_spd, wind_dir)), Some(p)) if wind_spd > 0.0 => {
+            let (speed_kn, twa) = match (wind, polars) {
+                (Some((wind_spd, wind_dir, _)), Some(p)) if wind_spd > 0.0 => {
                     let twa = compute_twa(bearing, wind_dir);
-                    match p.boat_speed(twa, wind_spd).filter(|&s| s > 0.0) {
-                        Some(raw) => {
-                            let eff = raw * efficiency;
-                            if eff >= min_sail_speed_kn {
-                                (eff, Some(twa))
-                            } else {
-                                (motoring_speed_kn, None) // polar speed too low — motor
+                    if twa < min_twa_deg {
+                        (motoring_speed_kn, None) // TWA below the user's minimum — motor
+                    } else {
+                        match p.boat_speed(twa, wind_spd).filter(|&s| s > 0.0) {
+                            Some(raw) => {
+                                let eff = raw * efficiency;
+                                if eff >= min_sail_speed_kn {
+                                    (eff, Some(twa))
+                                } else {
+                                    (motoring_speed_kn, None) // polar speed too low — motor
+                                }
                             }
+                            None => (motoring_speed_kn, None), // TWA below polar minimum — motor
                         }
-                        None => (motoring_speed_kn, None), // TWA below polar minimum — motor
                     }
                 }
                 _ => (motoring_speed_kn, None),
             };
 
             let hours_to_wp = remaining_nm / speed_kn;
-            let step_hours = hours_to_wp.min(1.0);
+            let step_hours = hours_to_wp.min(0.5);
             let dist_nm = speed_kn * step_hours;
 
             pos = crate::utilities::advance_position(pos.0, pos.1, bearing, dist_nm);
             t += Duration::seconds((step_hours * 3600.0).round() as i64);
 
-            track.push(RouteTrackPoint { lat: pos.0, lon: pos.1, time: t, speed_kn: Some(speed_kn), twa_deg: twa });
+            track.push(RouteTrackPoint { lat: pos.0, lon: pos.1, time: t, speed_kn: Some(speed_kn), twa_deg: twa, relative_wind_deg, heading_deg: Some(bearing) });
 
-            if hours_to_wp <= 1.0 {
+            if hours_to_wp <= 0.5 {
                 break;
             }
         }
@@ -399,13 +455,15 @@ pub fn compute_route_overlay(
     track: &[RouteTrackPoint],
     fetches: &[FetchWithHourly],
 ) -> Vec<RouteOverlayPoint> {
+    let parsed = parse_fetches(fetches);
     track
         .iter()
         .filter_map(|pt| {
             let collect = |model: &str| -> Vec<(f64, f64, ForecastHourlyPoint)> {
-                fetches
+                parsed
                     .iter()
                     .filter(|f| f.model == model)
+                    .filter(|f| haversine_distance_nm(pt.lat, pt.lon, f.lat, f.lon) <= MAX_DISTANCE_NM)
                     .filter_map(|f| nearest_hourly(&f.hourly, pt.time).map(|p| (f.lat, f.lon, p)))
                     .collect()
             };
@@ -426,25 +484,19 @@ pub fn compute_route_overlay(
                 speed_kn: pt.speed_kn,
                 twa_deg: pt.twa_deg,
                 wind_model: interp.wind_model,
+                relative_wind_deg: pt.relative_wind_deg,
+                heading_deg: pt.heading_deg,
             })
         })
         .collect()
 }
 
-fn nearest_hourly(hourly: &[ForecastHourlyPoint], ts: DateTime<Utc>) -> Option<ForecastHourlyPoint> {
+fn nearest_hourly(hourly: &[(DateTime<Utc>, &ForecastHourlyPoint)], ts: DateTime<Utc>) -> Option<ForecastHourlyPoint> {
     hourly
         .iter()
-        .min_by_key(|p| {
-            DateTime::parse_from_rfc3339(&p.timestamp)
-                .map(|t| (t.with_timezone(&Utc) - ts).num_seconds().unsigned_abs())
-                .unwrap_or(u64::MAX)
-        })
-        .filter(|p| {
-            DateTime::parse_from_rfc3339(&p.timestamp)
-                .map(|t| (t.with_timezone(&Utc) - ts).num_seconds().abs() < 7200)
-                .unwrap_or(false)
-        })
-        .cloned()
+        .min_by_key(|(t, _)| (*t - ts).num_seconds().unsigned_abs())
+        .filter(|(t, _)| (*t - ts).num_seconds().abs() < 7200)
+        .map(|(_, p)| (*p).clone())
 }
 
 fn interpolate_idw(
@@ -635,7 +687,8 @@ mod tests {
     fn test_arome_bbox_url_contains_expected_params() {
         let url = build_arome_bbox_url(43.0, 43.5, 8.0, 8.5);
         assert!(url.contains("bounding_box=43,8,43.5,8.5"), "url: {}", url);
-        assert!(url.contains("models=meteofrance_arome_france_hd"), "url: {}", url);
+        assert!(url.contains("models=meteofrance_arome_france"), "url: {}", url);
+        assert!(!url.contains("models=meteofrance_arome_france_hd"), "url: {}", url);
         assert!(url.contains("forecast_days=2"), "url: {}", url);
         assert!(url.contains("wind_speed_unit=kn"), "url: {}", url);
     }
@@ -688,10 +741,10 @@ mod tests {
     fn test_generate_route_track_point_count() {
         use chrono::TimeZone;
         let dep = Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap();
-        // Livorno → Capraia ≈ 35.9 nm at 5 kn → 7.18 h → ceil=8 → 8 hourly + 1 destination = 9 points
+        // Livorno → Capraia ≈ 35.9 nm at 5 kn → 7.18 h → 14 full 30-min steps + 1 partial + 1 departure = 16 points
         let wpts = vec![(43.55_f64, 10.29_f64), (43.05, 9.84)];
-        let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, None, &[]);
-        assert_eq!(track.len(), 9, "Expected 9 points, got {}", track.len());
+        let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, 0.0, None, &[]);
+        assert_eq!(track.len(), 16, "Expected 16 points, got {}", track.len());
         assert!((track[0].lat - 43.55).abs() < 0.01);
         assert!((track[0].time - dep).num_seconds() == 0);
         let last = track.last().unwrap();
@@ -704,11 +757,11 @@ mod tests {
         use chrono::TimeZone;
         let dep = Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap();
         let wpts = vec![(43.55_f64, 10.29_f64), (43.05, 9.84)];
-        let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, None, &[]);
-        // All but the last step are exactly 1 hour apart; last step may be a partial hour
+        let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, 0.0, None, &[]);
+        // All but the last step are exactly 30 min apart; last step may be a partial half-hour
         for i in 1..track.len() - 1 {
-            let diff = (track[i].time - track[i - 1].time).num_hours();
-            assert_eq!(diff, 1, "Expected 1-hour steps at index {}", i);
+            let diff = (track[i].time - track[i - 1].time).num_seconds();
+            assert_eq!(diff, 1800, "Expected 30-min steps at index {}", i);
         }
     }
 
@@ -719,7 +772,7 @@ mod tests {
 
         let dep = Utc.with_ymd_and_hms(2026, 5, 14, 9, 0, 0).unwrap();
         let wpts = vec![(43.5_f64, 9.0_f64), (43.5, 9.5)];
-        let track = generate_route_track(&wpts, dep, 10.0, 1.0, 0.0, None, &[]);
+        let track = generate_route_track(&wpts, dep, 10.0, 1.0, 0.0, 0.0, None, &[]);
         // Build hourly points that span the route timestamps
         let hourly: Vec<ForecastHourlyPoint> = track.iter().map(|pt| ForecastHourlyPoint {
             timestamp: pt.time.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
@@ -752,9 +805,9 @@ mod tests {
         use chrono::TimeZone;
         let dep = Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap();
         // 0 waypoints → empty track
-        assert!(generate_route_track(&[], dep, 5.0, 1.0, 0.0, None, &[]).is_empty());
+        assert!(generate_route_track(&[], dep, 5.0, 1.0, 0.0, 0.0, None, &[]).is_empty());
         // 1 waypoint → empty track (no pair to form a leg)
-        assert!(generate_route_track(&[(43.55, 10.29)], dep, 5.0, 1.0, 0.0, None, &[]).is_empty());
+        assert!(generate_route_track(&[(43.55, 10.29)], dep, 5.0, 1.0, 0.0, 0.0, None, &[]).is_empty());
     }
 
     #[test]
@@ -762,7 +815,7 @@ mod tests {
         use chrono::TimeZone;
         let dep = Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap();
         let wpts = vec![(43.55_f64, 10.29_f64), (43.05, 9.84), (42.70, 9.45)];
-        let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, None, &[]);
+        let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, 0.0, None, &[]);
         // First point at first waypoint
         assert!((track[0].lat - 43.55).abs() < 0.01, "first lat wrong");
         assert!((track[0].lon - 10.29).abs() < 0.01, "first lon wrong");
@@ -854,7 +907,7 @@ mod tests {
 
         let dep = chrono::DateTime::parse_from_rfc3339(ts_str).unwrap().with_timezone(&chrono::Utc);
         let wpts = vec![(43.0_f64, 8.0_f64), (43.12_f64, 8.0_f64)];
-        let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, Some(&polars), &fetches);
+        let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, 0.0, Some(&polars), &fetches);
 
         assert!(track.len() >= 2, "expected ≥2 points, got {}", track.len());
         let spd = track[1].speed_kn.expect("speed_kn should be set");
@@ -866,10 +919,195 @@ mod tests {
         let polars = crate::polars::PolarTable::constant_for_test(7.0);
         let dep = chrono::Utc::now();
         let wpts = vec![(43.0_f64, 8.0_f64), (43.12_f64, 8.0_f64)];
-        let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, Some(&polars), &[]);
+        let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, 0.0, Some(&polars), &[]);
 
         assert!(track.len() >= 2);
         let spd = track[1].speed_kn.expect("speed_kn should be set");
         assert!((spd - 5.0).abs() < 0.1, "expected motoring speed 5.0, got {}", spd);
+    }
+
+    #[test]
+    fn test_generate_route_track_min_twa_deg_forces_motor() {
+        use crate::polars::PolarTable;
+        let polars = PolarTable::constant_for_test(7.0);
+
+        let ts_str = "2026-06-01T06:00:00Z";
+        let hourly = vec![crate::db::operations::forecast::ForecastHourlyPoint {
+            timestamp: ts_str.to_string(),
+            wind_speed_kn: Some(12.0),
+            // Leg bearing is due north (0°); wind from 45° → TWA 45°, which the polar itself
+            // happily sails (its minimum is 42°) but which min_twa_deg = 60.0 must reject.
+            wind_direction_deg: Some(45.0),
+            wind_gust_kn: None, wave_height_m: None, wave_period_s: None,
+            wave_direction_deg: None, cape_j_kg: None,
+        }];
+        let fetches = vec![crate::db::operations::forecast::FetchWithHourly {
+            lat: 43.0, lon: 8.0, model: "ecmwf".to_string(), hourly,
+        }];
+
+        let dep = chrono::DateTime::parse_from_rfc3339(ts_str).unwrap().with_timezone(&chrono::Utc);
+        let wpts = vec![(43.0_f64, 8.0_f64), (43.12_f64, 8.0_f64)];
+        let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, 60.0, Some(&polars), &fetches);
+
+        assert!(track.len() >= 2, "expected ≥2 points, got {}", track.len());
+        assert_eq!(
+            track[1].twa_deg, None,
+            "TWA 45° is below min_twa_deg=60°, should not count as sailing"
+        );
+        let spd = track[1].speed_kn.expect("speed_kn should be set");
+        assert!(
+            (spd - 5.0).abs() < 0.1,
+            "expected motoring speed 5.0 once min_twa_deg excludes this TWA, got {}",
+            spd
+        );
+    }
+
+    #[test]
+    fn test_generate_route_track_relative_wind_deg_matches_sail_decision() {
+        use chrono::TimeZone;
+        use crate::db::operations::forecast::{FetchWithHourly, ForecastHourlyPoint};
+        use crate::polars::PolarTable;
+
+        let dep = Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap();
+        let hourly = vec![ForecastHourlyPoint {
+            timestamp: dep.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            wind_speed_kn: Some(12.0),
+            wind_direction_deg: Some(90.0), // wind from due east
+            wind_gust_kn: None, wave_height_m: None, wave_period_s: None,
+            wave_direction_deg: None, cape_j_kg: None,
+        }];
+        let fetches = vec![FetchWithHourly { lat: 43.0, lon: 8.0, model: "ecmwf".to_string(), hourly }];
+        let polars = PolarTable::constant_for_test(7.0);
+
+        // Heading due north (0°) with wind from due east (90°) → TWA 90°, above min_twa_deg=60.
+        let wpts = vec![(43.0_f64, 8.0_f64), (43.12_f64, 8.0_f64)];
+        let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, 60.0, Some(&polars), &fetches);
+
+        assert!(track.len() >= 2);
+        assert_eq!(track[0].relative_wind_deg, None, "departure point has no leg/wind sample yet");
+
+        let twa = track[1].twa_deg.expect("expected a sailing decision (TWA well above min_twa_deg=60)");
+        let relative = track[1].relative_wind_deg
+            .expect("relative_wind_deg should be set alongside a sail decision");
+        assert_eq!(
+            twa, relative,
+            "relative_wind_deg must come from the exact same wind sample as the sail decision, \
+             not a separately re-interpolated one"
+        );
+    }
+
+    #[test]
+    fn test_generate_route_track_heading_deg_matches_haversine_bearing() {
+        use chrono::TimeZone;
+        use crate::db::operations::forecast::{FetchWithHourly, ForecastHourlyPoint};
+
+        let dep = Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap();
+        let hourly = vec![ForecastHourlyPoint {
+            timestamp: dep.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            wind_speed_kn: Some(12.0),
+            wind_direction_deg: Some(90.0),
+            wind_gust_kn: None, wave_height_m: None, wave_period_s: None,
+            wave_direction_deg: None, cape_j_kg: None,
+        }];
+        let fetches = vec![FetchWithHourly { lat: 43.0, lon: 8.0, model: "ecmwf".to_string(), hourly }];
+
+        // No polars → always motors, but heading_deg must still be recorded regardless of
+        // the sail/motor decision (it's a property of the leg's course, not of sailing).
+        let wpts = vec![(43.0_f64, 8.0_f64), (43.12_f64, 8.15_f64)];
+        let track = generate_route_track(&wpts, dep, 5.0, 1.0, 0.0, 60.0, None, &fetches);
+
+        assert!(track.len() >= 2);
+        assert_eq!(track[0].heading_deg, None, "departure point has no incoming leg yet");
+
+        let expected_bearing = crate::utilities::haversine_heading(43.0, 8.0, 43.12, 8.15);
+        let heading = track[1].heading_deg.expect("heading_deg should be set once the boat has moved");
+        assert!(
+            (heading - expected_bearing).abs() < 0.01,
+            "expected heading_deg to equal haversine_heading's bearing ({}), got {}",
+            expected_bearing, heading
+        );
+    }
+
+    #[test]
+    fn test_compute_route_overlay_passes_through_heading_deg() {
+        use chrono::TimeZone;
+        use crate::db::operations::forecast::{FetchWithHourly, ForecastHourlyPoint};
+
+        let dep = Utc.with_ymd_and_hms(2026, 5, 14, 9, 0, 0).unwrap();
+        let wpts = vec![(43.5_f64, 9.0_f64), (43.5, 9.6)];
+        let ts = dep.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let hourly = vec![ForecastHourlyPoint {
+            timestamp: ts,
+            wind_speed_kn: Some(12.0),
+            wind_direction_deg: Some(180.0),
+            wind_gust_kn: None, wave_height_m: None, wave_period_s: None,
+            wave_direction_deg: None, cape_j_kg: None,
+        }];
+        let fetches = vec![
+            FetchWithHourly { lat: 43.5, lon: 9.0, model: "ecmwf".to_string(), hourly: hourly.clone() },
+            FetchWithHourly { lat: 43.5, lon: 9.6, model: "ecmwf".to_string(), hourly },
+        ];
+        let track = generate_route_track(&wpts, dep, 60.0, 1.0, 0.0, 0.0, None, &fetches);
+        assert_eq!(track.len(), 2, "leg should complete in a single fast step");
+
+        let overlay = compute_route_overlay(&track, &fetches);
+        assert!(overlay.len() >= 2);
+        assert_eq!(overlay[0].heading_deg, None);
+        assert_eq!(
+            overlay[1].heading_deg, track[1].heading_deg,
+            "compute_route_overlay must pass heading_deg through unchanged"
+        );
+    }
+
+    #[test]
+    fn test_compute_route_overlay_passes_through_relative_wind_deg() {
+        use chrono::TimeZone;
+        use crate::db::operations::forecast::{FetchWithHourly, ForecastHourlyPoint};
+
+        let dep = Utc.with_ymd_and_hms(2026, 5, 14, 9, 0, 0).unwrap();
+        // A leg long enough (~26 nm) that these two forecast points are each in range of only
+        // one endpoint (MAX_DISTANCE_NM = 25 nm), and fast enough (60 kn) that it completes in a
+        // single step — so track[1] sits at the destination, on top of the "near destination"
+        // point, while the step's *decision* wind sample (taken at track[0], the leg's start)
+        // sees only the "near start" point. If compute_route_overlay ever recomputed
+        // relative_wind_deg from pt's own (end-of-leg) position instead of copying the
+        // decision-time value through, it would pick up the "near destination" wind direction
+        // (90°) instead of the "near start" one (180°) — a very different angle, not a rounding
+        // difference — so this setup actually distinguishes pass-through from recomputation.
+        let wpts = vec![(43.5_f64, 9.0_f64), (43.5, 9.6)];
+        let ts = dep.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let make_hourly = |dir: f64| vec![ForecastHourlyPoint {
+            timestamp: ts.clone(),
+            wind_speed_kn: Some(12.0),
+            wind_direction_deg: Some(dir),
+            wind_gust_kn: None, wave_height_m: None, wave_period_s: None,
+            wave_direction_deg: None, cape_j_kg: None,
+        }];
+        let fetches = vec![
+            FetchWithHourly { lat: 43.5, lon: 9.0, model: "ecmwf".to_string(), hourly: make_hourly(180.0) },
+            FetchWithHourly { lat: 43.5, lon: 9.6, model: "ecmwf".to_string(), hourly: make_hourly(90.0) },
+        ];
+        // No polars → the boat always motors, but relative_wind_deg is still computed from the
+        // wind sample regardless of the sail/motor decision.
+        let track = generate_route_track(&wpts, dep, 60.0, 1.0, 0.0, 0.0, None, &fetches);
+        assert_eq!(track.len(), 2, "leg should complete in a single fast step");
+        assert_eq!(track[0].relative_wind_deg, None, "departure point has no leg/wind sample yet");
+        let track_relative = track[1].relative_wind_deg
+            .expect("relative_wind_deg should be set once wind data is available");
+        let bearing = crate::utilities::haversine_heading(43.5, 9.0, 43.5, 9.6);
+        let expected_near_start = compute_twa(bearing, 180.0);
+        assert!(
+            (track_relative - expected_near_start).abs() < 0.5,
+            "expected the near-start wind sample ({}), got {}", expected_near_start, track_relative
+        );
+
+        let overlay = compute_route_overlay(&track, &fetches);
+        assert!(overlay.len() >= 2);
+        assert_eq!(overlay[0].relative_wind_deg, None);
+        assert_eq!(
+            overlay[1].relative_wind_deg, Some(track_relative),
+            "compute_route_overlay must pass relative_wind_deg through unchanged, not recompute it \
+             from a possibly different (end-of-leg) wind sample"
+        );
     }
 }

@@ -1,5 +1,5 @@
 use nmea2000::{FastPacket, Identifier};
-use socketcan::ExtendedId;
+use embedded_can::ExtendedId;
 use std::collections::HashMap;
 
 use crate::pgns::N2kMessage;
@@ -15,7 +15,7 @@ use crate::pgns::N2kMessage;
 ///
 /// ```no_run
 /// use nmea2k::N2kStreamReader;
-/// use socketcan::ExtendedId;
+/// use nmea2k::ExtendedId;
 ///
 /// let mut reader = N2kStreamReader::new();
 ///

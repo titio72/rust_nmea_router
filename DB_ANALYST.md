@@ -28,11 +28,20 @@ to vessel_status and environmental_data manually.
 - `start_timestamp` / `end_timestamp` — UTC DATETIME(3); define the trip's time window
 - `total_distance_sailed` / `total_distance_motoring` — nautical miles (DOUBLE)
 - `total_time_sailing` / `total_time_motoring` / `total_time_moored` — milliseconds (BIGINT)
+- `total_distance_upwind` — nautical miles (DOUBLE); sailing distance with folded TWA ≤ 60°
+- `total_distance_reaching` — nautical miles (DOUBLE); sailing distance with folded TWA > 60° and < 120°
+- `total_distance_running` — nautical miles (DOUBLE); sailing distance with folded TWA ≥ 120°
+- `total_time_upwind` — milliseconds (BIGINT); sailing time with folded TWA ≤ 60°
+- `total_time_reaching` — milliseconds (BIGINT); sailing time with folded TWA > 60° and < 120°
+- `total_time_running` — milliseconds (BIGINT); sailing time with folded TWA ≥ 120°
+  (folded TWA = `LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg)`; the three
+  buckets partition the sailing rows that have a non-NULL wind angle, so they sum to at
+  most `total_distance_sailed` / `total_time_sailing`)
 - `description` — auto-generated "Trip YYYY-MM-DD"; user-editable
 
 ### vessel_status
 - One row every 30 s while underway, every 30 min while moored
-- `is_moored` (BOOLEAN) — TRUE when position stable within 30 m radius for 2+ min
+- `is_moored` (BOOLEAN) — TRUE when position stable within 45 m radius of a 10-min reference point for 2+ min
 - `engine_on` (TINYINT) — 0 = off, 1 = on, 2 = unknown
 - `average_wind_speed_kn` / `average_wind_angle_deg` — true wind (nullable)
 - `average_speed_kn` / `max_speed_kn` — speed over ground in knots
@@ -100,6 +109,23 @@ to vessel_status and environmental_data manually.
 4. Verify with a follow-up SELECT
 5. For large deletes (>1000 rows): suggest mysqldump backup first
 
+### Remote sync scope
+
+Every trip carries a `version` counter (`BIGINT UNSIGNED`, starts at 1).
+`exec_trip_update` (`src/db/operations/trip_update.rs`) is the only function
+allowed to write to `trips` in place, and it always bumps `version` — so no
+write path can forget to. The boat's push sync sends `{uuid: version}` for
+every trip; the remote diffs it directly against its own stored versions and
+reports back exactly which UUIDs need pushing. There is no timestamp cursor
+involved in this decision anymore.
+
+Any direct SQL edit — including a manual `UPDATE trips` statement — must
+include `version = version + 1` in its SET clause, or the change will
+silently not re-sync. Edits that only touch `vessel_status`/`environmental_data`
+and never touch the `trips` row itself need the `bump_trip_version` MCP tool
+(or `UPDATE trips SET version = version + 1 WHERE id = <id>`) afterward
+instead.
+
 ---
 
 ### Trim a Trip
@@ -136,23 +162,60 @@ DELETE FROM environmental_data
   AND (timestamp < '<new_start>' OR timestamp > '<new_end>');
 
 -- 8. Recompute trip aggregates from remaining rows
+-- is_moored takes priority: a row with is_moored=1 counts as moored even if
+-- engine_on=1 (e.g. engine idling at anchor). engine_on only splits the
+-- non-moored rows into sailing vs motoring. This mirrors the app's own
+-- recalculate_and_update_trip (src/db/operations/gap_fill.rs) — do not use
+-- `engine_on = 1` alone for the motored bucket, it double-counts rows that
+-- are both moored and engine-on.
+-- The point-of-sail buckets fold the true wind angle to 0-180 via
+-- LEAST(angle, 360 - angle), then split the sailing rows: upwind <= 60,
+-- reaching > 60 and < 120, running >= 120. Rows with a NULL wind angle stay in
+-- the sailing totals but fall into no bucket.
 SELECT
-  SUM(CASE WHEN engine_on = 0 AND is_moored = 0 THEN total_distance_nm ELSE 0 END) AS sailed,
-  SUM(CASE WHEN engine_on = 1                   THEN total_distance_nm ELSE 0 END) AS motored,
-  SUM(CASE WHEN engine_on = 0 AND is_moored = 0 THEN total_time_ms ELSE 0 END) AS time_sailing,
-  SUM(CASE WHEN engine_on = 1                   THEN total_time_ms ELSE 0 END) AS time_motoring,
-  SUM(CASE WHEN is_moored = 1                   THEN total_time_ms ELSE 0 END) AS time_moored
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 THEN total_distance_nm ELSE 0 END) AS sailed,
+  SUM(CASE WHEN is_moored = 0 AND engine_on = 1  THEN total_distance_nm ELSE 0 END) AS motored,
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 THEN total_time_ms ELSE 0 END) AS time_sailing,
+  SUM(CASE WHEN is_moored = 0 AND engine_on = 1  THEN total_time_ms ELSE 0 END) AS time_motoring,
+  SUM(CASE WHEN is_moored = 1                    THEN total_time_ms ELSE 0 END) AS time_moored,
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60
+           THEN total_distance_nm ELSE 0 END) AS dist_upwind,
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120
+           THEN total_distance_nm ELSE 0 END) AS dist_reaching,
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120
+           THEN total_distance_nm ELSE 0 END) AS dist_running,
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) <= 60
+           THEN total_time_ms ELSE 0 END) AS time_upwind,
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) > 60
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) < 120
+           THEN total_time_ms ELSE 0 END) AS time_reaching,
+  SUM(CASE WHEN is_moored = 0 AND engine_on != 1 AND average_wind_angle_deg IS NOT NULL
+           AND LEAST(average_wind_angle_deg, 360 - average_wind_angle_deg) >= 120
+           THEN total_time_ms ELSE 0 END) AS time_running
 FROM vessel_status WHERE timestamp BETWEEN '<new_start>' AND '<new_end>';
 
 -- 9. Update the trip record
 UPDATE trips SET
   start_timestamp        = '<new_start>',
   end_timestamp          = '<new_end>',
+  version                = version + 1,
   total_distance_sailed  = <sailed>,
   total_distance_motoring= <motored>,
   total_time_sailing     = <time_sailing>,
   total_time_motoring    = <time_motoring>,
-  total_time_moored      = <time_moored>
+  total_time_moored      = <time_moored>,
+  total_distance_upwind  = <dist_upwind>,
+  total_distance_reaching= <dist_reaching>,
+  total_distance_running = <dist_running>,
+  total_time_upwind      = <time_upwind>,
+  total_time_reaching    = <time_reaching>,
+  total_time_running     = <time_running>
 WHERE id = <id>;
 
 -- 10. Invalidate heatmap_cache
@@ -226,7 +289,36 @@ DELETE FROM environmental_data WHERE metric_id IN (5, 6)
   AND timestamp IN (SELECT timestamp FROM vessel_status WHERE id IN (<ids>));
 ```
 
+After any of the above, call the `bump_trip_version` MCP tool with the trip's
+`id` so the correction is picked up by the next remote sync — edits to
+`vessel_status`/`environmental_data` alone never touch the `trips` row, so
+nothing else will flag the trip as changed.
+
 ---
+
+### Fix a Mislabeled Mooring Period
+
+Goal: a range of `vessel_status` rows has the wrong `is_moored` value (e.g. mooring
+detection failed at anchor and logged dense underway-cadence reports for a period the
+boat never actually left).
+
+Prefer the `fix_mooring_status` MCP tool (or `POST /api/fix_mooring_status`) over manual
+SQL — it does the following atomically:
+1. Finds the trip covering `[start, end]` (clamps the window to the trip's own bounds).
+2. Sets `is_moored` on every row in the window.
+3. If the target is `true` (moored), resamples: collapses the dense rows down to the
+   moored reporting interval (median position per bucket, vector distance/time/course
+   from bucket to bucket instead of summing per-sample GPS jitter, circular-mean
+   heading/wind-angle, arithmetic-mean wind speed, max speed per bucket). This matters —
+   leaving dense rows under a moored label still double-counts jitter as travelled
+   distance even after the flag is fixed.
+4. Recomputes the trip's aggregate totals (never its `start_timestamp`/`end_timestamp`).
+5. Invalidates `trip_legs_cache` and `heatmap_cache` for the affected range.
+
+Before calling it, sanity-check the window the same way as any other correction:
+`SELECT is_moored, engine_on, latitude, longitude FROM vessel_status WHERE timestamp
+BETWEEN '<start>' AND '<end>' ORDER BY id` — confirm the position barely moves and
+`engine_on = 0` before concluding it should be moored.
 
 ## MCP Tools
 
@@ -255,6 +347,8 @@ The `nmea_router` MCP server (`target/debug/mcp_server`, or `target/release/mcp_
 | `get_wind_statistics` | Wind rose data (72 × 5° buckets) |
 | `get_monthly_statistics` | Monthly sailing/motoring distance; optional `year` filter |
 | `trim_trip` | Remove moored padding, recalculate aggregates, invalidate caches (atomic) |
+| `fix_mooring_status` | Correct a mislabeled mooring period: set `is_moored` for `[start, end]`; if `true`, also resamples the window to the moored cadence, recomputes trip aggregates, invalidates caches (atomic) |
+| `bump_trip_version` | Bump a trip's version with no other field changes (for direct SQL corrections that don't touch `trips` itself) |
 | `delete_trip` | Delete trip + all vessel_status + environmental_data + caches (atomic) |
 | `update_trip_description` | Change the free-text trip name |
 | `invalidate_trip_legs` | Force-invalidate legs cache for a trip |

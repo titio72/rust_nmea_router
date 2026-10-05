@@ -85,6 +85,8 @@ fi
 [ -f "$SCHEMA_FILE" ] && cp "$SCHEMA_FILE" "$CONFIG_DIR/"
 [ -f "$PGN_FILE" ] && cp "$PGN_FILE" "$CONFIG_DIR/"
 [ -f "config.example.json" ] && cp "config.example.json" "$CONFIG_DIR/"
+[ -f "land.geojson" ] && cp "land.geojson" "$CONFIG_DIR/"
+[ -f "dufour40.csv" ] && cp "dufour40.csv" "$CONFIG_DIR/"
 echo -e "${GREEN}✓ Configuration files processed${NC}"
 
 # Update config.json to use /var/log/nmea_router

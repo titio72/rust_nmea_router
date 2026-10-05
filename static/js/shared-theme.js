@@ -34,6 +34,9 @@ const ICON_MAP = {
     'sync':     `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
                     <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
                     <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z"/>
+                </svg>`,
+    'wrench':   `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-wrench" viewBox="0 0 16 16">
+                    <path d="M.102 2.223A3.004 3.004 0 0 0 3.78 5.897l6.341 6.252A3.003 3.003 0 0 0 13 16a3 3 0 1 0-.851-5.878L5.897 3.781A3.004 3.004 0 0 0 2.223.1l2.141 2.142L4 4l-1.757.364zm13.37 9.019.528.026.287.445.445.287.026.529L15 13l-.242.471-.026.529-.445.287-.287.445-.529.026L13 15l-.471-.242-.529-.026-.287-.445-.445-.287-.026-.529L11 13l.242-.471.026-.529.445-.287.287-.445.529-.026L13 11z"/>
                 </svg>`
 };
 
@@ -69,7 +72,7 @@ function updateBrandLogo(isDark) {
 function updateThemeButton(isDark) {
     const themeIcon = document.getElementById('theme-icon');
     const themeText = document.getElementById('theme-text');
-    
+
     if (themeIcon) {
         themeIcon.innerHTML = isDark ? ICON_MAP['moon'] : ICON_MAP['sun'];
     }
@@ -115,6 +118,20 @@ async function fetchUiMode() {
     return _uiReadOnly;
 }
 
+// Cached server capabilities: null = not yet loaded
+let _capabilities = null;
+
+async function fetchCapabilities() {
+    if (_capabilities !== null) return _capabilities;
+    try {
+        const resp = await fetch('/api/config/capabilities', { credentials: 'same-origin' });
+        _capabilities = resp.ok ? await resp.json() : {};
+    } catch (_) {
+        _capabilities = {};
+    }
+    return _capabilities;
+}
+
 async function applyUiMode() {
     const readOnly = await fetchUiMode();
     if (readOnly) {
@@ -124,6 +141,51 @@ async function applyUiMode() {
 }
 
 document.addEventListener('DOMContentLoaded', applyUiMode);
+
+// ---------------------------- Health indicator ----------------------------
+
+const HEALTH_POLL_MS = 10000;
+let _healthTimer = null;
+
+async function updateHealthIndicator() {
+    const dot = document.getElementById('healthStatus');
+    if (!dot) return;
+    const button = dot.parentElement;
+    let cls = 'health-down';
+    let tip = 'System health: unreachable';
+    try {
+        // /api/health answers 503 when something is wrong, so do not check resp.ok.
+        const resp = await fetch('/api/health', { credentials: 'same-origin' });
+        const health = await resp.json();
+        if (health.enabled === false) {
+            // Alarms are disabled (config switch, or CAN disabled): no dot, no more polling.
+            button.style.display = 'none';
+            if (_healthTimer !== null) {
+                clearInterval(_healthTimer);
+                _healthTimer = null;
+            }
+            return;
+        }
+        cls = 'health-' + health.status;
+        tip = health.alarms.length === 0
+            ? 'System health: OK'
+            : health.alarms.map(a => a.message).join('\n');
+    } catch (_) { /* keep the "unreachable" defaults */ }
+    // The dot stays hidden until the first answer says monitoring is active; swap classes
+    // only after the fetch so it never flashes grey while polling.
+    button.style.display = '';
+    dot.classList.remove('health-ok', 'health-degraded', 'health-down');
+    dot.classList.add(cls);
+    button.title = tip;
+}
+
+function startHealthIndicator() {
+    if (!document.getElementById('healthStatus')) return;
+    updateHealthIndicator();
+    _healthTimer = setInterval(updateHealthIndicator, HEALTH_POLL_MS);
+}
+
+document.addEventListener('DOMContentLoaded', startHealthIndicator);
 
 /**
  * Create the common navigation header for all pages
@@ -136,7 +198,9 @@ function createHeaderBar(currentPage, showConnectionStatus = false) {
         { href: '/realtime.html', label: 'Monitor', page: 'monitor', roHidden: true },
         { href: '/ais.html', label: 'AIS', page: 'ais', roHidden: true },
         { href: '/yearly-stats.html', label: 'Stats', page: 'stats', roHidden: false },
-        { href: '/plan.html', label: 'Forecast', page: 'forecast', roHidden: false },
+        { href: '/compass.html', label: 'Compass', page: 'compass', roHidden: false },
+        { href: '/navigation-areas.html', label: 'Navigation Areas', page: 'navigation-areas', roHidden: true },
+        { href: '/plan.html', label: 'Planning', page: 'planning', roHidden: true },
         { href: '/signalk-browser.html', label: 'SignalK Browser', page: 'signalk-browser', roHidden: true },
         { href: '/backup.html', label: 'Backup', page: 'backup', roHidden: true }
     ];
@@ -167,6 +231,11 @@ function createHeaderBar(currentPage, showConnectionStatus = false) {
     headerHTML +=
             `<button class="theme-toggle" id="themeBtn" onclick="baseToggleTheme()">
                 <span id="theme-icon">${ICON_MAP['sun']}</span><span id="theme-text">Dark</span>
+            </button>`;
+
+    headerHTML +=
+            `<button class="theme-toggle" title="System health" tabindex="-1" style="display: none;">
+                <span class="status-dot" id="healthStatus"></span>
             </button>`;
 
     if (showConnectionStatus) {
@@ -306,19 +375,19 @@ function formatDurationLong(startDateStr, endDateStr) {
         const startDate = new Date(startDateStr);
         const endDate = new Date(endDateStr);
         const durationMs = endDate - startDate;
-        
+
         if (durationMs < 0) return 'N/A';
-        
+
         const totalSeconds = Math.floor(durationMs / 1000);
         const days = Math.floor(totalSeconds / 86400);
         const hours = Math.floor((totalSeconds % 86400) / 3600);
         const minutes = Math.floor((totalSeconds % 3600) / 60);
-        
+
         const parts = [];
         if (days > 0) parts.push(days + 'd');
         if (hours > 0) parts.push(hours + 'h');
         if (minutes > 0) parts.push(minutes + 'm');
-        
+
         return parts.length > 0 ? parts.join(' ') : '0m';
     } catch (e) {
         return 'N/A';

@@ -122,6 +122,14 @@ In this way, the total time, the total distance, and average COG and SOG will be
 The application receives NMEA 2000 messages 126992 and compares the timestamp received with the message with the system time. If the skew is larger than 1 second, the application will try to set the system using the timestamp received with NMEA 2000 message.
 Two global states are continuously updated in memory and available to all the subsystems of the application: the time skew in milliseconds and the boolean status indicating if it is synced up (i.e. skew < 1000ms).
 
+### Health Monitor
+
+`src/health.rs`. The router loop records, via `HealthHandle::record_*`, when each stream (position, COG/SOG, system time, heading, wind), CAN frame, loop iteration and DB write last happened. `HealthState::evaluate(now)` turns that into alarms; it is evaluated by a 1 Hz publisher task (edge-triggered: error log + SignalK `notifications.router.*`) and on every `GET /api/health` (200 when healthy, 503 otherwise; public, no login). A status dot in the shared header polls it every 10 s; when alarms are disabled (`enabled: false` in the report: config switch off, or CAN disabled) the dot is hidden and polling stops.
+
+Alarms: `can_silent`, `stream_stale:<name>`, `db_failing:<vessel|env>` (failing continuously for `db_failure_secs`), `loop_lagging` (one unit of work too slow), `loop_overloaded` (loop busy above `loop_busy_ratio` of a 10 s window), `loop_stalled`, `time_not_synced`. Alarm-severity conditions make `/api/health` report `down`, warn-only ones `degraded`. A stalled loop suppresses the CAN, stream and time alarms; a silent bus suppresses the per-stream and time alarms. Optional streams (heading, wind) only alarm once seen. Engine data is not tracked (engine gateways go silent whenever the engine is off). No alarms during `health.startup_grace_secs` after start, nor when CAN is disabled (web-only mode; `/api/health` then reports `can: "disabled"`). Thresholds: `health` section of the config (see README).
+
+Known limit: when the database connection is lost and reconnection fails, the router exits (systemd restarts it), so `db_failing` covers persistent write failures that do not trigger a reconnect, not a total DB outage.
+
 ### Data collection and Boat Status Report generation
 The application uses NMEA messages:
 1. 130306 Wind speed and direction
@@ -173,6 +181,15 @@ The application converts NMEA2000 data to legacy NMEA0183 sentences and broadcas
 ### Web Interface
 The application provides a REST API for programmatic access to trip data, vessel tracks, environmental metrics, and speed distributions. An HTML dashboard offers interactive visualization with Google Maps integration for trip tracks and real-time AIS target monitoring.
 
+- `/compass.html` — Compass Deviation page. Date range and minimum-speed filters; renders a polar chart with one radial segment per 10° heading sector, extending outward for positive mean deviation and inward for negative, sourced from `GET /api/compass_deviation`.
+
+- `GET /api/twa_distribution` — query params `id` (trip id) or `start`/`end` (UTC datetime range); returns distance sailed (nautical miles) bucketed into 5° signed True Wind Angle buckets (-180..175, negative = port, positive = starboard), restricted to non-moored, non-motoring rows.
+- `GET /api/compass_deviation` — query params `start`/`end` (required, UTC datetime range) and `min_speed_kn` (optional, default 5.0); returns, for all 36 ten-degree heading sectors (0..350), the sample count and mean signed circular diff between `average_heading_deg` and `cog_deg` (degrees, positive = compass reads high), restricted to non-moored rows at or above the speed threshold. Backs `compass.html`; see `docs/ev1-compass-deviation-investigation.md` for the diff formula and method.
+
+Corrections to previously-recorded data (writable only when the server is not in read-only mode):
+- `POST /api/correct_engine_status` — body `{trip_id, start_timestamp, end_timestamp, engine_on}`; overwrites `engine_on` for `vessel_status` rows in range and recomputes the trip's sailing/motoring aggregates.
+- `POST /api/fix_mooring_status` — body `{start_timestamp, end_timestamp, is_moored}`; sets `is_moored` for `vessel_status` rows in range (clamped to the covering trip's window). When `is_moored` is `true`, also resamples the window down to the moored reporting cadence (`vessel_status.interval_moored_seconds`), collapsing dense underway-rate GPS jitter that would otherwise be double-counted as travelled distance. Recomputes the trip's aggregate totals and invalidates its `trip_legs_cache`/`heatmap_cache` entries. Returns `{trip_id, rows_matched, rows_after, resampled}`.
+
 ### Trip Synchronization
 When `sync.enabled: true` and `sync.target_url` point to a trips_viewer instance, the boat can push its complete trip history to the viewer via `POST /api/sync/push`. The push is incremental (only trips updated since the last sync are transferred) and performs full reconciliation (trips deleted on the boat are deleted on the viewer). Authentication uses a shared Bearer token (`sync.api_key`). The viewer's receive endpoint (`POST /api/sync/receive`) is always registered even in read-only mode. See `TRIPS_VIEWER.md` for configuration details.
 
@@ -195,7 +212,7 @@ Coding convention:
 1. Backend is written in Rust
 2. Frontend is html and javascript
 3. Use underscore _ to separate words in function names
-4. Use camel notation for struct names
+4. Use PascalCase for struct names
 5. Never use now() in function, unless the function is a handler that generates an event (for example, when a NMEA 2000 message is received, it's legit to use now() to generate the timestamp of the event. If a function in invoked because an event is generated, it will have the timestamp as parameter)
 6. Configuration fields are read only - any status that under control of the application is to be read and written from the database
 All the code, AI or human generated, must follow this rules.
@@ -307,8 +324,8 @@ fn test_my_feature() {
 - Inline tests in implementation files (with `#[cfg(test)]`)
 
 **Documentation:**
-- `doc/*.md` is the folder for documentation
-- Only `README.md` and `AGENTS.md` (this file) are in the root folder
+- `docs/*.md` is the folder for documentation
+- Only `README.md`, `AGENTS.md` (this file), `CLAUDE.md`, `DB_ANALYST.md`, and `TODO.md` are in the root folder
 - When a new feature is added, `README.md` must updated automatically 
 
 ### Common Patterns

@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, RwLock},
     time::Duration,
 };
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 mod ais_target_cache;
 mod app_metrics;
@@ -16,6 +16,7 @@ mod environmental_monitor;
 mod environmental_status_handler;
 mod error;
 mod frame_filter;
+mod health;
 mod mooring_detection;
 mod position_utils;
 mod router_loop;
@@ -26,23 +27,16 @@ mod udp_broadcaster;
 pub mod forecast;
 mod forecast_poller;
 pub mod polars;
+pub mod land_mask;
 pub mod routing;
 pub mod utilities;
 mod vessel_monitor;
 mod vessel_status_handler;
 mod web;
 
-use app_metrics::{AppMetrics, MetricsLogger};
 use config::Config;
-use db::{HealthCheckManager, VesselDatabase};
-use environmental_monitor::EnvironmentalMonitor;
-use router_loop::RouterLoop;
-use signalk_broadcaster::SignalKBroadcaster;
-use time_monitor::TimeMonitor;
+use db::VesselDatabase;
 use udp_broadcaster::UdpBroadcaster;
-use vessel_monitor::VesselMonitor;
-// Import from nmea2k crate
-use nmea2k::{CanBus, N2kStreamReader};
 
 // ========== Logging Setup ==========
 
@@ -67,14 +61,16 @@ fn init_logging(log_config: &config::LogConfig) -> Result<(), error::AppError> {
             )
         }));
 
-    let console_layer = fmt::layer().with_writer(std::io::stdout).with_timer(
-        fmt::time::OffsetTime::local_rfc_3339().unwrap_or_else(|_| {
-            fmt::time::OffsetTime::new(
-                time::UtcOffset::UTC,
-                time::format_description::well_known::Rfc3339,
-            )
-        }),
-    );
+    let console_layer = log_config.console_enabled.then(|| {
+        fmt::layer().with_writer(std::io::stdout).with_timer(
+            fmt::time::OffsetTime::local_rfc_3339().unwrap_or_else(|_| {
+                fmt::time::OffsetTime::new(
+                    time::UtcOffset::UTC,
+                    time::format_description::well_known::Rfc3339,
+                )
+            }),
+        )
+    });
 
     // Parse log level from config
     let env_filter =
@@ -171,6 +167,37 @@ fn main() -> Result<(), Box<dyn Error>> {
         info!("CAN disabled — forcing read_only mode");
     }
 
+    // Health monitor shared by the router loop (recording) and the web layer (evaluation).
+    let health = health::HealthHandle::new(
+        config.health.clone(),
+        config.can.enabled,
+        std::time::Instant::now(),
+    );
+
+    // Create UDP broadcaster with config. Done early (before the web server starts) so the
+    // web UI can be told the real, post-bind-attempt status rather than the static config value.
+    let mut udp_enabled = config.udp.enabled;
+    let udp_broadcaster = match UdpBroadcaster::new(
+        config.udp.address.clone(),
+        config.udp.bind_address.clone(),
+        udp_enabled,
+    ) {
+        Ok(broadcaster) => broadcaster,
+        Err(e) => {
+            error!(
+                "Failed to initialize UDP broadcaster ({}), disabling UDP output: {}",
+                config.udp.address, e
+            );
+            udp_enabled = false;
+            UdpBroadcaster::new(config.udp.address.clone(), config.udp.bind_address.clone(), false)
+                .expect("disabled UDP broadcaster must not fail to construct")
+        }
+    };
+
+    if udp_enabled {
+        info!("UDP broadcaster enabled: {}", config.udp.address);
+    }
+
     // Create database connection using config
     let db_url = config.database.connection.connection_url();
 
@@ -200,6 +227,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let db_arc = vessel_db.clone(); // Clone the Arc, not the database
         let config_arc = Arc::new(config.clone());
         let ais_cache_web = ais_cache.clone();
+        let health_web = health.clone();
         let web_port = config.web.port;
 
         // Use channel to confirm web server started successfully
@@ -217,7 +245,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 };
                 rt.block_on(async {
-                    match web::start_web_server(db_arc, config_arc, ais_cache_web, web_port, startup_tx).await {
+                    match web::start_web_server(db_arc, config_arc, ais_cache_web, web_port, udp_enabled, health_web, startup_tx).await {
                         Ok(()) => {}
                         Err(e) => {
                             warn!("Web server error: {}", e);
@@ -261,107 +289,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // CAN is enabled: open socket and run the NMEA2000 processing loop
-    let interface = &config.can.interface;
-    info!("Opening CAN interface: {}", interface);
-
-    let mut socket = CanBus::open_can_socket_with_retry(interface);
-    if let Err(e) = CanBus::configure_nmea2k_socket(&mut socket) {
-        eprintln!("Fatal: Failed to configure CAN socket: {}", e);
-        eprintln!("CAN interface: {}", interface);
-        std::process::exit(1);
-    }
-
-    info!("Listening for NMEA2000 messages");
-
-    // Create NMEA2000 stream reader
-    let reader = N2kStreamReader::new();
-
-    // Create vessel monitor with config
-    info!(
-        "Creating vessel monitor with underway interval: {} seconds",
-        config.database.vessel_status.interval_underway_seconds
-    );
-    let vessel_monitor = VesselMonitor::new(
-        config.database.vessel_status.interval_underway(),
-        config.database.vessel_status.interval_moored(),
-    );
-
-    // Create time monitor
-    let time_monitor = TimeMonitor::new(config.time.skew_threshold_ms, config.time.set_system_time);
-
-    // Create environmental monitor with config
-    let env_monitor = EnvironmentalMonitor::new();
-
-    // Create vessel status handler
-    let mut vessel_status_handler = vessel_status_handler::VesselStatusHandler::new();
-
-    // Create environmental status handler
-    let environmental_status_handler =
-        environmental_status_handler::EnvironmentalStatusHandler::new(
-            &config.database.environmental,
-        );
-
-    // Create UDP broadcaster with config
-    let udp_broadcaster = match UdpBroadcaster::new(
-        config.udp.address.clone(),
-        config.udp.bind_address.clone(),
-        config.udp.enabled,
-    ) {
-        Ok(broadcaster) => broadcaster,
-        Err(e) => {
-            eprintln!("Fatal: {}", e);
-            eprintln!("UDP destination: {}", config.udp.address);
-            std::process::exit(1);
-        }
-    };
-
-    if config.udp.enabled {
-        info!("UDP broadcaster enabled: {}", config.udp.address);
-    }
-
-    // Load the last trip from database
-    {
-        let db = vessel_db
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        vessel_status_handler.load_last_trip(&db);
-        vessel_status_handler.load_last_vessel_status(&db);
-    }
-
-    // Application metrics tracking
-    let metrics = AppMetrics::new();
-    let metrics_logger = MetricsLogger::new(Duration::from_secs(60));
-
-    // Database health check manager
-    let db_health_check = HealthCheckManager::new(
-        Duration::from_secs(60),
-        config.database.connection.pool_min,
-        config.database.connection.pool_max,
-    );
-
-    // Create SignalK broadcaster (if enabled)
-    let signalk_broadcaster = SignalKBroadcaster::new(
-        config.signalk.rate_limit_ms,
-        config.signalk.vessel_uuid.clone(),
-    );
-
-    RouterLoop::new(
-        socket,
-        reader,
-        config,
-        vessel_monitor,
-        time_monitor,
-        env_monitor,
-        vessel_status_handler,
-        environmental_status_handler,
-        udp_broadcaster,
-        signalk_broadcaster,
-        ais_cache,
-        vessel_db,
-        metrics,
-        metrics_logger,
-        db_health_check,
-    )
-    .run()
+    // CAN is enabled: hand over to the NMEA2000 processing loop, which never returns.
+    router_loop::run_can_pipeline(config, vessel_db, ais_cache, udp_broadcaster, health)
 }

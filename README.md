@@ -41,6 +41,8 @@ This project is a learning and production-grade effort, inspired by https://gith
 - **Advanced Wind Data Handling**: Calculates and persists true wind speed/angle, with robust rolling window averaging and test coverage
 - **AIS Target Tracking**: Decodes and broadcasts AIS position reports, static data, and navigation information via SignalK with live web dashboard for monitoring nearby vessels and navigation aids
 - **Trips Viewer Sync**: One-command push of collected trips from the boat to a cloud-hosted read-only viewer (`POST /api/sync/push`). Incremental transfer, full reconciliation (handles deletes), authenticated with a shared API key. See [TRIPS_VIEWER.md](TRIPS_VIEWER.md) for setup.
+- **Manual Engine Status Correction**: Fix mistaken automatic engine on/off detection by clicking a start and end point on a trip's track and choosing the correct state; recomputes the trip's sailing/motoring totals and invalidates dependent caches (`fix-engine-status.html`, linked from the trip detail page)
+- **Compass Deviation Analysis**: Date-range and minimum-speed filters compute the mean signed difference between compass heading and course over ground per 10° heading sector, plotted as a polar chart (`compass.html`, backed by `GET /api/compass_deviation`)
 
 ## Requirements
 
@@ -144,6 +146,20 @@ Edit `config.json` to customize settings:
   - **Safe parsing**: Accepts boolean (`true`/`false`), strings (`"true"`, `"yes"`, `"1"`, `"on"`, `"enabled"`, or their negatives), or numbers (`1`/`0`)
   - **Error handling**: Any malformed or invalid value defaults to `false` (safe behavior)
 
+#### Health Monitor
+Alarms for lost data feeds, failing database writes and a lagging or stalled router loop (see `GET /api/health`). All values in seconds; every field is optional and a value of 0 reverts to the default (except `startup_grace_secs`, where 0 is allowed).
+- `enabled`: Master switch (default: true). Alarms are always disabled when `can.enabled` is false (web-only mode)
+- `startup_grace_secs`: No alarms for this long after start (default: 30)
+- `can_silence_secs`: Alarm when no CAN frame arrives for this long (default: 10)
+- `required_stream_timeout_secs`: Position, COG/SOG and system time must be seen within this window (default: 30)
+- `optional_stream_timeout_secs`: Heading, wind and engine; only alarmed once seen at least once (default: 60)
+- `db_failure_secs`: A kind of database write (vessel or environmental) failing continuously for this long raises `db_failing` (default: 60)
+- `loop_lag_secs`: One unit of work taking longer than this raises `loop_lagging` (default: 2)
+- `loop_lag_window_secs`: `loop_lagging` stays active this long after the last slow unit of work (default: 60)
+- `loop_busy_ratio`: Fraction (0-1] of a 10 s window spent processing messages above which `loop_overloaded` is raised (default: 0.8)
+- `loop_stall_secs`: No loop iteration for this long raises `loop_stalled` (default: 10)
+- `time_unsynced_secs`: Time uninitialized or skewed for this long raises `time_not_synced` (default: 60)
+
 #### Database Connection
 - `host`: Database server hostname
 - `port`: Database server port (default: 3306)
@@ -190,6 +206,47 @@ The application automatically validates the configuration on startup and applies
 - **Example**: `skew_threshold_ms: 50` will revert to 1000ms
 
 All validation errors are logged with warnings but do not prevent startup (except for invalid CAN interface names).
+
+### Environment Variable Overrides
+
+Any config file value can be overridden at runtime via environment variables. This is the recommended approach for cloud deployments (e.g. Railway) where editing files after deployment is impractical.
+
+Environment variables are applied **after** the config file is loaded, so the file acts as the baseline and env vars take precedence.
+
+#### Database
+
+| Variable | Config equivalent | Notes |
+|---|---|---|
+| `DATABASE_URL` | `database.connection.*` | Full URL: `mysql://user:pass@host:port/db` — also accepted: `mysql2://`, `mysqls://` |
+| `MYSQL_URL` | `database.connection.*` | Alias for `DATABASE_URL` (tried second) |
+| `MYSQL_PUBLIC_URL` | `database.connection.*` | Alias for `DATABASE_URL` (tried third) |
+| `MYSQLHOST` | `database.connection.host` | Used only when no URL variable is set |
+| `MYSQLPORT` | `database.connection.port` | Used only when no URL variable is set |
+| `MYSQLUSER` | `database.connection.username` | Used only when no URL variable is set |
+| `MYSQLPASSWORD` | `database.connection.password` | Used only when no URL variable is set |
+| `MYSQLDATABASE` | `database.connection.database_name` | Used only when no URL variable is set |
+
+#### Web Server
+
+| Variable | Config equivalent | Notes |
+|---|---|---|
+| `PORT` | `web.port` | Listening port (Railway injects this automatically) |
+| `AUTH_PASSWORD` | `web.auth_password` | Empty string disables authentication |
+| `SECURE_COOKIES` | `web.secure_cookies` | Accepts `true`, `1`, `yes` |
+
+#### Sync
+
+| Variable | Config equivalent | Notes |
+|---|---|---|
+| `SYNC_API_KEY` | `sync.api_key` | Shared secret for push sync authentication |
+| `SYNC_ENABLED` | `sync.enabled` | Accepts `true`, `1`, `yes` |
+| `SYNC_TARGET_URL` | `sync.target_url` | URL of the remote trips-viewer instance |
+
+#### Logging
+
+| Variable | Config equivalent | Notes |
+|---|---|---|
+| `LOG_LEVEL` | `logging.level` | e.g. `info`, `debug`, `warn` |
 
 ## Usage
 
@@ -908,7 +965,7 @@ Tests cover:
 
 ### Core Components
 
-1. **Main Loop** ([main.rs](src/main.rs))
+1. **Main Loop** ([router_loop.rs](src/router_loop.rs))
    - CAN frame reading with automatic reconnection and 500ms timeout
    - Message processing and routing
    - Database write coordination with retry logic

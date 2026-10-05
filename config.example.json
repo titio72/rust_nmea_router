@@ -14,11 +14,25 @@
   "logging": {
     "directory": "./logs",
     "file_prefix": "nmea_router",
-    "level": "info"
+    "level": "info",
+    "console_enabled": true
   },
   "time": {
     "skew_threshold_ms": 1000,
     "set_system_time": false
+  },
+  "health": {
+    "enabled": true,
+    "startup_grace_secs": 30,
+    "can_silence_secs": 10,
+    "required_stream_timeout_secs": 30,
+    "optional_stream_timeout_secs": 60,
+    "db_failure_secs": 60,
+    "loop_lag_secs": 2,
+    "loop_lag_window_secs": 60,
+    "loop_busy_ratio": 0.8,
+    "loop_stall_secs": 10,
+    "time_unsynced_secs": 60
   },
   "web": {
     "enabled": true,
@@ -43,10 +57,12 @@
     "enabled": true,
     "target_url": "https://your-trips-viewer.example.com",
     "api_key": "change-me-use-32-chars-minimum",
-    "timeout_secs": 120,
+    "timeout_secs": 600,
     "accept_invalid_certs": false
   },
   "polars_file_path": "/etc/nmea_router/polars.csv",
+  "land_mask_path": "/etc/nmea_router/land.geojson",
+  "land_mask_resolution_deg": 0.05,
   "database": {
     "connection": {
       "host": "localhost",

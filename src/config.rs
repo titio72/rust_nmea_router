@@ -53,9 +53,23 @@ pub struct Config {
     pub signalk: SignalKConfig,
     #[serde(default)]
     pub sync: SyncConfig,
-    /// Path to polar diagram CSV. Optional — when absent the route planner uses a fixed speed.
+    #[serde(default)]
+    pub health: HealthConfig,
+    /// Path to polar diagram CSV, in either the dense `angle,1..20` grid layout or the
+    /// ORC-style `TWA,6,8,..` layout with `Beat_Angle`/`Run_Angle` rows; the format is
+    /// detected from the header. Optional — when absent the route planner uses a fixed speed.
     #[serde(default)]
     pub polars_file_path: Option<String>,
+    /// Path to GeoJSON land polygon file for land avoidance in isochrone routing.
+    /// When absent, land avoidance is disabled.
+    /// Note: generalized sources like Natural Earth's ne_10m_land simplify away small
+    /// harbor/pier indentations, so a waypoint placed exactly at a pier can be misclassified
+    /// as land — see "Known Limitation" in docs/superpowers/specs/2026-07-03-land-avoidance-design.md.
+    #[serde(default)]
+    pub land_mask_path: Option<String>,
+    /// Grid resolution in degrees for the land mask raster (default 0.05 ≈ 3 nm).
+    #[serde(default = "default_land_mask_resolution_deg")]
+    pub land_mask_resolution_deg: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,6 +222,10 @@ fn default_sync_timeout_secs() -> u64 {
     120
 }
 
+fn default_land_mask_resolution_deg() -> f64 {
+    0.05
+}
+
 impl Default for SyncConfig {
     fn default() -> Self {
         Self {
@@ -228,6 +246,13 @@ pub struct LogConfig {
     pub file_prefix: String,
     /// Log level (trace, debug, info, warn, error)
     pub level: String,
+    /// Enable or disable logging to the console (stdout). File logging is unaffected.
+    #[serde(default = "default_console_enabled")]
+    pub console_enabled: bool,
+}
+
+fn default_console_enabled() -> bool {
+    true
 }
 
 impl Default for LogConfig {
@@ -236,6 +261,7 @@ impl Default for LogConfig {
             directory: "./logs".to_string(),
             file_prefix: "nmea_router".to_string(),
             level: "info".to_string(),
+            console_enabled: default_console_enabled(),
         }
     }
 }
@@ -350,6 +376,57 @@ impl Default for TimeConfig {
         Self {
             skew_threshold_ms: 500,
             set_system_time: false,
+        }
+    }
+}
+
+/// Health monitor thresholds. All durations are in seconds (like the other interval
+/// settings); `/api/health` reports ages in milliseconds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HealthConfig {
+    /// Master switch. When false, no alarms are ever reported.
+    pub enabled: bool,
+    /// No alarms for this long after process start (cold boot: bus and sensors need time).
+    pub startup_grace_secs: u64,
+    /// `can_silent` fires when no CAN frame has arrived for this long.
+    pub can_silence_secs: u64,
+    /// Required streams (position, COG/SOG, system time) alarm after this much silence.
+    pub required_stream_timeout_secs: u64,
+    /// Optional streams (heading, wind, engine) alarm after this much silence, but only if
+    /// they have been seen at least once since start.
+    pub optional_stream_timeout_secs: u64,
+    /// `db_failing` fires when writes of one kind have been failing continuously (no success
+    /// since the first failure) for this long. Time-based because write attempts are very
+    /// uneven: environmental writes retry at CAN-message rate, moored vessel writes every 30 min.
+    pub db_failure_secs: u64,
+    /// `loop_lagging` fires when one unit of work takes longer than this.
+    pub loop_lag_secs: u64,
+    /// `loop_lagging` stays active this long after the last slow unit of work.
+    pub loop_lag_window_secs: u64,
+    /// `loop_overloaded` fires when the loop spent more than this fraction (0-1] of a 10 s
+    /// window processing messages: it is saturating and the kernel CAN buffer may overflow.
+    pub loop_busy_ratio: f64,
+    /// `loop_stalled` fires when the router loop has not completed an iteration for this long.
+    pub loop_stall_secs: u64,
+    /// `time_not_synced` fires when time is uninitialized or skewed for this long.
+    pub time_unsynced_secs: u64,
+}
+
+impl Default for HealthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            startup_grace_secs: 30,
+            can_silence_secs: 10,
+            required_stream_timeout_secs: 30,
+            optional_stream_timeout_secs: 60,
+            db_failure_secs: 60,
+            loop_lag_secs: 2,
+            loop_lag_window_secs: 60,
+            loop_busy_ratio: 0.8,
+            loop_stall_secs: 10,
+            time_unsynced_secs: 60,
         }
     }
 }
@@ -529,6 +606,7 @@ impl Config {
 
         // Validate environmental intervals (30 seconds - 10 minutes = 30-600 seconds)
         self.validate_environmental_intervals();
+        self.validate_health();
 
         Ok(())
     }
@@ -553,6 +631,29 @@ impl Config {
                 self.database.vessel_status.interval_underway_seconds, defaults.interval_underway_seconds);
             self.database.vessel_status.interval_underway_seconds =
                 defaults.interval_underway_seconds;
+        }
+    }
+
+    fn validate_health(&mut self) {
+        let defaults = HealthConfig::default();
+        let h = &mut self.health;
+        let mut fix = |name: &str, value: &mut u64, default: u64| {
+            if *value == 0 {
+                warn!("Configuration warning: health.{} must be > 0. Reverting to default {}.", name, default);
+                *value = default;
+            }
+        };
+        fix("can_silence_secs", &mut h.can_silence_secs, defaults.can_silence_secs);
+        fix("required_stream_timeout_secs", &mut h.required_stream_timeout_secs, defaults.required_stream_timeout_secs);
+        fix("optional_stream_timeout_secs", &mut h.optional_stream_timeout_secs, defaults.optional_stream_timeout_secs);
+        fix("loop_lag_secs", &mut h.loop_lag_secs, defaults.loop_lag_secs);
+        fix("loop_lag_window_secs", &mut h.loop_lag_window_secs, defaults.loop_lag_window_secs);
+        fix("loop_stall_secs", &mut h.loop_stall_secs, defaults.loop_stall_secs);
+        fix("time_unsynced_secs", &mut h.time_unsynced_secs, defaults.time_unsynced_secs);
+        fix("db_failure_secs", &mut h.db_failure_secs, defaults.db_failure_secs);
+        if !(h.loop_busy_ratio > 0.0 && h.loop_busy_ratio <= 1.0) {
+            warn!("Configuration warning: health.loop_busy_ratio ({}) must be in (0, 1]. Reverting to default {}.", h.loop_busy_ratio, defaults.loop_busy_ratio);
+            h.loop_busy_ratio = defaults.loop_busy_ratio;
         }
     }
 
@@ -618,14 +719,40 @@ impl Config {
     }
 
     /// Apply environment variable overrides after JSON loading.
-    /// Supports: DATABASE_URL, PORT, AUTH_PASSWORD, SECURE_COOKIES, LOG_LEVEL
+    /// Supports: DATABASE_URL, MYSQL_URL, MYSQL_PUBLIC_URL, MYSQLHOST/PORT/USER/PASSWORD/DATABASE,
+    ///           PORT, AUTH_PASSWORD, SECURE_COOKIES, LOG_LEVEL
     pub fn apply_env_overrides(&mut self) {
-        if let Ok(url) = std::env::var("DATABASE_URL") {
+        let db_url = std::env::var("DATABASE_URL")
+            .or_else(|_| std::env::var("MYSQL_URL"))
+            .or_else(|_| std::env::var("MYSQL_PUBLIC_URL"))
+            .ok();
+        if let Some(url) = db_url {
             if let Some(conn) = Self::parse_database_url(&url) {
+                eprintln!("[config] DB host from URL env var: {}:{}", conn.host, conn.port);
                 self.database.connection = conn;
             } else {
-                warn!("DATABASE_URL is set but could not be parsed, ignoring");
+                eprintln!("[config] WARNING: DB URL env var set but could not be parsed: {}", url);
             }
+        } else if let (Ok(host), Ok(port_str), Ok(user), Ok(pass), Ok(db)) = (
+            std::env::var("MYSQLHOST"),
+            std::env::var("MYSQLPORT"),
+            std::env::var("MYSQLUSER"),
+            std::env::var("MYSQLPASSWORD"),
+            std::env::var("MYSQLDATABASE"),
+        ) {
+            match port_str.parse::<u16>() {
+                Ok(port) => {
+                    eprintln!("[config] DB host from MYSQL* env vars: {}:{}", host, port);
+                    self.database.connection.host = host;
+                    self.database.connection.port = port;
+                    self.database.connection.username = user;
+                    self.database.connection.password = pass;
+                    self.database.connection.database_name = db;
+                }
+                Err(_) => eprintln!("[config] WARNING: MYSQLPORT '{}' is not a valid port, ignoring MYSQL* vars", port_str),
+            }
+        } else {
+            eprintln!("[config] WARNING: no DB env vars found (DATABASE_URL / MYSQL_URL / MYSQLHOST); using config file values ({}:{})", self.database.connection.host, self.database.connection.port);
         }
         if let Ok(port_str) = std::env::var("PORT") {
             match port_str.parse::<u16>() {
@@ -644,22 +771,42 @@ impl Config {
                 self.logging.level = level;
             }
         }
+        if let Ok(key) = std::env::var("SYNC_API_KEY") {
+            eprintln!("[config] SYNC_API_KEY env var found (len={})", key.len());
+            self.sync.api_key = if key.is_empty() { None } else { Some(key) };
+        } else {
+            eprintln!("[config] SYNC_API_KEY env var not set");
+        }
+        if let Ok(val) = std::env::var("SYNC_ENABLED") {
+            self.sync.enabled = matches!(val.to_lowercase().as_str(), "true" | "1" | "yes");
+        }
+        if let Ok(url) = std::env::var("SYNC_TARGET_URL") {
+            if !url.is_empty() {
+                self.sync.target_url = url;
+            }
+        }
     }
 
-    /// Parse a mysql://user:pass@host:port/dbname URL into a DatabaseConnectionConfig.
+    /// Parse a mysql://user:pass@host:port/dbname[?params] URL into a DatabaseConnectionConfig.
+    /// Accepts mysql://, mysql2://, and mysqls:// prefixes. Query parameters are ignored.
     fn parse_database_url(url: &str) -> Option<DatabaseConnectionConfig> {
-        let url = url.strip_prefix("mysql://")?;
-        let (userinfo, hostinfo) = url.split_once('@')?;
+        let rest = url
+            .strip_prefix("mysql2://")
+            .or_else(|| url.strip_prefix("mysqls://"))
+            .or_else(|| url.strip_prefix("mysql://"))?;
+        let (userinfo, hostinfo) = rest.split_once('@')?;
         let (username, password) = userinfo.split_once(':')?;
-        let (hostport, database_name) = hostinfo.split_once('/')?;
+        let (hostport, rest) = hostinfo.split_once('/')?;
         let (host, port_str) = hostport.split_once(':')?;
         let port = port_str.parse::<u16>().ok()?;
+        // Strip query parameters (e.g. ?sslaccept=strict appended by Railway)
+        let database_name = rest.split('?').next().unwrap_or(rest).to_string();
         Some(DatabaseConnectionConfig {
             host: host.to_string(),
             port,
             username: username.to_string(),
             password: password.to_string(),
-            database_name: database_name.to_string(),
+            database_name,
             pool_min: DatabaseConnectionConfig::default_pool_min(),
             pool_max: DatabaseConnectionConfig::default_pool_max(),
         })
@@ -681,7 +828,10 @@ impl Config {
             udp: UdpConfig::default(),
             signalk: SignalKConfig::default(),
             sync: SyncConfig::default(),
+            health: HealthConfig::default(),
             polars_file_path: None,
+            land_mask_path: None,
+            land_mask_resolution_deg: default_land_mask_resolution_deg(),
         }
     }
 }
@@ -739,6 +889,60 @@ impl EnvironmentalConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_health_config_defaults() {
+        let h = HealthConfig::default();
+        assert!(h.enabled);
+        assert_eq!(h.startup_grace_secs, 30);
+        assert_eq!(h.can_silence_secs, 10);
+        assert_eq!(h.required_stream_timeout_secs, 30);
+        assert_eq!(h.optional_stream_timeout_secs, 60);
+        assert_eq!(h.db_failure_secs, 60);
+        assert!((h.loop_busy_ratio - 0.8).abs() < 1e-9);
+        assert_eq!(h.loop_lag_secs, 2);
+        assert_eq!(h.loop_lag_window_secs, 60);
+        assert_eq!(h.loop_stall_secs, 10);
+        assert_eq!(h.time_unsynced_secs, 60);
+    }
+
+    #[test]
+    fn test_health_config_absent_section_uses_defaults() {
+        let json = r#"{
+            "can": {"interface": "vcan0", "enabled": false},
+            "time": {"skew_threshold_ms": 500},
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.health.can_silence_secs, 10);
+    }
+
+    #[test]
+    fn test_health_config_partial_section_keeps_other_defaults() {
+        let h: HealthConfig = serde_json::from_str(r#"{"can_silence_secs": 20}"#).unwrap();
+        assert_eq!(h.can_silence_secs, 20);
+        assert_eq!(h.loop_stall_secs, 10);
+    }
+
+    #[test]
+    fn test_health_config_zero_values_revert_to_defaults() {
+        let mut config = Config::new_default_instance();
+        config.health.can_silence_secs = 0;
+        config.health.db_failure_secs = 0;
+        config.health.loop_busy_ratio = 1.5;
+        config.health.loop_lag_secs = 0;
+        config.health.startup_grace_secs = 0; // zero grace is legitimate
+        config.validate_and_fix().unwrap();
+        assert_eq!(config.health.can_silence_secs, 10);
+        assert_eq!(config.health.db_failure_secs, 60);
+        assert!((config.health.loop_busy_ratio - 0.8).abs() < 1e-9);
+        assert_eq!(config.health.loop_lag_secs, 2);
+        assert_eq!(config.health.startup_grace_secs, 0);
+    }
 
     #[test]
     fn test_time_config_default() {
@@ -927,6 +1131,7 @@ mod tests {
         assert_eq!(log_config.directory, "./logs");
         assert_eq!(log_config.file_prefix, "nmea_router");
         assert_eq!(log_config.level, "info");
+        assert!(log_config.console_enabled);
     }
 
     #[test]
@@ -935,6 +1140,7 @@ mod tests {
             directory: "/var/log/nmea".to_string(),
             file_prefix: "router".to_string(),
             level: "debug".to_string(),
+            console_enabled: true,
         };
 
         let json = serde_json::to_string(&log_config).unwrap();
@@ -946,6 +1152,21 @@ mod tests {
         assert_eq!(deserialized.directory, "/var/log/nmea");
         assert_eq!(deserialized.file_prefix, "router");
         assert_eq!(deserialized.level, "debug");
+        assert!(deserialized.console_enabled);
+    }
+
+    #[test]
+    fn test_log_config_console_enabled_defaults_to_true_when_missing() {
+        let json = r#"{"directory": "./logs", "file_prefix": "nmea_router", "level": "info"}"#;
+        let log_config: LogConfig = serde_json::from_str(json).unwrap();
+        assert!(log_config.console_enabled);
+    }
+
+    #[test]
+    fn test_log_config_console_enabled_can_be_disabled() {
+        let json = r#"{"directory": "./logs", "file_prefix": "nmea_router", "level": "info", "console_enabled": false}"#;
+        let log_config: LogConfig = serde_json::from_str(json).unwrap();
+        assert!(!log_config.console_enabled);
     }
 
     #[test]
@@ -1499,5 +1720,39 @@ mod tests {
         assert_eq!(config.sync.target_url, "https://trips.example.com");
         assert_eq!(config.sync.api_key.as_deref(), Some("secret"));
         assert_eq!(config.sync.timeout_secs, 90);
+    }
+
+    #[test]
+    fn test_land_mask_config_defaults() {
+        let json = r#"{
+            "can": {"interface": "vcan0", "enabled": false},
+            "time": {"skew_threshold_ms": 500},
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(config.land_mask_path.is_none());
+        assert!((config.land_mask_resolution_deg - 0.05).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_land_mask_config_explicit() {
+        let json = r#"{
+            "can": {"interface": "vcan0", "enabled": false},
+            "time": {"skew_threshold_ms": 500},
+            "land_mask_path": "/etc/nmea_router/land.geojson",
+            "land_mask_resolution_deg": 0.03,
+            "database": {
+                "connection": {"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"},
+                "vessel_status": {"interval_moored_seconds": 1800, "interval_underway_seconds": 30},
+                "environmental": {"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.land_mask_path.as_deref(), Some("/etc/nmea_router/land.geojson"));
+        assert!((config.land_mask_resolution_deg - 0.03).abs() < 1e-9);
     }
 }

@@ -64,6 +64,12 @@ pub struct TripSummary {
     pub moored_time_ms: i64,
     pub sailing_distance_nm: f64,
     pub motoring_distance_nm: f64,
+    pub upwind_distance_nm: f64,
+    pub reaching_distance_nm: f64,
+    pub running_distance_nm: f64,
+    pub upwind_time_ms: i64,
+    pub reaching_time_ms: i64,
+    pub running_time_ms: i64,
 }
 
 impl TripSummary {
@@ -132,6 +138,25 @@ pub struct WindStatisticsData {
 }
 
 #[derive(Debug, serde::Serialize)]
+pub struct TwaDistributionData {
+    /// Signed TWA bucket lower bounds, degrees (-180..175); negative = port, positive = starboard
+    pub angles: Vec<f64>,
+    /// Distance sailed in each bucket, nautical miles
+    pub distance: Vec<f64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CompassDeviationBucket {
+    /// Heading bucket lower bound, degrees (0..350, 10-degree buckets)
+    pub heading: f64,
+    /// Number of underway samples in this bucket
+    pub count: u32,
+    /// Mean signed diff (average_heading_deg - cog_deg, circularly folded to [-180, 180)), degrees.
+    /// None when the bucket has no samples.
+    pub mean_diff: Option<f64>,
+}
+
+#[derive(Debug, serde::Serialize)]
 pub struct TripLeg {
     pub leg_number: u32,
     pub start_timestamp: String,
@@ -143,6 +168,12 @@ pub struct TripLeg {
     pub motoring_time_ms: u64,
     pub sailing_time_formatted: String,
     pub motoring_time_formatted: String,
+    pub upwind_distance_nm: f64,
+    pub reaching_distance_nm: f64,
+    pub running_distance_nm: f64,
+    pub upwind_time_ms: u64,
+    pub reaching_time_ms: u64,
+    pub running_time_ms: u64,
     pub start_lat: Option<f64>,
     pub start_lon: Option<f64>,
     pub end_lat: Option<f64>,
@@ -155,6 +186,13 @@ pub struct TripLeg {
     pub nav_time_ms: u64,
     /// How the nav window was detected: "engine_transition", "speed_fallback", or null
     pub nav_detection_method: Option<String>,
+    /// Highest recorded speed while sailing (engine off) within this leg.
+    pub max_speed_kn: Option<f64>,
+    pub max_speed_timestamp: Option<String>,
+    pub fastest_1nm: Option<FastestSegment>,
+    pub fastest_5nm: Option<FastestSegment>,
+    pub fastest_10nm: Option<FastestSegment>,
+    pub fastest_25nm: Option<FastestSegment>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -197,7 +235,7 @@ pub struct HeatmapData {
     pub total_motoring_distance: f64,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct FastestSegment {
     pub distance_nm: f64,
     pub average_speed_kn: f64,
@@ -207,25 +245,18 @@ pub struct FastestSegment {
 }
 
 #[derive(Debug, serde::Serialize)]
-pub struct TrackAnalytics {
-    pub max_speed_kn: Option<f64>,
-    pub max_speed_timestamp: Option<String>,
-    pub average_speed_kn: Option<f64>,
-    pub average_speed_sailing_kn: Option<f64>,
-    pub average_speed_motoring_kn: Option<f64>,
-    pub fastest_1nm: Option<FastestSegment>,
-    pub fastest_5nm: Option<FastestSegment>,
-    pub fastest_10nm: Option<FastestSegment>,
-    pub fastest_25nm: Option<FastestSegment>,
-}
-
-#[derive(Debug, serde::Serialize)]
 pub struct MonthlyStatistic {
     pub year: i32,
     pub month: u32,
     pub date: String,
     pub sailing_distance_nm: f64,
     pub motoring_distance_nm: f64,
+    pub upwind_distance_nm: f64,
+    pub reaching_distance_nm: f64,
+    pub running_distance_nm: f64,
+    pub upwind_time_ms: u64,
+    pub reaching_time_ms: u64,
+    pub running_time_ms: u64,
 }
 
 #[derive(Debug, serde::Serialize)]

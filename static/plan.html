@@ -3,226 +3,370 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Forecast & Planning - NMEA Router</title>
+    <title>Planning - NMEA Router</title>
+    <link rel="icon" type="image/png" href="/images/nmeasail.png">
     <link rel="stylesheet" href="/shared.css">
     <link rel="stylesheet" href="/libs/leaflet.min.css" />
     <script src="/js/shared-theme.js?v=3"></script>
     <script src="/libs/leaflet.min.js"></script>
+    <script src="/libs/wind-gl.js"></script>
+    <script src="/js/wind-particle-layer.js"></script>
+    <script src="/js/map-lat-lon-panel.js"></script>
+    <script src="/js/map-measure-tool.js"></script>
     <style>
-        #planMap { height: calc(100vh - 280px); min-height: 380px; border-radius: 6px; }
+        .container { max-width: 100%; margin: 0; padding: 0; }
+        #mapWrap { position: relative; width: 100%; min-height: 380px; }
+        #planMap { position: absolute; inset: 0; }
+
+        .map-overlay-panel {
+            position: absolute;
+            background: color-mix(in srgb, var(--bg-secondary) 90%, transparent);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: 0 4px 16px var(--card-shadow);
+            z-index: 500;
+            backdrop-filter: blur(4px);
+        }
+        .map-overlay-header {
+            display: flex; align-items: center; cursor: pointer; user-select: none;
+            font-size: 11px; color: var(--text-secondary); font-weight: 600;
+            letter-spacing: 0.5px; text-transform: uppercase; gap: 6px;
+        }
         .day-tab { padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px;
                    background: var(--bg-secondary); color: var(--text-secondary);
                    border: 1px solid var(--border-color); }
         .day-tab.active { background: var(--link-color); color: #fff; border-color: var(--link-color); }
         .day-tab:hover:not(.active) { background: var(--bg-hover); }
+
+        .alt-route-modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        .alt-route-modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .alt-route-modal-content {
+            background: var(--bg-secondary);
+            padding: 24px 26px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px var(--card-shadow);
+            max-width: 560px;
+            width: 90%;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .alt-route-modal-header {
+            font-size: 18px;
+            font-weight: bold;
+            color: var(--text-bold);
+            margin-bottom: 16px;
+        }
+        .alt-route-modal-stats {
+            display: flex;
+            gap: 24px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px 18px;
+            margin-bottom: 14px;
+        }
+        .alt-route-modal-stats > div { flex: 1; }
+        .alt-route-modal-stats .label { font-size: 11px; color: var(--text-secondary); margin-bottom: 2px; }
+        .alt-route-modal-stats .value { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+        .alt-route-modal-table-wrap { overflow-y: auto; }
+        .alt-route-modal table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .alt-route-modal th {
+            position: sticky; top: 0; background: var(--bg-secondary);
+            text-align: left; padding: 6px 10px; color: var(--text-secondary);
+            font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .alt-route-modal td { padding: 5px 10px; color: var(--text-primary); border-bottom: 1px solid var(--border-color); }
+        .alt-route-modal-actions {
+            margin-top: 16px; align-self: flex-end; display: flex; gap: 10px;
+        }
+        .alt-route-modal-close, .alt-route-modal-select {
+            padding: 9px 18px; border: none; border-radius: 4px; cursor: pointer;
+            font-size: 14px;
+        }
+        .alt-route-modal-close {
+            background-color: var(--bg-tertiary); color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        .alt-route-modal-close:hover { opacity: 0.8; }
+        .alt-route-modal-select {
+            background-color: var(--sailing-color); color: white; border: 1px solid transparent;
+        }
+        .alt-route-modal-select:hover { background-color: #229954; }
+        .route-report-table-wrap { flex: 1; min-height: 0; overflow-y: auto; overflow-x: auto; }
+        .route-report-table-wrap table { border-collapse: collapse; font-size: 11px; white-space: nowrap; }
+        .route-report-table-wrap th {
+            position: sticky; top: 0; background: var(--bg-secondary);
+            text-align: left; padding: 4px 7px; color: var(--text-secondary);
+            font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .route-report-table-wrap td {
+            padding: 3px 7px; color: var(--text-primary);
+            border-bottom: 1px solid var(--border-color);
+        }
+        .route-summary-resize-handle {
+            position: absolute; top: 0; bottom: 0; left: -4px; width: 8px;
+            cursor: ew-resize; z-index: 20; border-radius: 4px;
+        }
+        .route-summary-resize-handle:hover, .route-summary-resize-handle.dragging {
+            background: color-mix(in srgb, var(--link-color) 40%, transparent);
+        }
     </style>
 </head>
 <body>
     <div id="headerContainer"></div>
 
-    <div style="max-width:1500px; margin:0 auto; padding:20px;">
-
-        <!-- Forecast Areas management -->
-        <div class="level-1-container" style="margin-bottom:10px; padding:14px 20px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-                <h2 onclick="toggleForecastAreas()"
-                    style="font-size:16px; font-weight:bold; color:var(--text-bold); margin:0;
-                           cursor:pointer; user-select:none; display:flex; align-items:center; gap:8px;">
-                    <span id="forecastAreasChevron" style="font-size:12px;">▾</span>Forecast Areas
-                </h2>
-                <div style="display:flex; align-items:center; gap:14px;">
-                    <span id="forecastPollerStatus" style="font-size:12px; color:var(--text-secondary);"></span>
-                    <button id="forecastRefreshBtn" onclick="refreshForecast()"
-                        style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
-                               border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
-                        ↻ Refresh
-                    </button>
-                </div>
-            </div>
-            <div id="forecastAreasBody" style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
-                <div>
-                    <div id="forecastAreaList" style="margin-bottom:12px;"></div>
-                    <button id="drawAreaBtn" onclick="startDrawArea()"
-                        style="padding:6px 14px; background:var(--link-color); color:#fff; border:none;
-                               border-radius:4px; cursor:pointer; font-size:13px;">
-                        Draw Area
-                    </button>
-                    <button id="cancelDrawBtn" onclick="cancelDrawArea()"
-                        style="display:none; padding:6px 14px; background:#e74c3c; color:#fff; border:none;
-                               border-radius:4px; cursor:pointer; font-size:13px; margin-left:8px;">
-                        Cancel
-                    </button>
-                    <span id="drawAreaHint"
-                        style="font-size:12px; color:var(--text-secondary); margin-left:10px; display:none;">
-                        Click and drag on the map to draw a bounding box
-                    </span>
-                </div>
-                <div id="forecastAreaMapEl"
-                     style="height:200px; border-radius:6px; border:1px solid var(--border-color);"></div>
-            </div>
-        </div>
-
-        <!-- Time scrubber -->
-        <div class="level-1-container" style="padding:14px 20px; margin-bottom:10px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                <div id="dayTabsContainer" style="display:flex; gap:5px; flex-wrap:wrap;"></div>
-                <div style="display:flex; gap:8px; align-items:center;">
-                    <button id="gustToggleBtn" onclick="toggleGustMode()"
-                        style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
-                               border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
-                        Show Gust
-                    </button>
-                    <button id="planRouteBtn" onclick="toggleRouteMode()"
-                        style="padding:5px 14px; background:var(--link-color); color:#fff; border:none;
-                               border-radius:4px; cursor:pointer; font-size:13px;">
-                        Plan Route
-                    </button>
-                </div>
-            </div>
-            <div style="display:flex; align-items:center; gap:12px;">
-                <input type="range" id="hourSlider" min="0" max="23" value="0"
-                    style="flex:1; accent-color:var(--link-color);">
-                <span id="selectedTime"
-                    style="font-size:13px; color:var(--text-bold); min-width:185px; text-align:right;"></span>
-                <button onclick="jumpToNow()"
-                    style="padding:4px 10px; font-size:12px; border:1px solid var(--border-color);
-                           border-radius:4px; background:transparent; color:var(--text-secondary); cursor:pointer;">
-                    Now
-                </button>
-            </div>
-        </div>
-
-        <!-- Route bar (hidden until route mode) -->
-        <div id="routeBar" class="level-1-container"
-             style="display:none; padding:10px 20px; margin-bottom:10px;">
-            <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; font-size:13px;">
-                <span id="routeWptCount"
-                    style="color:var(--text-primary); font-weight:600; min-width:200px;">
-                    click map to add waypoints
-                </span>
-                <span style="color:var(--border-color); margin:0 4px;">|</span>
-                <label style="color:var(--text-secondary);">Dep (UTC):
-                    <input type="datetime-local" id="depInput"
-                        style="margin-left:6px; background:var(--bg-secondary);
-                               border:1px solid var(--border-color); border-radius:4px;
-                               padding:3px 8px; color:var(--text-primary); font-size:13px;">
-                </label>
-                <label style="color:var(--text-secondary);">Motoring speed:
-                    <input type="number" id="speedInput" value="5.5" min="1" max="20" step="0.5"
-                        style="width:64px; margin-left:6px; background:var(--bg-secondary);
-                               border:1px solid var(--border-color); border-radius:4px;
-                               padding:3px 8px; color:var(--text-primary); font-size:13px;"> kn
-                </label>
-                <label style="color:var(--text-secondary);" title="Fraction of polar speed to use (sea state, sail trim, etc.)">Polar efficiency:
-                    <input type="number" id="efficiencyInput" value="95" min="50" max="100" step="1"
-                        style="width:52px; margin-left:6px; background:var(--bg-secondary);
-                               border:1px solid var(--border-color); border-radius:4px;
-                               padding:3px 8px; color:var(--text-primary); font-size:13px;"> %
-                </label>
-                <label style="color:var(--text-secondary);" title="Motor if expected sail speed drops below this">Min sail speed:
-                    <input type="number" id="minSailInput" value="3.0" min="0" max="10" step="0.5"
-                        style="width:52px; margin-left:6px; background:var(--bg-secondary);
-                               border:1px solid var(--border-color); border-radius:4px;
-                               padding:3px 8px; color:var(--text-primary); font-size:13px;"> kn
-                </label>
-                <label style="color:var(--text-secondary);" title="Bonus score per sailed hour during route optimisation. 0 = fastest route, higher values favour more sailing.">Sail preference:
-                    <input type="number" id="sailWeightInput" value="0" min="0" max="10" step="0.5"
-                        style="width:52px; margin-left:6px; background:var(--bg-secondary);
-                               border:1px solid var(--border-color); border-radius:4px;
-                               padding:3px 8px; color:var(--text-primary); font-size:13px;"> kn
-                </label>
-                <button id="undoBtn" onclick="undoWaypoint()" disabled
-                    style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
-                           border:1px solid var(--border-color); border-radius:4px;
-                           cursor:pointer; font-size:13px;">
-                    ↩ Undo
-                </button>
-                <button id="doneBtn" onclick="doneDrawing()" disabled
-                    style="padding:5px 14px; background:#48bb78; color:#fff; border:none;
-                           border-radius:4px; cursor:pointer; font-size:13px;">
-                    ✓ Done
-                </button>
-                <button id="computeBtn" onclick="computeRoute()" disabled
-                    style="padding:5px 14px; background:var(--link-color); color:#fff; border:none;
-                           border-radius:4px; cursor:pointer; font-size:13px; opacity:0.4;">
-                    Compute
-                </button>
-                <button id="optimizeBtn" onclick="optimizeRoute()" disabled
-                    style="padding:6px 16px; background:#805ad5; color:#fff;
-                           border:none; border-radius:4px; cursor:pointer; font-size:13px; opacity:0.4;">
-                    ⚡ Optimize
-                </button>
-            </div>
-        </div>
-
-        <!-- Map -->
-        <div class="level-1-container" style="padding:0; overflow:hidden; margin-bottom:10px;">
+    <div class="container">
+        <div id="mapWrap">
             <div id="planMap"></div>
-        </div>
 
-        <!-- Stats bar -->
-        <div class="level-1-container" style="padding:12px 20px;">
-            <div style="display:flex; gap:28px; flex-wrap:wrap; font-size:13px; color:var(--text-secondary);">
-                Wind: <strong id="statWind" style="color:var(--text-primary);">—</strong>
-                &nbsp;Gust: <strong id="statGust" style="color:var(--text-primary);">—</strong>
-                &nbsp;Wave: <strong id="statWave" style="color:var(--text-primary);">—</strong>
-                &nbsp;Period: <strong id="statPeriod" style="color:var(--text-primary);">—</strong>
-                &nbsp;CAPE: <strong id="statCape" style="color:var(--text-primary);">—</strong>
+            <!-- Top overlay: time scrubber + forecast controls + stats -->
+            <div id="topOverlay" class="map-overlay-panel" style="top:12px; left:12px; right:12px; padding:10px 14px;">
+                <div class="map-overlay-header" onclick="toggleOverlayCollapse('topOverlayBody','topOverlayChevron')">
+                    <span id="topOverlayChevron">▾</span> Forecast &amp; Time
+                </div>
+                <div id="topOverlayBody" style="margin-top:8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                        <div id="dayTabsContainer" style="display:flex; gap:5px; flex-wrap:wrap;"></div>
+                        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                            <span id="forecastPollerStatus" style="font-size:12px; color:var(--text-secondary);"></span>
+                            <button id="forecastRefreshBtn" onclick="refreshForecast()"
+                                style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
+                                       border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
+                                ↻ Refresh
+                            </button>
+                            <label style="display:flex; align-items:center; gap:5px; color:var(--text-secondary); font-size:13px;">
+                                <input type="checkbox" id="windOverlayInput" checked onchange="toggleWindOverlay()">
+                                Wind overlay
+                            </label>
+                            <button id="gustToggleBtn" onclick="toggleGustMode()"
+                                style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
+                                       border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
+                                Show Gust
+                            </button>
+                            <button id="measureBtn" onclick="measureTool.toggle()"
+                                style="padding:5px 14px; background:var(--bg-secondary); color:var(--text-secondary);
+                                       border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:13px;">
+                                📏 Measure
+                            </button>
+                            <button id="planRouteBtn" onclick="toggleRouteMode()"
+                                style="padding:5px 14px; background:var(--link-color); color:#fff; border:none;
+                                       border-radius:4px; cursor:pointer; font-size:13px;">
+                                Plan Route
+                            </button>
+                        </div>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px;">
+                        <input type="range" id="hourSlider" min="0" max="23" value="0"
+                            style="flex:1; accent-color:var(--link-color);">
+                        <span id="selectedTime"
+                            style="font-size:13px; color:var(--text-bold); min-width:185px; text-align:right;"></span>
+                        <button onclick="jumpToNow()"
+                            style="padding:4px 10px; font-size:12px; border:1px solid var(--border-color);
+                                   border-radius:4px; background:transparent; color:var(--text-secondary); cursor:pointer;">
+                            Now
+                        </button>
+                    </div>
+                    <div style="display:flex; gap:22px; flex-wrap:wrap; font-size:12px; color:var(--text-secondary);">
+                        Wind: <strong id="statWind" style="color:var(--text-primary);">—</strong>
+                        &nbsp;Gust: <strong id="statGust" style="color:var(--text-primary);">—</strong>
+                        &nbsp;Wave: <strong id="statWave" style="color:var(--text-primary);">—</strong>
+                        &nbsp;Period: <strong id="statPeriod" style="color:var(--text-primary);">—</strong>
+                        &nbsp;CAPE: <strong id="statCape" style="color:var(--text-primary);">—</strong>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Left sidebar overlay: route config (hidden until route mode) -->
+            <div id="routeBar" class="map-overlay-panel"
+                 style="display:none; left:12px; width:280px; max-height:60vh; overflow-y:auto; padding:12px 14px;">
+                <div class="map-overlay-header" onclick="toggleOverlayCollapse('routeBarBody','routeBarChevron')">
+                    <span id="routeBarChevron">▾</span> Route
+                </div>
+                <div id="routeBarBody" style="display:flex; flex-direction:column; gap:10px; margin-top:10px; font-size:13px;">
+                    <span id="routeWptCount" style="color:var(--text-primary); font-weight:600;">
+                        click map to add waypoints
+                    </span>
+                    <label style="color:var(--text-secondary); display:flex; flex-direction:column; gap:3px;">Dep (UTC):
+                        <input type="datetime-local" id="depInput"
+                            style="background:var(--bg-secondary); border:1px solid var(--border-color);
+                                   border-radius:4px; padding:4px 8px; color:var(--text-primary); font-size:13px;">
+                    </label>
+                    <label style="color:var(--text-secondary); display:flex; flex-direction:column; gap:3px;">Motoring speed (kn):
+                        <input type="number" id="speedInput" value="5.5" min="1" max="20" step="0.5"
+                            style="background:var(--bg-secondary); border:1px solid var(--border-color);
+                                   border-radius:4px; padding:4px 8px; color:var(--text-primary); font-size:13px;">
+                    </label>
+                    <label style="color:var(--text-secondary); display:flex; flex-direction:column; gap:3px;"
+                           title="Fraction of polar speed to use (sea state, sail trim, etc.)">Polar efficiency (%):
+                        <input type="number" id="efficiencyInput" value="95" min="50" max="100" step="1"
+                            style="background:var(--bg-secondary); border:1px solid var(--border-color);
+                                   border-radius:4px; padding:4px 8px; color:var(--text-primary); font-size:13px;">
+                    </label>
+                    <label style="color:var(--text-secondary); display:flex; flex-direction:column; gap:3px;"
+                           title="Motor if expected sail speed drops below this">Min sail speed (kn):
+                        <input type="number" id="minSailInput" value="3.0" min="0" max="10" step="0.5"
+                            style="background:var(--bg-secondary); border:1px solid var(--border-color);
+                                   border-radius:4px; padding:4px 8px; color:var(--text-primary); font-size:13px;">
+                    </label>
+                    <label style="color:var(--text-secondary); display:flex; flex-direction:column; gap:3px;"
+                           title="Motor instead of sail when the wind is tighter than this off the bow">Min wind angle (°):
+                        <input type="number" id="minTwaInput" value="60" min="0" max="180" step="1"
+                            style="background:var(--bg-secondary); border:1px solid var(--border-color);
+                                   border-radius:4px; padding:4px 8px; color:var(--text-primary); font-size:13px;">
+                    </label>
+                    <label style="color:var(--text-secondary); display:flex; flex-direction:column; gap:3px;"
+                           title="Bonus score per sailed hour during route optimisation. 0 = fastest route, higher values favour more sailing.">Sail preference (kn):
+                        <input type="number" id="sailWeightInput" value="0" min="0" max="10" step="0.5"
+                            style="background:var(--bg-secondary); border:1px solid var(--border-color);
+                                   border-radius:4px; padding:4px 8px; color:var(--text-primary); font-size:13px;">
+                    </label>
+                    <label style="color:var(--text-secondary); display:flex; align-items:center; gap:6px;"
+                           title="Route around land/islands when optimizing. Turn off to compare against a straight-line-ignoring-coastline result.">
+                        <input type="checkbox" id="avoidLandInput" checked>
+                        Avoid land
+                    </label>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:4px;">
+                        <button id="undoBtn" onclick="undoWaypoint()" disabled
+                            style="padding:6px 10px; background:var(--bg-secondary); color:var(--text-secondary);
+                                   border:1px solid var(--border-color); border-radius:4px;
+                                   cursor:pointer; font-size:13px;">
+                            ↩ Undo
+                        </button>
+                        <button id="doneBtn" onclick="doneDrawing()" disabled
+                            style="padding:6px 10px; background:#48bb78; color:#fff; border:none;
+                                   border-radius:4px; cursor:pointer; font-size:13px;">
+                            ✓ Done
+                        </button>
+                        <button id="computeBtn" onclick="computeRoute()" disabled
+                            style="padding:6px 10px; background:var(--link-color); color:#fff; border:none;
+                                   border-radius:4px; cursor:pointer; font-size:13px; opacity:0.4;">
+                            Compute
+                        </button>
+                        <button id="optimizeBtn" onclick="optimizeRoute()" disabled
+                            style="padding:6px 10px; background:#805ad5; color:#fff;
+                                   border:none; border-radius:4px; cursor:pointer; font-size:13px; opacity:0.4;">
+                            ⚡ Optimize
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom sheet overlay: route summary (shown after compute) -->
+            <div id="routeSummary" class="map-overlay-panel"
+                 style="display:none; right:12px; bottom:12px; width:300px; padding:10px 12px;
+                        flex-direction:column; overflow:hidden;">
+                <div id="routeSummaryResizeHandle" class="route-summary-resize-handle" title="Drag to resize"></div>
+                <div class="map-overlay-header" onclick="toggleOverlayCollapse('routeSummaryBody','routeSummaryChevron')">
+                    <span id="routeSummaryChevron">▾</span> Route Summary
+                </div>
+                <div id="routeSummaryBody" style="display:flex; flex-direction:column; flex:1; min-height:0; margin-top:8px; font-size:12px;">
+                    <!-- Key stats -->
+                    <div style="display:grid; grid-template-columns:1fr 1fr; border:1px solid var(--border-color);
+                                border-radius:6px; overflow:hidden; margin-bottom:10px;">
+                        <div style="padding:6px 9px; border-right:1px solid var(--border-color); border-bottom:1px solid var(--border-color);">
+                            <div style="font-size:10px; color:var(--text-secondary); margin-bottom:1px;">Distance</div>
+                            <div id="sumDistance" style="font-size:15px; font-weight:700; color:var(--text-primary);">—</div>
+                        </div>
+                        <div style="padding:6px 9px; border-bottom:1px solid var(--border-color);">
+                            <div style="font-size:10px; color:var(--text-secondary); margin-bottom:1px;">Duration</div>
+                            <div id="sumDur" style="font-size:15px; font-weight:700; color:var(--text-primary);">—</div>
+                        </div>
+                        <div style="padding:6px 9px; border-right:1px solid var(--border-color);">
+                            <div style="font-size:10px; color:var(--text-secondary); margin-bottom:1px;">Departure</div>
+                            <div id="sumDep" style="font-size:11px; font-weight:600; color:var(--text-primary);">—</div>
+                        </div>
+                        <div style="padding:6px 9px;">
+                            <div style="font-size:10px; color:var(--text-secondary); margin-bottom:1px;">Arrival</div>
+                            <div id="sumArr" style="font-size:11px; font-weight:600; color:var(--text-primary);">—</div>
+                        </div>
+                    </div>
+
+                    <!-- Sail / motor split -->
+                    <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-secondary);
+                                margin-bottom:4px;">
+                        <span>⛵ &nbsp;<strong id="sumSailPct" style="color:#48bb78;">—</strong></span>
+                        <span>⚙ &nbsp;<strong id="sumMotorPct" style="color:#9ca3af;">—</strong></span>
+                    </div>
+                    <div style="height:6px; border-radius:3px; overflow:hidden; background:var(--bg-secondary);
+                                display:flex; margin-bottom:10px;">
+                        <div id="modeBarSail"  style="background:#48bb78; transition:width 0.4s;"></div>
+                        <div id="modeBarMotor" style="background:#9ca3af; transition:width 0.4s;"></div>
+                    </div>
+
+                    <!-- Speed chart -->
+                    <div style="font-size:10px; color:var(--text-secondary); margin-bottom:3px;">Boat speed (kn)</div>
+                    <div id="speedChartContainer"></div>
+
+                    <!-- Step-by-step table -->
+                    <div style="font-size:10px; color:var(--text-secondary); margin-top:10px; margin-bottom:3px;">
+                        Step-by-step
+                    </div>
+                    <div class="route-report-table-wrap">
+                        <table>
+                            <thead>
+                                <tr><th>Time</th><th>Hdg</th><th>Speed</th><th>Engine</th><th>TWS</th><th>TWA</th><th>Gust</th><th>AWA</th><th>AWS</th></tr>
+                            </thead>
+                            <tbody id="routeReportTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
         </div>
+    </div>
 
-        <!-- Route summary (shown after compute) -->
-        <div id="routeSummary" class="level-1-container" style="display:none; padding:16px 20px; margin-top:10px;">
-            <div style="font-size:11px; color:var(--text-secondary); font-weight:600; letter-spacing:0.6px;
-                        text-transform:uppercase; margin-bottom:12px;">Route Summary</div>
-
-            <!-- Key stats -->
-            <div style="display:flex; flex-wrap:wrap; border:1px solid var(--border-color); border-radius:6px;
-                        overflow:hidden; margin-bottom:14px;">
-                <div style="flex:0 0 auto; padding:10px 20px; border-right:1px solid var(--border-color);">
-                    <div style="font-size:11px; color:var(--text-secondary); margin-bottom:2px;">Distance</div>
-                    <div id="sumDistance" style="font-size:22px; font-weight:700; color:var(--text-primary);">—</div>
+    <div id="altRouteModal" class="alt-route-modal">
+        <div class="alt-route-modal-content">
+            <div class="alt-route-modal-header">Alternative Route</div>
+            <div class="alt-route-modal-stats">
+                <div>
+                    <div class="label">ETA</div>
+                    <div class="value" id="altRouteEta">—</div>
                 </div>
-                <div style="flex:1; min-width:170px; padding:10px 20px; border-right:1px solid var(--border-color);">
-                    <div style="font-size:11px; color:var(--text-secondary); margin-bottom:2px;">Departure</div>
-                    <div id="sumDep" style="font-size:14px; font-weight:600; color:var(--text-primary);">—</div>
-                </div>
-                <div style="flex:1; min-width:170px; padding:10px 20px; border-right:1px solid var(--border-color);">
-                    <div style="font-size:11px; color:var(--text-secondary); margin-bottom:2px;">Arrival</div>
-                    <div id="sumArr" style="font-size:14px; font-weight:600; color:var(--text-primary);">—</div>
-                </div>
-                <div style="flex:0 0 auto; padding:10px 20px;">
-                    <div style="font-size:11px; color:var(--text-secondary); margin-bottom:2px;">Duration</div>
-                    <div id="sumDur" style="font-size:22px; font-weight:700; color:var(--text-primary);">—</div>
+                <div>
+                    <div class="label">Duration</div>
+                    <div class="value" id="altRouteDur">—</div>
                 </div>
             </div>
-
-            <!-- Sail / motor split -->
-            <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--text-secondary);
-                        margin-bottom:5px;">
-                <span>⛵ Sailing &nbsp;<strong id="sumSailPct" style="color:#48bb78;">—</strong></span>
-                <span>⚙ Motoring &nbsp;<strong id="sumMotorPct" style="color:#9ca3af;">—</strong></span>
+            <div class="alt-route-modal-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Time</th><th>Boat Speed</th><th>Engine</th><th>TWS</th><th>TWA</th></tr>
+                    </thead>
+                    <tbody id="altRouteTableBody"></tbody>
+                </table>
             </div>
-            <div style="height:8px; border-radius:4px; overflow:hidden; background:var(--bg-secondary);
-                        display:flex; margin-bottom:16px;">
-                <div id="modeBarSail"  style="background:#48bb78; transition:width 0.4s;"></div>
-                <div id="modeBarMotor" style="background:#9ca3af; transition:width 0.4s;"></div>
+            <div class="alt-route-modal-actions">
+                <button class="alt-route-modal-close" onclick="closeFrontierReport()">Close</button>
+                <button class="alt-route-modal-select" onclick="selectFrontierRoute()">Select this route</button>
             </div>
-
-            <!-- Speed chart -->
-            <div style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">Boat speed (kn)</div>
-            <div id="speedChartContainer"></div>
         </div>
-
     </div>
 
     <script>
-        document.getElementById('headerContainer').innerHTML = createHeaderBar('forecast');
+        document.getElementById('headerContainer').innerHTML = createHeaderBar('planning');
         initializeTheme();
+
+        fetchUiMode().then(readOnly => { if (readOnly) window.location.href = '/'; });
 
         // ── State ─────────────────────────────────────────────────────────────────
         let planMap = null;
-        let arrowMarkers = [];
+        let windLayers = new Map();  // area.id -> WindParticleLayer
+        let planAreas = [];          // ForecastArea[] from last /api/forecast/areas load
         let availableDays = [];
         let selectedDay = 0;
         let selectedHour = 0;
@@ -234,20 +378,155 @@
         let waypointMarkers = [];   // L.CircleMarker[] one per waypoint
         let previewLines = [];      // L.Polyline[] dashed segments between consecutive waypoints
         let routeSegments = [];     // coloured segments from drawRouteLine
+        let frontierLines = [];     // muted backdrop polylines from isochrone search frontiers — session-only, never persisted
+        let lastFrontiers = [];     // raw FrontierPoint[][] from last API call — session-only, never persisted
+        let lastFrontiersDeparture = null; // departure ISO string used for the last optimize call — anchors frontier report timestamps
+        let alternativeLine = null; // L.Polyline dashed hover highlight of discarded route, replaced/cleared on mousemove/mouseout
+        let openFrontierReportStepIdx = null; // stepIdx/ptIdx of the frontier report currently shown in altRouteModal, for "Select this route"
+        let openFrontierReportPtIdx = null;
+
+        let measureTool = null;   // handle from addMeasureTool() (js/map-measure-tool.js), created in init()
+
+        const FRONTIER_STEP_HOURS = 0.5; // must match STEP_HOURS in src/routing.rs
 
         let lastGridPts = [];     // raw GridPointForecast[] from last API call
         let showGust = false;     // when true, color arrows by gust speed instead of wind speed
+        let windOverlayVisible = true;   // when false, wind particle/intensity layers and legend are hidden
+        let windLegendControl = null;    // L.Control instance for the wind color-scale legend
         let lastRouteOverlay = []; // last computed overlay — persisted across reloads
+
+        // ── Full-bleed map + floating overlay panels ────────────────────────────────
+
+        // Sizes #mapWrap to fill the viewport below the header bar. Leaflet needs the
+        // container to have a real pixel height before L.map() runs, so this is called
+        // synchronously before map creation in init(), then again on resize.
+        function sizeMapWrap() {
+            const wrap = document.getElementById('mapWrap');
+            if (!wrap) return;
+            const top = wrap.getBoundingClientRect().top;
+            const height = Math.max(window.innerHeight - top - 20, 380);
+            wrap.style.height = height + 'px';
+            if (planMap) planMap.invalidateSize();
+        }
+        window.addEventListener('resize', sizeMapWrap);
+
+        // Positions the left route-config sidebar just below the top overlay bar,
+        // whose height varies with content (day-tab wrapping, status text, collapse state).
+        function layoutOverlays() {
+            const topBar = document.getElementById('topOverlay');
+            const wrap = document.getElementById('mapWrap');
+            const routeBarEl = document.getElementById('routeBar');
+            const summaryEl = document.getElementById('routeSummary');
+            if (!topBar || !wrap) return;
+            const top = topBar.offsetHeight + 24;
+            const maxHeight = Math.max(wrap.offsetHeight - top - 12, 120);
+            if (routeBarEl) {
+                routeBarEl.style.top = top + 'px';
+                routeBarEl.style.maxHeight = maxHeight + 'px';
+            }
+            // routeSummary pins top AND bottom (set in its own CSS) so it always spans
+            // down to the bottom of the map, regardless of how much content it holds.
+            if (summaryEl) {
+                summaryEl.style.top = top + 'px';
+            }
+        }
+        window.addEventListener('resize', layoutOverlays);
+
+        // Generic collapse toggle for the three floating overlay panels — collapses to
+        // just the header row, expanded/collapsed state remembered per body element id.
+        function toggleOverlayCollapse(bodyId, chevronId) {
+            const body = document.getElementById(bodyId);
+            const chevron = document.getElementById(chevronId);
+            const collapsed = body.style.display === 'none';
+            body.style.display = collapsed ? '' : 'none';
+            chevron.textContent = collapsed ? '▾' : '▸';
+            localStorage.setItem('plan_overlay_' + bodyId + '_collapsed', collapsed ? '0' : '1');
+            layoutOverlays();
+        }
+
+        function restoreOverlayCollapse(bodyId, chevronId) {
+            if (localStorage.getItem('plan_overlay_' + bodyId + '_collapsed') === '1') {
+                document.getElementById(bodyId).style.display = 'none';
+                document.getElementById(chevronId).textContent = '▸';
+            }
+        }
+
+        // Lets the user drag the Route Summary panel's left edge to widen/narrow it
+        // (it's anchored to the map's right/bottom corner, so only the left edge moves).
+        const ROUTE_SUMMARY_MIN_WIDTH = 280;
+        const ROUTE_SUMMARY_WIDTH_KEY = 'plan_routeSummary_width';
+
+        function setupRouteSummaryResize() {
+            const panel = document.getElementById('routeSummary');
+            const handle = document.getElementById('routeSummaryResizeHandle');
+            if (!panel || !handle) return;
+
+            let startX = 0;
+            let startWidth = 0;
+
+            function maxWidth() {
+                const wrap = document.getElementById('mapWrap');
+                return Math.max(wrap.offsetWidth - 40, ROUTE_SUMMARY_MIN_WIDTH);
+            }
+
+            function onMouseMove(e) {
+                const delta = startX - e.clientX;
+                const width = Math.min(Math.max(startWidth + delta, ROUTE_SUMMARY_MIN_WIDTH), maxWidth());
+                panel.style.width = width + 'px';
+            }
+
+            function onMouseUp() {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+                handle.classList.remove('dragging');
+                localStorage.setItem(ROUTE_SUMMARY_WIDTH_KEY, parseInt(panel.style.width, 10));
+            }
+
+            handle.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                startX = e.clientX;
+                startWidth = panel.offsetWidth;
+                handle.classList.add('dragging');
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
+        }
+
+        function restoreRouteSummaryWidth() {
+            const saved = parseInt(localStorage.getItem(ROUTE_SUMMARY_WIDTH_KEY), 10);
+            if (saved) {
+                document.getElementById('routeSummary').style.width = saved + 'px';
+            }
+        }
 
         // ── Init ─────────────────────────────────────────────────────────────────
         async function init() {
-            planMap = L.map('planMap').setView([43.0, 9.0], 6);
+            restoreOverlayCollapse('topOverlayBody', 'topOverlayChevron');
+            restoreOverlayCollapse('routeBarBody', 'routeBarChevron');
+            restoreOverlayCollapse('routeSummaryBody', 'routeSummaryChevron');
+            restoreRouteSummaryWidth();
+            setupRouteSummaryResize();
+            sizeMapWrap();
+            layoutOverlays();
+
+            planMap = L.map('planMap', { zoomControl: false }).setView([43.0, 9.0], 6);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap', maxZoom: 16
             }).addTo(planMap);
             planMap.on('click', onMapClick);
+            measureTool = addMeasureTool(planMap, {
+                button: false,   // this page drives the toggle from its own toolbar button
+                onActivate: () => { if (routeMode) clearRoute(); },
+                onToggle: (isActive) => {
+                    const btn = document.getElementById('measureBtn');
+                    btn.textContent = isActive ? 'Cancel Measure' : '📏 Measure';
+                    btn.style.background = isActive ? '#e74c3c' : 'var(--bg-secondary)';
+                    btn.style.color = isActive ? '#fff' : 'var(--text-secondary)';
+                    btn.style.borderColor = isActive ? '#e74c3c' : 'var(--border-color)';
+                }
+            });
             planMap.on('zoomend moveend', () => {
-                if (lastGridPts.length) renderArrows(interpolateDisplayGrid(lastGridPts));
+                windLayers.forEach(layer => layer.reposition());
             });
 
             const WindLegend = L.Control.extend({
@@ -275,7 +554,16 @@
                     return div;
                 }
             });
-            new WindLegend({ position: 'bottomleft' }).addTo(planMap);
+            windLegendControl = new WindLegend({ position: 'bottomleft' }).addTo(planMap);
+
+            addLatLonPanel(planMap, 'bottomright');
+
+            const savedWindOverlay = localStorage.getItem('plan_wind_overlay_visible');
+            if (savedWindOverlay !== null) {
+                windOverlayVisible = savedWindOverlay === 'true';
+                document.getElementById('windOverlayInput').checked = windOverlayVisible;
+                if (!windOverlayVisible) windLegendControl.getContainer().style.display = 'none';
+            }
 
             const saved = localStorage.getItem('plan_speed_kn');
             if (saved) document.getElementById('speedInput').value = saved;
@@ -283,8 +571,12 @@
             if (savedEff) document.getElementById('efficiencyInput').value = savedEff;
             const savedMinSail = localStorage.getItem('plan_min_sail_speed');
             if (savedMinSail) document.getElementById('minSailInput').value = savedMinSail;
+            const savedMinTwa = localStorage.getItem('plan_min_twa_deg');
+            if (savedMinTwa) document.getElementById('minTwaInput').value = savedMinTwa;
             const savedSailWeight = localStorage.getItem('plan_sail_weight');
             if (savedSailWeight) document.getElementById('sailWeightInput').value = savedSailWeight;
+            const savedAvoidLand = localStorage.getItem('plan_avoid_land');
+            if (savedAvoidLand !== null) document.getElementById('avoidLandInput').checked = savedAvoidLand === 'true';
 
             await loadAvailableDays();
             restoreRoute();
@@ -297,7 +589,7 @@
                 if (!statusJson.data || statusJson.data.point_count === 0) {
                     document.getElementById('dayTabsContainer').innerHTML =
                         '<span style="font-size:13px; color:var(--text-secondary);">' +
-                        'No forecast data. Draw a bounding box in the Forecast Areas section below.</span>';
+                        'No forecast data. Draw a bounding box on the <a href="/navigation-areas.html">Navigation Areas</a> page.</span>';
                     return;
                 }
 
@@ -331,6 +623,7 @@
                     `<button class="day-tab${i === selectedDay ? ' active' : ''}"
                              onclick="selectDay(${i})">${d.label}</button>`)
                 .join('');
+            layoutOverlays();
         }
 
         function selectDay(i, doLoad = true) {
@@ -389,43 +682,129 @@
             return Math.sqrt(dlat * dlat + dlon * dlon) * 60;
         }
 
-        function idwInterpolate(targetLat, targetLon, sourcePts) {
-            const MAX_NM = 25;
-            const within = [];
-            for (const pt of sourcePts) {
-                const d = degDistNm(targetLat, targetLon, pt.lat, pt.lon);
-                if (d < 0.01) return pt;   // exact match
-                if (d <= MAX_NM) within.push({ pt, w: 1 / (d * d) });
-            }
-            if (!within.length) return null;
+        const IDW_MAX_NM = 25;
 
-            const sumW = within.reduce((s, x) => s + x.w, 0);
-            const scalar = key => {
-                const pairs = within.filter(x => x.pt[key] != null);
-                if (!pairs.length) return null;
-                const sw = pairs.reduce((s, x) => s + x.w, 0);
-                return pairs.reduce((s, x) => s + x.pt[key] * x.w, 0) / sw;
-            };
-            const angular = key => {
-                const pairs = within.filter(x => x.pt[key] != null);
-                if (!pairs.length) return null;
-                const sw = pairs.reduce((s, x) => s + x.w, 0);
-                const sinSum = pairs.reduce((s, x) => s + Math.sin(x.pt[key] * Math.PI / 180) * x.w, 0);
-                const cosSum = pairs.reduce((s, x) => s + Math.cos(x.pt[key] * Math.PI / 180) * x.w, 0);
-                const deg = Math.atan2(sinSum / sw, cosSum / sw) * 180 / Math.PI;
+        // Inverse-distance-weighted blend of the points in `pointArrays` (one or more
+        // arrays, e.g. the 3x3 neighborhood of spatial-index cells) at the target point.
+        // Accumulators are static named locals rather than an object keyed by field name —
+        // computed-key assignment (obj[key] = ...) forces V8 into slow dictionary-mode
+        // objects, which badly regressed this once it's called once per output texel.
+        function accumulateIdw(targetLat, targetLon, pointArrays) {
+            let sumW = 0;
+            let swSpeed = 0, svSpeed = 0;
+            let swGust = 0, svGust = 0;
+            let swWaveH = 0, svWaveH = 0;
+            let swWaveP = 0, svWaveP = 0;
+            let swCape = 0, svCape = 0;
+            let swWindDir = 0, sinWindDir = 0, cosWindDir = 0;
+            let swWaveDir = 0, sinWaveDir = 0, cosWaveDir = 0;
+
+            for (let ai = 0; ai < pointArrays.length; ai++) {
+                const arr = pointArrays[ai];
+                if (!arr) continue;
+                for (let i = 0; i < arr.length; i++) {
+                    const pt = arr[i];
+                    const d = degDistNm(targetLat, targetLon, pt.lat, pt.lon);
+                    if (d < 0.01) return pt;   // exact match
+                    if (d > IDW_MAX_NM) continue;
+                    const w = 1 / (d * d);
+                    sumW += w;
+
+                    if (pt.wind_speed_kn != null) { swSpeed += w; svSpeed += pt.wind_speed_kn * w; }
+                    if (pt.wind_gust_kn != null) { swGust += w; svGust += pt.wind_gust_kn * w; }
+                    if (pt.wave_height_m != null) { swWaveH += w; svWaveH += pt.wave_height_m * w; }
+                    if (pt.wave_period_s != null) { swWaveP += w; svWaveP += pt.wave_period_s * w; }
+                    if (pt.cape_j_kg != null) { swCape += w; svCape += pt.cape_j_kg * w; }
+                    if (pt.wind_direction_deg != null) {
+                        const rad = pt.wind_direction_deg * Math.PI / 180;
+                        swWindDir += w; sinWindDir += Math.sin(rad) * w; cosWindDir += Math.cos(rad) * w;
+                    }
+                    if (pt.wave_direction_deg != null) {
+                        const rad = pt.wave_direction_deg * Math.PI / 180;
+                        swWaveDir += w; sinWaveDir += Math.sin(rad) * w; cosWaveDir += Math.cos(rad) * w;
+                    }
+                }
+            }
+            if (sumW === 0) return null;
+
+            const angDeg = (sw, sinS, cosS) => {
+                if (!sw) return null;
+                const deg = Math.atan2(sinS / sw, cosS / sw) * 180 / Math.PI;
                 return deg < 0 ? deg + 360 : deg;
             };
 
             return {
                 lat: targetLat, lon: targetLon,
-                wind_speed_kn: scalar('wind_speed_kn'),
-                wind_direction_deg: angular('wind_direction_deg'),
-                wind_gust_kn: scalar('wind_gust_kn'),
-                wave_height_m: scalar('wave_height_m'),
-                wave_period_s: scalar('wave_period_s'),
-                wave_direction_deg: angular('wave_direction_deg'),
-                cape_j_kg: scalar('cape_j_kg'),
+                wind_speed_kn: swSpeed ? svSpeed / swSpeed : null,
+                wind_gust_kn: swGust ? svGust / swGust : null,
+                wave_height_m: swWaveH ? svWaveH / swWaveH : null,
+                wave_period_s: swWaveP ? svWaveP / swWaveP : null,
+                cape_j_kg: swCape ? svCape / swCape : null,
+                wind_direction_deg: angDeg(swWindDir, sinWindDir, cosWindDir),
+                wave_direction_deg: angDeg(swWaveDir, sinWaveDir, cosWaveDir),
             };
+        }
+
+        function idwInterpolate(targetLat, targetLon, sourcePts) {
+            return accumulateIdw(targetLat, targetLon, [sourcePts]);
+        }
+
+        // Uniform grid index over sourcePts for fast radius queries, reused across many
+        // idwInterpolateIndexed() calls against the same point set (e.g. one per output
+        // texel). A flat row-major array (not a Map keyed by string) avoids per-query
+        // hashing/string-concat overhead. Cell size matches IDW_MAX_NM so a 3x3
+        // neighborhood around the target's cell always covers every candidate within
+        // range; lon cells are scaled by the point set's mean latitude so cells stay
+        // roughly square in nm.
+        function buildSpatialIndex(sourcePts) {
+            let latSum = 0, latMin = Infinity, latMax = -Infinity, lonMin = Infinity, lonMax = -Infinity;
+            for (const p of sourcePts) {
+                latSum += p.lat;
+                if (p.lat < latMin) latMin = p.lat;
+                if (p.lat > latMax) latMax = p.lat;
+                if (p.lon < lonMin) lonMin = p.lon;
+                if (p.lon > lonMax) lonMax = p.lon;
+            }
+            const refLat = sourcePts.length ? latSum / sourcePts.length : 0;
+            const cosRef = Math.max(Math.cos(refLat * Math.PI / 180), 1e-6);
+            const cellDegLat = IDW_MAX_NM / 60;
+            const cellDegLon = IDW_MAX_NM / 60 / cosRef;
+
+            const rowMin = sourcePts.length ? Math.floor(latMin / cellDegLat) : 0;
+            const colMin = sourcePts.length ? Math.floor(lonMin / cellDegLon) : 0;
+            const numRows = sourcePts.length ? Math.floor(latMax / cellDegLat) - rowMin + 1 : 0;
+            const numCols = sourcePts.length ? Math.floor(lonMax / cellDegLon) - colMin + 1 : 0;
+
+            const cells = new Array(numRows * numCols);
+            for (const pt of sourcePts) {
+                const row = Math.floor(pt.lat / cellDegLat) - rowMin;
+                const col = Math.floor(pt.lon / cellDegLon) - colMin;
+                const idx = row * numCols + col;
+                (cells[idx] || (cells[idx] = [])).push(pt);
+            }
+            return { cells, cellDegLat, cellDegLon, rowMin, colMin, numRows, numCols };
+        }
+
+        // Reusable scratch array for the 9-cell neighborhood, to avoid an allocation
+        // per texel (this runs up to 256*256 times per rebuild).
+        const IDW_NEIGHBORHOOD = new Array(9);
+        function idwInterpolateIndexed(targetLat, targetLon, index) {
+            const row = Math.floor(targetLat / index.cellDegLat) - index.rowMin;
+            const col = Math.floor(targetLon / index.cellDegLon) - index.colMin;
+            let n = 0;
+            for (let dr = -1; dr <= 1; dr++) {
+                const r = row + dr;
+                if (r < 0 || r >= index.numRows) continue;
+                for (let dc = -1; dc <= 1; dc++) {
+                    const c = col + dc;
+                    if (c < 0 || c >= index.numCols) continue;
+                    IDW_NEIGHBORHOOD[n++] = index.cells[r * index.numCols + c];
+                }
+            }
+            IDW_NEIGHBORHOOD.length = n;
+            const result = accumulateIdw(targetLat, targetLon, IDW_NEIGHBORHOOD);
+            IDW_NEIGHBORHOOD.length = 9;
+            return result;
         }
 
         // Estimate the native grid lat and lon steps from the stored source points.
@@ -496,17 +875,18 @@
             const lonMax = Math.min(east, srcLonMax);
             if (latMin >= latMax || lonMin >= lonMax) return [];
 
+            const index = buildSpatialIndex(sourcePts);
             const result = [];
             for (let lat = latMin; lat <= latMax + 1e-9; lat += displayLatStep) {
                 for (let lon = lonMin; lon <= lonMax + 1e-9; lon += displayLonStep) {
-                    const pt = idwInterpolate(lat, lon, sourcePts);
+                    const pt = idwInterpolateIndexed(lat, lon, index);
                     if (pt) result.push(pt);
                 }
             }
             return result;
         }
 
-        // ── Grid-point arrows ──────────────────────────────────────────────────────
+        // ── Grid-point wind field ─────────────────────────────────────────────────
         async function loadGridPoints() {
             const ts = getSelectedISO();
             if (!ts) return;
@@ -524,24 +904,15 @@
                         ? 'AROME ~1.5 km (short-term)'
                         : 'ECMWF ~9 km';
                 }
-                renderArrows(interpolateDisplayGrid(lastGridPts));
+                windLayers.forEach(layer => layer.rebuildTexture());
                 renderStats();
             } catch (err) {
                 console.error('Failed to load grid points', err);
             }
         }
 
-        function windColor(speed) {
+        function interpolateColorStops(speed, stops) {
             const kn = Math.max(speed || 0, 0);
-            const stops = [
-                [0,  [170, 170, 170]],
-                [4,  [30,  160, 255]],
-                [7,  [0,   210, 180]],
-                [10, [0,   190,  60]],
-                [16, [220, 210,   0]],
-                [22, [255, 140,   0]],
-                [28, [220,  30,   0]],
-            ];
             if (kn <= stops[0][0]) return `rgb(${stops[0][1].join(',')})`;
             if (kn >= stops[stops.length - 1][0]) return `rgb(${stops[stops.length - 1][1].join(',')})`;
             for (let i = 1; i < stops.length; i++) {
@@ -553,36 +924,69 @@
             }
         }
 
-        function renderArrows(pts) {
-            arrowMarkers.forEach(m => planMap.removeLayer(m));
-            arrowMarkers = [];
-            pts.forEach(pt => {
-                const wind = pt.wind_speed_kn || 0;
-                const gust = pt.wind_gust_kn || 0;
-                const speed = showGust ? gust : wind;
-                const dir = pt.wind_direction_deg || 0;
-                // wind_direction_deg is the direction the wind comes FROM; rotate +180 so
-                // the arrow points in the direction the wind is blowing TO.
-                const arrowRot = (dir + 180) % 360;
-                const color = windColor(speed);
-                const svg =
-                    `<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">` +
-                    `<g transform="rotate(${arrowRot},11,11)">` +
-                    `<polygon points="11,2 15,16 11,12 7,16" fill="${color}" ` +
-                    `stroke="rgba(0,0,0,0.35)" stroke-width="0.8"/>` +
-                    `</g></svg>`;
-                const icon = L.divIcon({ html: svg, className: '', iconSize: [22, 22], iconAnchor: [11, 11] });
-                const m = L.marker([pt.lat, pt.lon], { icon }).addTo(planMap);
-                m.bindPopup(
+        function windColor(speed) {
+            return interpolateColorStops(speed, [
+                [0,  [170, 170, 170]],
+                [4,  [30,  160, 255]],
+                [7,  [0,   210, 180]],
+                [10, [0,   190,  60]],
+                [16, [220, 210,   0]],
+                [22, [255, 140,   0]],
+                [28, [220,  30,   0]],
+            ]);
+        }
+
+        // Route line/dots use shades of red instead of windColor()'s blue-green-yellow scale,
+        // so they stay visible against the colored wind-intensity background layer.
+        function routeColor(speed) {
+            return interpolateColorStops(speed, [
+                [0,  [255, 205, 210]],
+                [4,  [239, 154, 154]],
+                [7,  [229, 115, 115]],
+                [10, [211,  47,  47]],
+                [16, [183,  28,  28]],
+                [22, [136,  14,  14]],
+                [28, [ 90,   0,   0]],
+            ]);
+        }
+
+        function pointInArea(lat, lon, area) {
+            return lat >= area.lat_min && lat <= area.lat_max &&
+                   lon >= area.lon_min && lon <= area.lon_max;
+        }
+
+        function pointInAnyArea(lat, lon) {
+            return planAreas.some(a => pointInArea(lat, lon, a));
+        }
+
+        function showWindPopupAt(latlng) {
+            const area = planAreas.find(a => pointInArea(latlng.lat, latlng.lng, a));
+            if (!area) return;
+            const pt = idwInterpolate(latlng.lat, latlng.lng, pointsInArea(lastGridPts, area));
+            if (!pt) return;
+            const wind = pt.wind_speed_kn || 0;
+            const gust = pt.wind_gust_kn || 0;
+            const dir = pt.wind_direction_deg || 0;
+            L.popup()
+                .setLatLng(latlng)
+                .setContent(
                     `<b>Wind:</b> ${wind.toFixed(1)} kn ${dir.toFixed(0)}°<br>` +
                     `<b>Gust:</b> ${gust.toFixed(1)} kn<br>` +
                     `<b>Wave:</b> ${(pt.wave_height_m || 0).toFixed(1)} m ` +
                     `${(pt.wave_period_s || 0).toFixed(0)} s<br>` +
                     `<b>CAPE:</b> ${(pt.cape_j_kg || 0).toFixed(0)} J/kg<br>` +
                     `<b>Model:</b> ${(document.getElementById('modelBadge')?.textContent) || '—'}`
-                );
-                arrowMarkers.push(m);
-            });
+                )
+                .openOn(planMap);
+        }
+
+        function toggleWindOverlay() {
+            windOverlayVisible = document.getElementById('windOverlayInput').checked;
+            localStorage.setItem('plan_wind_overlay_visible', windOverlayVisible);
+            windLayers.forEach(layer => layer.setEnabled(windOverlayVisible));
+            if (windLegendControl) {
+                windLegendControl.getContainer().style.display = windOverlayVisible ? '' : 'none';
+            }
         }
 
         function toggleGustMode() {
@@ -600,7 +1004,7 @@
                 btn.style.borderColor = 'var(--border-color)';
             }
             document.getElementById('legendLabel').textContent = showGust ? 'Gust (kn)' : 'Wind (kn)';
-            if (lastGridPts.length) renderArrows(interpolateDisplayGrid(lastGridPts));
+            windLayers.forEach(layer => layer.rebuildTexture());
         }
 
         function renderStats() {
@@ -676,6 +1080,7 @@
             if (routeMode) {
                 clearRoute();
             } else {
+                if (measureTool.active) measureTool.clear();
                 routeMode = true;
                 document.getElementById('planRouteBtn').textContent = 'Clear Route';
                 document.getElementById('planRouteBtn').style.background = '#e74c3c';
@@ -697,6 +1102,12 @@
             routeWaypoints = [];
             routeSegments.forEach(l => planMap.removeLayer(l));
             routeSegments = [];
+            frontierLines.forEach(l => planMap.removeLayer(l));
+            frontierLines = [];
+            lastFrontiers = [];
+            lastFrontiersDeparture = null;
+            closeFrontierReport();
+            if (alternativeLine) { planMap.removeLayer(alternativeLine); alternativeLine = null; }
             document.getElementById('routeBar').style.display = 'none';
             document.getElementById('routeSummary').style.display = 'none';
             document.getElementById('routeWptCount').textContent = 'click map to add waypoints';
@@ -709,7 +1120,14 @@
         }
 
         function onMapClick(e) {
-            if (!routeMode || routeDone) return;
+            if (measureTool.active) {
+                measureTool.handleClick(e.latlng);
+                return;
+            }
+            if (!routeMode || routeDone) {
+                showWindPopupAt(e.latlng);
+                return;
+            }
             const n = routeWaypoints.length;
 
             if (n > 0) {
@@ -745,8 +1163,14 @@
         document.getElementById('minSailInput').addEventListener('input', function () {
             localStorage.setItem('plan_min_sail_speed', this.value);
         });
+        document.getElementById('minTwaInput').addEventListener('input', function () {
+            localStorage.setItem('plan_min_twa_deg', this.value);
+        });
         document.getElementById('sailWeightInput').addEventListener('input', function () {
             localStorage.setItem('plan_sail_weight', this.value);
+        });
+        document.getElementById('avoidLandInput').addEventListener('change', function () {
+            localStorage.setItem('plan_avoid_land', this.checked);
         });
 
         async function computeRoute() {
@@ -754,7 +1178,17 @@
             const speed      = parseFloat(document.getElementById('speedInput').value);
             const efficiency = parseFloat(document.getElementById('efficiencyInput').value) / 100;
             const minSail    = parseFloat(document.getElementById('minSailInput').value);
+            const minTwa     = parseFloat(document.getElementById('minTwaInput').value);
             if (!routeDone || routeWaypoints.length < 2 || !dep || !(speed > 0)) return;
+
+            drawRouteLine([]);
+            frontierLines.forEach(l => planMap.removeLayer(l));
+            frontierLines = [];
+            lastFrontiers = [];
+            lastFrontiersDeparture = null;
+            closeFrontierReport();
+            if (alternativeLine) { planMap.removeLayer(alternativeLine); alternativeLine = null; }
+            lastRouteOverlay = [];
 
             const departure      = dep.slice(0, 16) + ':00Z';
             const waypointsParam = routeWaypoints
@@ -764,7 +1198,8 @@
                 `&departure=${encodeURIComponent(departure)}` +
                 `&motoring_speed_kn=${speed}` +
                 `&polar_efficiency=${efficiency.toFixed(3)}` +
-                `&min_sail_speed_kn=${minSail}`;
+                `&min_sail_speed_kn=${minSail}` +
+                `&min_twa_deg=${minTwa}`;
 
             const btn = document.getElementById('computeBtn');
             btn.textContent = 'Computing…';
@@ -795,6 +1230,15 @@
             const speed = parseFloat(document.getElementById('speedInput').value);
             if (!routeDone || routeWaypoints.length < 2 || !dep || !(speed > 0)) return;
 
+            drawRouteLine([]);
+            frontierLines.forEach(l => planMap.removeLayer(l));
+            frontierLines = [];
+            lastFrontiers = [];
+            lastFrontiersDeparture = null;
+            closeFrontierReport();
+            if (alternativeLine) { planMap.removeLayer(alternativeLine); alternativeLine = null; }
+            lastRouteOverlay = [];
+
             btn.disabled = true;
             btn.textContent = '⚡ Optimizing…';
 
@@ -803,7 +1247,9 @@
             const departure  = dep.slice(0, 16) + ':00Z';
             const efficiency = parseFloat(document.getElementById('efficiencyInput').value) / 100;
             const minSail    = parseFloat(document.getElementById('minSailInput').value);
+            const minTwa     = parseFloat(document.getElementById('minTwaInput').value);
             const sailWeight = parseFloat(document.getElementById('sailWeightInput').value) || 0;
+            const avoidLand  = document.getElementById('avoidLandInput').checked;
 
             try {
                 const url = `/api/forecast/optimal-route?from_lat=${from.lat.toFixed(6)}&from_lon=${from.lng.toFixed(6)}`
@@ -812,16 +1258,20 @@
                     + `&motoring_speed_kn=${speed}`
                     + `&polar_efficiency=${efficiency.toFixed(3)}`
                     + `&min_sail_speed_kn=${minSail}`
-                    + `&sail_weight_kn=${sailWeight.toFixed(1)}`;
+                    + `&min_twa_deg=${minTwa}`
+                    + `&sail_weight_kn=${sailWeight.toFixed(1)}`
+                    + `&avoid_land=${avoidLand}`;
 
                 const resp = await fetch(url);
                 const json = await resp.json();
-                if (json.status !== 'ok' || !json.data?.length) {
+                if (json.status !== 'ok' || !json.data?.route?.length) {
                     btn.textContent = '✗ ' + (json.error || 'Error');
                     setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
                     return;
                 }
-                drawRouteLine(json.data);
+                lastFrontiersDeparture = departure;
+                drawFrontiers(json.data.frontiers || []);
+                drawRouteLine(json.data.route);
                 btn.textContent = orig;
                 btn.disabled = false;
             } catch (_) {
@@ -844,6 +1294,226 @@
                  + `Wave: ${wh} / ${wp}<br>Boat speed: ${spd2} · TWA: ${twa}`;
         }
 
+        // Frontier grid samples are raw isochrone reachability points — they never land
+        // exactly on the destination. Mirrors the backend's own backtrack() (src/routing.rs),
+        // which always appends the exact destination coordinate + extrapolated arrival time
+        // as the final route point. Returns null if the point is already at the destination.
+        function frontierDestinationLeg(lastLat, lastLon, lastTime, speedKn) {
+            const dest = routeWaypoints[routeWaypoints.length - 1];
+            const distNm = degDistNm(lastLat, lastLon, dest.lat, dest.lng);
+            if (distNm < 0.05) return null;
+            const spd = speedKn > 0.1 ? speedKn : 0.1;
+            const hours = distNm / spd;
+            return { lat: dest.lat, lon: dest.lng, time: new Date(lastTime.getTime() + hours * 3600000) };
+        }
+
+        // Walks parent_idx from (stepIdx, ptIdx) in lastFrontiers back to the route origin,
+        // returning an origin-to-point path of [lat, lon] pairs. Appends an extrapolated
+        // final leg to the actual destination waypoint (see frontierDestinationLeg).
+        function backtrackFrontierPath(stepIdx, ptIdx) {
+            const path = [];
+            let s = stepIdx, i = ptIdx;
+            const clickedPt = lastFrontiers[stepIdx][ptIdx];
+            while (s >= 0) {
+                const pt = lastFrontiers[s][i];
+                path.push([pt.lat, pt.lon]);
+                i = pt.parent_idx;
+                s -= 1;
+            }
+            const origin = routeWaypoints[0];
+            path.push([origin.lat, origin.lng]);
+            path.reverse();
+
+            const lastTime = new Date(new Date(lastFrontiersDeparture).getTime()
+                + (stepIdx + 1) * FRONTIER_STEP_HOURS * 3600000);
+            const leg = frontierDestinationLeg(clickedPt.lat, clickedPt.lon, lastTime, clickedPt.speed_kn);
+            if (leg) path.push([leg.lat, leg.lon]);
+            return path;
+        }
+
+        // latlngs/ptIdxs are parallel arrays for one drawn frontier run: latlngs[i] is the
+        // [lat, lon] of the point whose original index (into lastFrontiers[stepIdx]) is ptIdxs[i].
+        // Returns the ptIdxs entry closest to the event's map position.
+        function nearestFrontierPtIdx(e, ptIdxs, latlngs) {
+            let nearest = 0;
+            let nearestDist = Infinity;
+            for (let i = 0; i < latlngs.length; i++) {
+                const dLat = latlngs[i][0] - e.latlng.lat;
+                const dLon = latlngs[i][1] - e.latlng.lng;
+                const dist = dLat * dLat + dLon * dLon;
+                if (dist < nearestDist) {
+                    nearestDist = dist;
+                    nearest = i;
+                }
+            }
+            return ptIdxs[nearest];
+        }
+
+        function showFrontierAlternative(e, stepIdx, ptIdxs, latlngs) {
+            const path = backtrackFrontierPath(stepIdx, nearestFrontierPtIdx(e, ptIdxs, latlngs));
+            if (alternativeLine) planMap.removeLayer(alternativeLine);
+            alternativeLine = L.polyline(path, {
+                color: '#ff8c00',
+                weight: 2,
+                opacity: 0.9,
+                dashArray: '4,4'
+            }).addTo(planMap);
+        }
+
+        function hideFrontierAlternative() {
+            if (alternativeLine) {
+                planMap.removeLayer(alternativeLine);
+                alternativeLine = null;
+            }
+        }
+
+        // Walks parent_idx from (stepIdx, ptIdx) back to the route origin, returning
+        // one row per 0.5h step with the leg telemetry that was already computed during
+        // the isochrone search (speed, engine status, true wind speed/direction).
+        function backtrackFrontierReport(stepIdx, ptIdx) {
+            const rows = [];
+            let s = stepIdx, i = ptIdx;
+            const clickedPt = lastFrontiers[stepIdx][ptIdx];
+            while (s >= 0) {
+                const pt = lastFrontiers[s][i];
+                rows.push({
+                    time: new Date(new Date(lastFrontiersDeparture).getTime()
+                        + (s + 1) * FRONTIER_STEP_HOURS * 3600000),
+                    speed_kn: pt.speed_kn,
+                    motoring: pt.motoring,
+                    wind_speed_kn: pt.wind_speed_kn,
+                    wind_dir_deg: pt.wind_dir_deg,
+                    wind_gust_kn: pt.wind_gust_kn,
+                    relative_wind_deg: pt.relative_wind_deg
+                });
+                i = pt.parent_idx;
+                s -= 1;
+            }
+            rows.push({ time: new Date(lastFrontiersDeparture), speed_kn: null, motoring: null,
+                        wind_speed_kn: null, wind_dir_deg: null, wind_gust_kn: null, relative_wind_deg: null });
+            rows.reverse();
+
+            const lastTime = rows[rows.length - 1].time;
+            const leg = frontierDestinationLeg(clickedPt.lat, clickedPt.lon, lastTime, clickedPt.speed_kn);
+            if (leg) {
+                rows.push({ time: leg.time, speed_kn: clickedPt.speed_kn, motoring: clickedPt.motoring,
+                            wind_speed_kn: null, wind_dir_deg: null, wind_gust_kn: clickedPt.wind_gust_kn,
+                            relative_wind_deg: null });
+            }
+            return rows;
+        }
+
+        function closeFrontierReport() {
+            document.getElementById('altRouteModal').classList.remove('active');
+            openFrontierReportStepIdx = null;
+            openFrontierReportPtIdx = null;
+        }
+
+        function showFrontierReport(stepIdx, ptIdx) {
+            if (!lastFrontiersDeparture) return;
+            openFrontierReportStepIdx = stepIdx;
+            openFrontierReportPtIdx = ptIdx;
+            const rows = backtrackFrontierReport(stepIdx, ptIdx);
+            const dep = rows[0].time;
+            const eta = rows[rows.length - 1].time;
+            const durMs = eta.getTime() - dep.getTime();
+            const h = Math.floor(durMs / 3600000);
+            const m = Math.round((durMs % 3600000) / 60000);
+            document.getElementById('altRouteEta').textContent =
+                eta.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
+                + ' ' + eta.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
+            document.getElementById('altRouteDur').textContent = m > 0 ? `${h}h ${m}m` : `${h}h`;
+
+            const body = document.getElementById('altRouteTableBody');
+            body.innerHTML = rows.map(r => {
+                const t = r.time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
+                    + ' UTC ' + r.time.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'UTC' });
+                const spd = r.speed_kn != null ? r.speed_kn.toFixed(1) + ' kn' : '—';
+                const eng = r.motoring == null ? '—' : (r.motoring ? '⚙ Motoring' : '⛵ Sailing');
+                const tws = r.wind_speed_kn != null ? r.wind_speed_kn.toFixed(1) + ' kn' : '—';
+                const twa = r.relative_wind_deg != null ? r.relative_wind_deg.toFixed(0) + '°' : '—';
+                return `<tr><td>${t}</td><td>${spd}</td><td>${eng}</td><td>${tws}</td><td>${twa}</td></tr>`;
+            }).join('');
+
+            document.getElementById('altRouteModal').classList.add('active');
+        }
+
+        // Promotes the frontier path/report currently shown in altRouteModal to the
+        // displayed accepted route, replacing whatever drawRouteLine/drawRouteSummary
+        // currently show. Merges backtrackFrontierPath's lat/lon with
+        // backtrackFrontierReport's telemetry (same parent_idx walk, same row count)
+        // into a RouteTrackPoint-shaped array.
+        function selectFrontierRoute() {
+            if (openFrontierReportStepIdx == null || openFrontierReportPtIdx == null) return;
+            const path = backtrackFrontierPath(openFrontierReportStepIdx, openFrontierReportPtIdx);
+            const rows = backtrackFrontierReport(openFrontierReportStepIdx, openFrontierReportPtIdx);
+            const pts = rows.map((r, i) => ({
+                lat: path[i][0],
+                lon: path[i][1],
+                timestamp: r.time.toISOString(),
+                speed_kn: r.speed_kn,
+                twa_deg: r.motoring == null ? null : (r.motoring ? null : 0),
+                wind_speed_kn: r.wind_speed_kn,
+                wind_direction_deg: r.wind_dir_deg,
+                relative_wind_deg: r.relative_wind_deg,
+                wind_gust_kn: r.wind_gust_kn,
+                wave_height_m: null,
+                wave_period_s: null
+            }));
+
+            hideFrontierAlternative();
+
+            drawRouteLine(pts);
+            drawRouteSummary(pts);
+            closeFrontierReport();
+        }
+
+        function drawFrontierRun(latlngs, stepIdx, ptIdxs) {
+            const line = L.polyline(latlngs, {
+                color: '#444',
+                weight: 1,
+                opacity: 0.6
+            }).addTo(planMap);
+            // Invisible fat line layered on top of the thin visible one — the visible
+            // weight:1 stroke is too thin to reliably catch mousemove, so hover detection
+            // uses this wider (but transparent) hit target instead.
+            const hitLine = L.polyline(latlngs, {
+                weight: 16,
+                opacity: 0
+            }).addTo(planMap);
+            hitLine.on('mousemove', e => showFrontierAlternative(e, stepIdx, ptIdxs, latlngs));
+            hitLine.on('mouseout', hideFrontierAlternative);
+            hitLine.on('click', e => {
+                L.DomEvent.stopPropagation(e);
+                showFrontierReport(stepIdx, nearestFrontierPtIdx(e, ptIdxs, latlngs));
+            });
+            frontierLines.push(line, hitLine);
+        }
+
+        function drawFrontiers(frontiers) {
+            frontierLines.forEach(l => planMap.removeLayer(l));
+            frontierLines = [];
+            hideFrontierAlternative();
+            lastFrontiers = frontiers;
+            for (let s = 0; s < frontiers.length; s++) {
+                const frontier = frontiers[s];
+                let run = [];
+                let runIdx = [];
+                for (let i = 0; i < frontier.length; i++) {
+                    const { lat, lon } = frontier[i];
+                    if (pointInAnyArea(lat, lon)) {
+                        run.push([lat, lon]);
+                        runIdx.push(i);
+                    } else {
+                        if (run.length >= 2) drawFrontierRun(run, s, runIdx);
+                        run = [];
+                        runIdx = [];
+                    }
+                }
+                if (run.length >= 2) drawFrontierRun(run, s, runIdx);
+            }
+        }
+
         function drawRouteLine(pts) {
             routeSegments.forEach(l => planMap.removeLayer(l));
             routeSegments = [];
@@ -861,14 +1531,28 @@
                 const seg = L.polyline(
                     [[p.lat, p.lon], [pNext.lat, pNext.lon]],
                     {
-                        color: windColor(p.wind_speed_kn || 0),
+                        color: routeColor(p.wind_speed_kn || 0),
                         weight: 5,
                         opacity: 0.9,
                         dashArray: isMotoring ? '8 7' : null
                     }
                 ).addTo(planMap);
-                seg.bindPopup(buildSegmentPopup(p));
+                seg.bindPopup(buildSegmentPopup(pNext));
                 routeSegments.push(seg);
+            }
+
+            // Mark each discrete step point (30 min apart — the routing/forecast granularity)
+            // where one segment gives way to the next.
+            for (const p of pts) {
+                const dot = L.circleMarker([p.lat, p.lon], {
+                    radius: 3,
+                    weight: 1,
+                    color: '#fff',
+                    fillColor: routeColor(p.wind_speed_kn || 0),
+                    fillOpacity: 1
+                }).addTo(planMap);
+                dot.bindPopup(buildSegmentPopup(p));
+                routeSegments.push(dot);
             }
 
             // ETA tooltip at destination
@@ -932,12 +1616,13 @@
             document.getElementById('modeBarMotor').style.width = motorPct + '%';
 
             drawSpeedChart(pts, depMs, totalHours);
-            panel.style.display = '';
+            renderRouteReportTable(pts);
+            panel.style.display = 'flex';
         }
 
         function drawSpeedChart(pts, depMs, totalHours) {
-            const W = 900, H = 130;
-            const PAD = { top: 10, right: 16, bottom: 26, left: 40 };
+            const W = 280, H = 110;
+            const PAD = { top: 6, right: 8, bottom: 20, left: 28 };
             const plotW = W - PAD.left - PAD.right;
             const plotH = H - PAD.top  - PAD.bottom;
 
@@ -959,7 +1644,7 @@
             }
 
             let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg"
-                            style="width:100%; display:block; max-height:130px;">`;
+                            style="width:100%; display:block; max-height:${H}px;">`;
 
             // Horizontal grid lines + y labels
             const yStep = yMax <= 8 ? 2 : yMax <= 14 ? 3 : 4;
@@ -1010,6 +1695,47 @@
 
             svg += '</svg>';
             document.getElementById('speedChartContainer').innerHTML = svg;
+        }
+
+        // Mirrors utilities::calculate_true_wind (Rust) in reverse: adds the boat's
+        // velocity vector to the true wind vector instead of subtracting it.
+        function trueToApparentWind(twsKn, twaDeg, boatSpeedKn) {
+            if (twsKn == null || twaDeg == null || boatSpeedKn == null) return null;
+            const twaRad = twaDeg * Math.PI / 180;
+            const twX = twsKn * Math.cos(twaRad);
+            const twY = twsKn * Math.sin(twaRad);
+            const awX = twX + boatSpeedKn;
+            const awY = twY;
+            return {
+                awsKn: Math.sqrt(awX * awX + awY * awY),
+                awaDeg: Math.atan2(awY, awX) * 180 / Math.PI
+            };
+        }
+
+        function renderRouteReportTable(pts) {
+            const body = document.getElementById('routeReportTableBody');
+            body.innerHTML = pts.map(p => {
+                const t = new Date(p.timestamp);
+                const time = t.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
+                    + ' UTC ' + t.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'UTC' });
+                const hdg = p.heading_deg != null ? p.heading_deg.toFixed(0) + '°' : '—';
+                const spd = p.speed_kn != null ? p.speed_kn.toFixed(1) + ' kn' : '—';
+                const eng = p.speed_kn == null ? '—' : (p.twa_deg === null ? '⚙ Motoring' : '⛵ Sailing');
+                const tws = p.wind_speed_kn != null ? p.wind_speed_kn.toFixed(1) + ' kn' : '—';
+                let twa = p.relative_wind_deg != null ? p.relative_wind_deg.toFixed(0) + '°' : '—';
+                if (p.relative_wind_deg != null && p.wind_direction_deg != null && p.heading_deg != null) {
+                    // Wind's FROM-direction clockwise of the boat's heading (0-180°) is on the
+                    // starboard side; counter-clockwise (180-360°) is on the port side.
+                    const diff = ((p.wind_direction_deg - p.heading_deg) % 360 + 360) % 360;
+                    twa += diff <= 180 ? ' S' : ' P';
+                }
+                const gust = p.wind_gust_kn != null ? p.wind_gust_kn.toFixed(1) + ' kn' : '—';
+                const apparent = trueToApparentWind(p.wind_speed_kn, p.relative_wind_deg, p.speed_kn);
+                const awa = apparent ? apparent.awaDeg.toFixed(0) + '°' : '—';
+                const aws = apparent ? apparent.awsKn.toFixed(1) + ' kn' : '—';
+                return `<tr><td>${time}</td><td>${hdg}</td><td>${spd}</td><td>${eng}</td><td>${tws}</td><td>${twa}</td>` +
+                    `<td>${gust}</td><td>${awa}</td><td>${aws}</td></tr>`;
+            }).join('');
         }
 
         // ── Route persistence ─────────────────────────────────────────────────────
@@ -1083,177 +1809,44 @@
 
         init();
 
-        // ── Forecast Areas collapse ───────────────────────────────────────────────────
-        function toggleForecastAreas() {
-            const body = document.getElementById('forecastAreasBody');
-            const chevron = document.getElementById('forecastAreasChevron');
-            const collapsed = body.style.display === 'none';
-            body.style.display = collapsed ? 'grid' : 'none';
-            chevron.textContent = collapsed ? '▾' : '▸';
-            localStorage.setItem('forecast_areas_collapsed', collapsed ? '0' : '1');
-            if (collapsed && forecastAreaMap) forecastAreaMap.invalidateSize();
-        }
+        // ── Navigation areas (wind field data) + forecast refresh ───────────────────
 
-        (function restoreForecastAreasCollapse() {
-            if (localStorage.getItem('forecast_areas_collapsed') === '1') {
-                document.getElementById('forecastAreasBody').style.display = 'none';
-                document.getElementById('forecastAreasChevron').textContent = '▸';
-            }
-        })();
-
-        // ── Forecast Area Management ──────────────────────────────────────────────────
-
-        let forecastAreaMap = null;
-        let forecastAreaRectangles = [];
-        let forecastDrawOverlay = null;
-        let drawStart = null;
-        let drawRect = null;
-        let isDrawing = false;
-        let forecastStatusInterval = null;
-
-        function initForecastAreaMap() {
-            if (forecastAreaMap) { forecastAreaMap.remove(); }
-            forecastAreaMap = L.map('forecastAreaMapEl').setView([43.0, 9.0], 5);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap', maxZoom: 16
-            }).addTo(forecastAreaMap);
-            forecastDrawOverlay = document.createElement('div');
-            forecastDrawOverlay.style.cssText =
-                'position:absolute;inset:0;z-index:10000;display:none;cursor:crosshair;';
-            forecastAreaMap.getContainer().appendChild(forecastDrawOverlay);
-            forecastDrawOverlay.addEventListener('mousedown', onAreaMapMouseDown);
-        }
-
-        function startDrawArea() {
-            isDrawing = true;
-            document.getElementById('cancelDrawBtn').style.display = '';
-            document.getElementById('drawAreaBtn').style.display = 'none';
-            document.getElementById('drawAreaHint').style.display = '';
-            forecastDrawOverlay.style.display = 'block';
-        }
-
-        function cancelDrawArea() {
-            isDrawing = false;
-            drawStart = null;
-            if (drawRect) { forecastAreaMap.removeLayer(drawRect); drawRect = null; }
-            document.getElementById('cancelDrawBtn').style.display = 'none';
-            document.getElementById('drawAreaBtn').style.display = '';
-            document.getElementById('drawAreaHint').style.display = 'none';
-            forecastDrawOverlay.style.display = 'none';
-        }
-
-        function overlayLatLng(e) {
-            const r = forecastDrawOverlay.getBoundingClientRect();
-            return forecastAreaMap.containerPointToLatLng(L.point(e.clientX - r.left, e.clientY - r.top));
-        }
-
-        function onAreaMapMouseDown(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            drawStart = overlayLatLng(e);
-            if (drawRect) { forecastAreaMap.removeLayer(drawRect); }
-            drawRect = L.rectangle([drawStart, drawStart], {
-                color: '#3b82f6', weight: 2, fillOpacity: 0.15, interactive: false
-            }).addTo(forecastAreaMap);
-            document.addEventListener('mousemove', onAreaMapMouseMove);
-            document.addEventListener('mouseup', onAreaMapMouseUp);
-        }
-
-        function onAreaMapMouseMove(e) {
-            if (!drawStart || !drawRect) return;
-            drawRect.setBounds(L.latLngBounds(drawStart, overlayLatLng(e)));
-        }
-
-        async function onAreaMapMouseUp(e) {
-            document.removeEventListener('mousemove', onAreaMapMouseMove);
-            document.removeEventListener('mouseup', onAreaMapMouseUp);
-            if (!drawStart || !drawRect) return;
-            const bounds = drawRect.getBounds();
-            const lat_min = Math.min(bounds.getSouthWest().lat, bounds.getNorthEast().lat);
-            const lat_max = Math.max(bounds.getSouthWest().lat, bounds.getNorthEast().lat);
-            const lon_min = Math.min(bounds.getSouthWest().lng, bounds.getNorthEast().lng);
-            const lon_max = Math.max(bounds.getSouthWest().lng, bounds.getNorthEast().lng);
-            cancelDrawArea();
-            if (Math.abs(lat_max - lat_min) < 0.01 || Math.abs(lon_max - lon_min) < 0.01) return;
-            try {
-                await fetch('/api/forecast/areas', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ lat_min, lat_max, lon_min, lon_max }),
-                });
-                await loadForecastAreas();
-                await updateForecastStatus();
-            } catch (err) {
-                console.error('Failed to save forecast area', err);
-            }
-        }
-
-        async function deleteForecastArea(id) {
-            try {
-                await fetch('/api/forecast/areas?id=' + id, { method: 'DELETE' });
-                await loadForecastAreas();
-                await updateForecastStatus();
-            } catch (err) {
-                console.error('Failed to delete forecast area', err);
-            }
-        }
-
-        function renderForecastAreaList(areas) {
-            const container = document.getElementById('forecastAreaList');
-            if (!areas.length) {
-                container.innerHTML =
-                    '<div style="font-size:13px; color:var(--text-secondary);">No areas defined. Draw a bounding box on the map.</div>';
-                return;
-            }
-            container.innerHTML = areas.map(a => `
-                <div style="display:flex; justify-content:space-between; align-items:center;
-                            background:var(--bg-secondary); padding:6px 10px; border-radius:5px;
-                            margin-bottom:5px; font-size:13px;">
-                    <span>
-                        <strong>Area ${a.id}</strong>
-                        <span style="color:var(--text-secondary); font-size:11px; margin-left:8px;">
-                            ${a.lat_min.toFixed(2)}–${a.lat_max.toFixed(2)}°N &nbsp;
-                            ${a.lon_min.toFixed(2)}–${a.lon_max.toFixed(2)}°E
-                        </span>
-                    </span>
-                    <button onclick="deleteForecastArea(${Number(a.id)})"
-                        style="background:transparent; border:1px solid #e74c3c; color:#e74c3c;
-                               border-radius:3px; padding:1px 8px; font-size:11px; cursor:pointer;">
-                        Delete
-                    </button>
-                </div>`).join('');
-        }
-
-        function renderForecastAreasOnMap(areas) {
-            forecastAreaRectangles.forEach(r => forecastAreaMap.removeLayer(r));
-            forecastAreaRectangles = [];
-            areas.forEach(a => {
-                const r = L.rectangle(
-                    [[a.lat_min, a.lon_min], [a.lat_max, a.lon_max]],
-                    { color: '#3b82f6', weight: 2, fillOpacity: 0.1 }
-                ).addTo(forecastAreaMap);
-                forecastAreaRectangles.push(r);
+        // Adds/removes a WindParticleLayer on planMap for each area, keyed by area.id,
+        // so existing layers (and their live WebGL contexts) aren't torn down and
+        // recreated on every areas refresh — only actual additions/removals are applied.
+        function syncWindLayers(areas) {
+            planAreas = areas;
+            const seen = new Set();
+            areas.forEach(area => {
+                seen.add(area.id);
+                if (!windLayers.has(area.id)) {
+                    const layer = new WindParticleLayer(area);
+                    windLayers.set(area.id, layer);
+                    layer.onAdd(planMap);
+                    if (!windOverlayVisible) layer.setEnabled(false);
+                }
             });
-            if (areas.length) {
-                const bounds = L.latLngBounds(
-                    areas.map(a => [[a.lat_min, a.lon_min], [a.lat_max, a.lon_max]]).flat()
-                );
-                forecastAreaMap.fitBounds(bounds, { padding: [20, 20] });
-            }
+            windLayers.forEach((layer, id) => {
+                if (!seen.has(id)) {
+                    layer.onRemove();
+                    windLayers.delete(id);
+                }
+            });
         }
 
-        async function loadForecastAreas() {
+        // Navigation areas are drawn/edited on navigation-areas.html; this page only
+        // needs their bounds to build wind layers and for point-in-area lookups.
+        async function loadPlanAreas() {
             try {
                 const resp = await fetch('/api/forecast/areas');
                 const json = await resp.json();
-                const areas = json.data || [];
-                renderForecastAreaList(areas);
-                renderForecastAreasOnMap(areas);
+                syncWindLayers(json.data || []);
             } catch (err) {
                 console.error('Failed to load forecast areas', err);
-                renderForecastAreaList([]);
             }
         }
+
+        let forecastStatusInterval = null;
 
         async function updateForecastStatus() {
             try {
@@ -1266,14 +1859,15 @@
                     ? '<span style="background:#14532d;color:#86efac;padding:2px 8px;border-radius:10px;font-size:11px;">● Fetching every 3h</span>'
                     : '<span style="background:#7c2d12;color:#fdba74;padding:2px 8px;border-radius:10px;font-size:11px;">⚠ Offline — retrying</span>';
                 const lastFetch = s.last_fetch
-                    ? 'Last fetch: ' + new Date(s.last_fetch).toLocaleTimeString() + ' UTC'
+                    ? 'Last fetch: ' + new Date(s.last_fetch).toLocaleTimeString('en-GB', { timeZone: 'UTC' }) + ' UTC'
                     : 'No fetch yet';
                 const nextFetch = s.next_fetch
-                    ? ' · Next: ' + new Date(s.next_fetch).toLocaleTimeString()
+                    ? ' · Next: ' + new Date(s.next_fetch).toLocaleTimeString('en-GB', { timeZone: 'UTC' }) + ' UTC'
                     : '';
                 statusEl.innerHTML =
                     onlineBadge + ' <span style="font-size:11px;color:var(--text-secondary);margin-left:8px;">' +
                     lastFetch + nextFetch + ' · ' + s.point_count + ' pts</span>';
+                layoutOverlays();
             } catch (_) {}
         }
 
@@ -1298,8 +1892,7 @@
 
         window.addEventListener('load', () => {
             requestAnimationFrame(() => {
-                initForecastAreaMap();
-                loadForecastAreas();
+                loadPlanAreas();
                 updateForecastStatus();
                 if (forecastStatusInterval) clearInterval(forecastStatusInterval);
                 forecastStatusInterval = setInterval(updateForecastStatus, 60000);

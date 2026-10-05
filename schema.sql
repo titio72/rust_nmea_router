@@ -28,7 +28,8 @@ COMMENT='Stores persistent system status and runtime configuration';
 -- Initialize default status values:
 INSERT IGNORE INTO system_status (status_key, status_value) VALUES
 ('tracking_enabled', '1'),
-('metrics_enabled', '1');
+('metrics_enabled', '1'),
+('auto_on_enabled', '0');
 
 -- ============================================================================
 -- VESSEL STATUS TABLE
@@ -89,7 +90,15 @@ CREATE TABLE IF NOT EXISTS trips (
     total_time_sailing BIGINT NOT NULL DEFAULT 0 COMMENT 'Time spent sailing in milliseconds',
     total_time_motoring BIGINT NOT NULL DEFAULT 0 COMMENT 'Time spent motoring in milliseconds',
     total_time_moored BIGINT NOT NULL DEFAULT 0 COMMENT 'Time spent moored in milliseconds',
+    total_distance_upwind DOUBLE NOT NULL DEFAULT 0 COMMENT 'Sailing distance with folded TWA <= 60 deg, in nautical miles',
+    total_distance_reaching DOUBLE NOT NULL DEFAULT 0 COMMENT 'Sailing distance with folded TWA 60-120 deg, in nautical miles',
+    total_distance_running DOUBLE NOT NULL DEFAULT 0 COMMENT 'Sailing distance with folded TWA >= 120 deg, in nautical miles',
+    total_time_upwind BIGINT NOT NULL DEFAULT 0 COMMENT 'Sailing time with folded TWA <= 60 deg, in milliseconds',
+    total_time_reaching BIGINT NOT NULL DEFAULT 0 COMMENT 'Sailing time with folded TWA 60-120 deg, in milliseconds',
+    total_time_running BIGINT NOT NULL DEFAULT 0 COMMENT 'Sailing time with folded TWA >= 120 deg, in milliseconds',
     uuid CHAR(36) NULL COMMENT 'UUID v4 for portable trip identification (used for import deduplication)',
+    version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT 'Bumped on every change to this row; drives remote sync change-detection',
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'Legacy: superseded by version for remote sync change-detection; nothing reads this column anymore',
     INDEX idx_end_timestamp (end_timestamp),
     INDEX idx_start_timestamp (start_timestamp),
     INDEX idx_trips_time_range (start_timestamp, end_timestamp),
@@ -101,6 +110,15 @@ COMMENT='Stores vessel trips with sailing vs motoring breakdown';
 -- ALTER TABLE trips ADD COLUMN uuid CHAR(36) NULL COMMENT 'UUID v4 for portable trip identification';
 -- ALTER TABLE trips ADD UNIQUE INDEX idx_trips_uuid (uuid);
 -- ALTER TABLE trips ADD INDEX idx_trips_time_range (start_timestamp, end_timestamp);
+-- One statement per column on purpose: a combined multi-column ALTER fails
+-- atomically as soon as one of the columns already exists.
+-- (VesselDatabase::new() applies these same statements best-effort at startup.)
+-- ALTER TABLE trips ADD COLUMN total_distance_upwind DOUBLE NOT NULL DEFAULT 0;
+-- ALTER TABLE trips ADD COLUMN total_distance_reaching DOUBLE NOT NULL DEFAULT 0;
+-- ALTER TABLE trips ADD COLUMN total_distance_running DOUBLE NOT NULL DEFAULT 0;
+-- ALTER TABLE trips ADD COLUMN total_time_upwind BIGINT NOT NULL DEFAULT 0;
+-- ALTER TABLE trips ADD COLUMN total_time_reaching BIGINT NOT NULL DEFAULT 0;
+-- ALTER TABLE trips ADD COLUMN total_time_running BIGINT NOT NULL DEFAULT 0;
 
 -- ============================================================================
 -- HEATMAP CACHE TABLE
@@ -112,6 +130,12 @@ CREATE TABLE IF NOT EXISTS heatmap_cache (
     distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Total distance (sailing + motoring) in nautical miles',
     sailing_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Distance with engine off (engine_on=0) in nautical miles',
     motoring_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Distance with engine on (engine_on=1) in nautical miles',
+    upwind_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Sailing distance with folded TWA <= 60 deg, in nautical miles',
+    reaching_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Sailing distance with folded TWA 60-120 deg, in nautical miles',
+    running_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Sailing distance with folded TWA >= 120 deg, in nautical miles',
+    upwind_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Sailing time with folded TWA <= 60 deg, in milliseconds',
+    reaching_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Sailing time with folded TWA 60-120 deg, in milliseconds',
+    running_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Sailing time with folded TWA >= 120 deg, in milliseconds',
     PRIMARY KEY (date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Per-day heatmap distance cache; recomputed only for missing past days and today';
@@ -119,7 +143,13 @@ COMMENT='Per-day heatmap distance cache; recomputed only for missing past days a
 -- For existing databases, run:
 -- ALTER TABLE heatmap_cache
 --     ADD COLUMN IF NOT EXISTS sailing_distance_nm DOUBLE NOT NULL DEFAULT 0,
---     ADD COLUMN IF NOT EXISTS motoring_distance_nm DOUBLE NOT NULL DEFAULT 0;
+--     ADD COLUMN IF NOT EXISTS motoring_distance_nm DOUBLE NOT NULL DEFAULT 0,
+--     ADD COLUMN IF NOT EXISTS upwind_distance_nm DOUBLE NOT NULL DEFAULT 0,
+--     ADD COLUMN IF NOT EXISTS reaching_distance_nm DOUBLE NOT NULL DEFAULT 0,
+--     ADD COLUMN IF NOT EXISTS running_distance_nm DOUBLE NOT NULL DEFAULT 0,
+--     ADD COLUMN IF NOT EXISTS upwind_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0,
+--     ADD COLUMN IF NOT EXISTS reaching_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0,
+--     ADD COLUMN IF NOT EXISTS running_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0;
 
 -- Pre-computed leg breakdown per trip. Invalidated on trip mutation (trim/delete) and repopulated
 -- on the next fetch. Only closed trips (end_timestamp > 24h ago) are cached.
@@ -134,6 +164,12 @@ CREATE TABLE IF NOT EXISTS trip_legs_cache (
     motoring_distance_nm DOUBLE          NOT NULL DEFAULT 0,
     sailing_time_ms      BIGINT UNSIGNED NOT NULL DEFAULT 0,
     motoring_time_ms     BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    upwind_distance_nm   DOUBLE          NOT NULL DEFAULT 0,
+    reaching_distance_nm DOUBLE          NOT NULL DEFAULT 0,
+    running_distance_nm  DOUBLE          NOT NULL DEFAULT 0,
+    upwind_time_ms       BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    reaching_time_ms     BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    running_time_ms      BIGINT UNSIGNED NOT NULL DEFAULT 0,
     start_lat            DOUBLE          NULL COMMENT 'Latitude at leg start in decimal degrees',
     start_lon            DOUBLE          NULL COMMENT 'Longitude at leg start in decimal degrees',
     end_lat              DOUBLE          NULL COMMENT 'Latitude at leg end in decimal degrees',
@@ -143,6 +179,28 @@ CREATE TABLE IF NOT EXISTS trip_legs_cache (
     nav_distance_nm      DOUBLE          NOT NULL DEFAULT 0 COMMENT 'Distance within the nav window',
     nav_time_ms          BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Duration of the nav window in ms',
     nav_detection_method VARCHAR(20)     NULL COMMENT 'engine_transition | speed_fallback',
+    max_speed_kn                 DOUBLE          NULL COMMENT 'Fastest speed recorded while engine off',
+    max_speed_timestamp          VARCHAR(30)     NULL COMMENT 'Timestamp of max_speed_kn',
+    fastest_1nm_distance_nm      DOUBLE          NULL COMMENT 'Distance of fastest >=1nm segment',
+    fastest_1nm_avg_speed_kn     DOUBLE          NULL COMMENT 'Average speed of fastest >=1nm segment',
+    fastest_1nm_duration_ms      BIGINT UNSIGNED NULL COMMENT 'Duration of fastest >=1nm segment',
+    fastest_1nm_start_timestamp  VARCHAR(30)     NULL COMMENT 'Start of fastest >=1nm segment',
+    fastest_1nm_end_timestamp    VARCHAR(30)     NULL COMMENT 'End of fastest >=1nm segment',
+    fastest_5nm_distance_nm      DOUBLE          NULL COMMENT 'Distance of fastest >=5nm segment',
+    fastest_5nm_avg_speed_kn     DOUBLE          NULL COMMENT 'Average speed of fastest >=5nm segment',
+    fastest_5nm_duration_ms      BIGINT UNSIGNED NULL COMMENT 'Duration of fastest >=5nm segment',
+    fastest_5nm_start_timestamp  VARCHAR(30)     NULL COMMENT 'Start of fastest >=5nm segment',
+    fastest_5nm_end_timestamp    VARCHAR(30)     NULL COMMENT 'End of fastest >=5nm segment',
+    fastest_10nm_distance_nm     DOUBLE          NULL COMMENT 'Distance of fastest >=10nm segment',
+    fastest_10nm_avg_speed_kn    DOUBLE          NULL COMMENT 'Average speed of fastest >=10nm segment',
+    fastest_10nm_duration_ms     BIGINT UNSIGNED NULL COMMENT 'Duration of fastest >=10nm segment',
+    fastest_10nm_start_timestamp VARCHAR(30)     NULL COMMENT 'Start of fastest >=10nm segment',
+    fastest_10nm_end_timestamp   VARCHAR(30)     NULL COMMENT 'End of fastest >=10nm segment',
+    fastest_25nm_distance_nm     DOUBLE          NULL COMMENT 'Distance of fastest >=25nm segment',
+    fastest_25nm_avg_speed_kn    DOUBLE          NULL COMMENT 'Average speed of fastest >=25nm segment',
+    fastest_25nm_duration_ms     BIGINT UNSIGNED NULL COMMENT 'Duration of fastest >=25nm segment',
+    fastest_25nm_start_timestamp VARCHAR(30)     NULL COMMENT 'Start of fastest >=25nm segment',
+    fastest_25nm_end_timestamp   VARCHAR(30)     NULL COMMENT 'End of fastest >=25nm segment',
     PRIMARY KEY (trip_id, leg_number)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Cached trip leg analysis; invalidated on trim/delete, recomputed on next fetch';
@@ -158,6 +216,28 @@ COMMENT='Cached trip leg analysis; invalidated on trim/delete, recomputed on nex
 -- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_distance_nm DOUBLE NOT NULL DEFAULT 0;
 -- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_time_ms BIGINT UNSIGNED NOT NULL DEFAULT 0;
 -- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS nav_detection_method VARCHAR(20) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS max_speed_kn DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS max_speed_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_1nm_distance_nm DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_1nm_avg_speed_kn DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_1nm_duration_ms BIGINT UNSIGNED NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_1nm_start_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_1nm_end_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_5nm_distance_nm DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_5nm_avg_speed_kn DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_5nm_duration_ms BIGINT UNSIGNED NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_5nm_start_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_5nm_end_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_10nm_distance_nm DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_10nm_avg_speed_kn DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_10nm_duration_ms BIGINT UNSIGNED NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_10nm_start_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_10nm_end_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_25nm_distance_nm DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_25nm_avg_speed_kn DOUBLE NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_25nm_duration_ms BIGINT UNSIGNED NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_25nm_start_timestamp VARCHAR(30) NULL;
+-- ALTER TABLE trip_legs_cache ADD COLUMN IF NOT EXISTS fastest_25nm_end_timestamp VARCHAR(30) NULL;
 
 CREATE TABLE IF NOT EXISTS trip_legs_nav_overrides (
     trip_id          INT UNSIGNED NOT NULL COMMENT 'Trip ID (mirrors trips.id, no FK)',

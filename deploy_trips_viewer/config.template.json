@@ -38,7 +38,8 @@
   "sync": {
     "enabled": false,
     "target_url": "",
-    "api_key": "SYNC_API_KEY",
+    "api_key": null,
     "timeout_secs": 120
-  }
+  },
+  "polars_file_path": "/opt/trips_viewer/polars.csv"
 }

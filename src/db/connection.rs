@@ -68,6 +68,11 @@ impl VesselDatabase {
                 )"
             );
             
+            // Auto On is opt-in; an absent key would otherwise read as enabled
+            let _ = conn.query_drop(
+                "INSERT IGNORE INTO system_status (status_key, status_value) VALUES ('auto_on_enabled', '0')"
+            );
+
             // Load cache from database
             if let Ok(rows) = conn.query::<(String, String), _>("SELECT status_key, status_value FROM system_status") {
                 let mut cache = db.system_status_cache.lock()
@@ -76,6 +81,23 @@ impl VesselDatabase {
                     let enabled = value == "1" || value.to_lowercase() == "true";
                     cache.insert(key, enabled);
                 }
+            }
+
+            // Best-effort migrations for trips columns added in later versions (same
+            // pattern as the trip_legs_cache / heatmap_cache migrations). One statement
+            // per column on purpose: a combined multi-column ALTER fails atomically as
+            // soon as a single column already exists. Errors are ignored (column already
+            // present = MySQL 1060, or a read-only DB user).
+            for sql in &[
+                "ALTER TABLE trips ADD COLUMN total_distance_upwind DOUBLE NOT NULL DEFAULT 0",
+                "ALTER TABLE trips ADD COLUMN total_distance_reaching DOUBLE NOT NULL DEFAULT 0",
+                "ALTER TABLE trips ADD COLUMN total_distance_running DOUBLE NOT NULL DEFAULT 0",
+                "ALTER TABLE trips ADD COLUMN total_time_upwind BIGINT NOT NULL DEFAULT 0",
+                "ALTER TABLE trips ADD COLUMN total_time_reaching BIGINT NOT NULL DEFAULT 0",
+                "ALTER TABLE trips ADD COLUMN total_time_running BIGINT NOT NULL DEFAULT 0",
+                "ALTER TABLE trips ADD COLUMN version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT 'Bumped on every change to this row; drives remote sync change-detection'",
+            ] {
+                let _ = conn.query_drop(sql);
             }
         }
 
