@@ -74,6 +74,7 @@ fn extract_session_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
 
 const PUBLIC_PATHS: &[&str] = &[
     "/login.html",
+    "/google7360bbb1dd321417.html",
     "/api/auth/login",
     "/api/auth/logout",
     "/api/auth/status",
