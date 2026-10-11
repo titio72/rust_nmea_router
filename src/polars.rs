@@ -10,7 +10,7 @@ enum PolarCsvFormat {
     AngleGrid,
     /// ORC-style `TWA,6,8,...,20` table whose extreme rows are labelled
     /// (`Beat_Angle`/`Beat_Speed`, `Run_Angle`/`Run_Speed`) and therefore carry a
-    /// different optimum angle per wind column (e.g. `dufour_40_ITA_17811.csv`).
+    /// different optimum angle per wind column (e.g. `dufour40_ITA_17811.csv`).
     OrcLabelled,
 }
 
@@ -525,7 +525,7 @@ mod tests {
     // ---- ORC-style labelled format (Beat_Angle / Run_Angle rows) ----
 
     fn load_orc() -> PolarTable {
-        PolarTable::from_csv("tests/fixtures/dufour_40_ITA_17811.csv").expect("load ORC polar")
+        PolarTable::from_csv("tests/fixtures/dufour40_ITA_17811.csv").expect("load ORC polar")
     }
 
     #[test]
