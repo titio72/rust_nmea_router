@@ -50,6 +50,11 @@ class TripCard extends HTMLElement {
                     display: block;
                 }
 
+                :host([data-selected]) .app-card {
+                    outline: 2px solid var(--primary-color);
+                    outline-offset: -2px;
+                }
+
                 .trip-line {
                     display: flex;
                     justify-content: space-between;
@@ -172,6 +177,7 @@ class TripCard extends HTMLElement {
 
         this.addEventListener('click', (e) => {
             if (!e.target.classList.contains('app-btn')) {
+                try { sessionStorage.setItem('selectedTripId', trip_data.id); } catch (err) { /* storage unavailable */ }
                 window.location.href = `trip.html?id=${trip_data.id}`;
             }
         });

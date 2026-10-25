@@ -670,9 +670,17 @@
             const grid = document.createElement('div');
             grid.className = 'trips-grid';
 
+            let selectedId = null;
+            try { selectedId = sessionStorage.getItem('selectedTripId'); } catch (e) { /* storage unavailable */ }
+            let selectedCard = null;
+
             trips.forEach(trip => {
                 const card = document.createElement('trip-card');
                 card.setAttribute('data-id', trip.id);
+                if (selectedId !== null && String(trip.id) === selectedId) {
+                    card.setAttribute('data-selected', '');
+                    selectedCard = card;
+                }
                 card.setAttribute('data-description', trip.description || '');
                 card.setAttribute('data-start-date', trip.start_date);
                 card.setAttribute('data-end-date', trip.end_date);
@@ -691,6 +699,7 @@
 
             content.innerHTML = '';
             content.appendChild(grid);
+            if (selectedCard) selectedCard.scrollIntoView({ block: 'center' });
         }
 
         function formatDate(dateStr) {
@@ -776,6 +785,7 @@
             });
 
             if (matchingTrip) {
+                try { sessionStorage.setItem('selectedTripId', matchingTrip.id); } catch (e) { /* storage unavailable */ }
                 window.location.href = `trip.html?id=${matchingTrip.id}`;
             } else {
                 alert(`No trip found for date ${dateStr}`);
