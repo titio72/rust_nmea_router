@@ -384,14 +384,33 @@ pub async fn get_trips(
     }
 }
 
+/// A trip summary plus the ids of its chronological neighbours, for prev/next navigation.
+#[derive(Serialize)]
+pub struct TripWithNeighbours {
+    #[serde(flatten)]
+    trip: TripSummary,
+    prev_trip_id: Option<u32>,
+    next_trip_id: Option<u32>,
+}
+
 pub async fn get_trip(
     State(state): State<AppState>,
     Query(params): Query<TripIdQuery>,
-) -> Result<Json<ApiResponse<TripSummary>>, StatusCode> {
-    match state.db().fetch_trip(params.id) {
+) -> Result<Json<ApiResponse<TripWithNeighbours>>, StatusCode> {
+    let db = state.db();
+    match db.fetch_trip(params.id) {
         Ok(res_trip) => {
             if let Some(trip) = res_trip {
-                Ok(Json(ApiResponse::ok(trip)))
+                let (prev_trip_id, next_trip_id) =
+                    db.fetch_trip_neighbours(params.id).unwrap_or_else(|e| {
+                        warn!(error = %e, trip_id = params.id, "Failed to fetch trip neighbours");
+                        (None, None)
+                    });
+                Ok(Json(ApiResponse::ok(TripWithNeighbours {
+                    trip,
+                    prev_trip_id,
+                    next_trip_id,
+                })))
             } else {
                 error!(trip_id = params.id, "Trip not found");
                 Ok(Json(ApiResponse::error(format!(
@@ -3537,6 +3556,56 @@ mod tests {
         assert_eq!(json["status"], "ok");
         assert_eq!(json["data"]["id"].as_u64().unwrap(), trip_id as u64);
         assert_eq!(json["data"]["description"].as_str().unwrap(), "Seeded Trip");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_trip_neighbours_seeded() {
+        use crate::db::test_helpers::add_test_trip;
+        use std::time::{Duration, SystemTime};
+        let (app, db) = create_clean_test_app();
+        let base = SystemTime::now();
+        let ids: Vec<u32> = {
+            let db = db.read().unwrap();
+            // Inserted out of chronological order so ids don't match time order
+            [2u64, 0, 1]
+                .iter()
+                .map(|day| {
+                    let start = base + Duration::from_secs(day * 86400);
+                    add_test_trip(
+                        &db,
+                        format!("Trip day {}", day),
+                        start,
+                        start + Duration::from_secs(3600),
+                        5.0,
+                        1.0,
+                        3600000,
+                        0,
+                        0,
+                    )
+                    .unwrap()
+                })
+                .collect()
+        };
+        // chronological order: ids[1] (day 0), ids[2] (day 1), ids[0] (day 2)
+        let expected = [
+            (ids[1], None, Some(ids[2])),
+            (ids[2], Some(ids[1]), Some(ids[0])),
+            (ids[0], Some(ids[2]), None),
+        ];
+        for (id, prev, next) in expected {
+            let (status, json) = call_api(
+                app.clone(),
+                axum::http::Request::builder()
+                    .uri(format!("/trip?id={}", id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(json["data"]["prev_trip_id"].as_u64().map(|v| v as u32), prev);
+            assert_eq!(json["data"]["next_trip_id"].as_u64().map(|v| v as u32), next);
+        }
     }
 
     #[tokio::test]

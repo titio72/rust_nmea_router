@@ -385,6 +385,32 @@ impl VesselDatabase {
         }
     }
 
+    /// Ids of the chronologically previous and next trips (by start time, id as tie-break).
+    /// Either is `None` at the ends of the list or when `trip_id` does not exist.
+    pub fn fetch_trip_neighbours(&self, trip_id: u32) -> Result<(Option<u32>, Option<u32>), AppError> {
+        let mut conn = self.pool.get_conn()?;
+
+        let row: Option<mysql::Row> = conn.exec_first(
+            r"SELECT
+                (SELECT p.id FROM trips p
+                  WHERE p.start_timestamp < t.start_timestamp
+                     OR (p.start_timestamp = t.start_timestamp AND p.id < t.id)
+                  ORDER BY p.start_timestamp DESC, p.id DESC LIMIT 1) AS prev_id,
+                (SELECT n.id FROM trips n
+                  WHERE n.start_timestamp > t.start_timestamp
+                     OR (n.start_timestamp = t.start_timestamp AND n.id > t.id)
+                  ORDER BY n.start_timestamp ASC, n.id ASC LIMIT 1) AS next_id
+              FROM trips t
+              WHERE t.id = :trip_id",
+            mysql::params! { "trip_id" => trip_id },
+        )?;
+
+        Ok(row.map_or((None, None), |row| {
+            let get = |col: &str| row.get_opt::<Option<u32>, _>(col).and_then(|v| v.ok()).flatten();
+            (get("prev_id"), get("next_id"))
+        }))
+    }
+
     /// Fetch trips with optional filtering
     pub fn fetch_trips(
         &self,

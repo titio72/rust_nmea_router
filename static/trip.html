@@ -201,6 +201,31 @@
             margin-top: 2px;
             line-height: 1.3;
         }
+        .tripNavBar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+        .tripNavLabel {
+            flex: 1;
+            text-align: center;
+            min-width: 0;
+        }
+        .tripDescription {
+            font-size: 24px;
+            font-weight: bold;
+            color: var(--text-primary);
+        }
+        .tripNavSub {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+        .tripNavBar .app-btn:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
         .legNavigator {
             display: flex;
             justify-content: space-between;
@@ -209,12 +234,6 @@
             margin-bottom: 20px;
             border-bottom: 1px solid var(--border-color);
             padding-bottom: 20px;
-        }
-        .tripDescription {
-            font-size: 24px;
-            font-weight: bold;
-            color: var(--text-primary);
-            flex: 1;
         }
         .navButtons {
             display: flex;
@@ -236,15 +255,24 @@
     <div id="headerContainer"></div>
     <div id="tripContainer" class="level-1-container">
         <div id="tripDetails">
+            <div class="tripNavBar">
+                <button id="prevTripBtn" class="app-btn" onclick="goToTrip('prev')" disabled>&lsaquo; Prev trip</button>
+                <div class="tripNavLabel">
+                    <div id="tripDescriptionLabel" class="tripDescription"></div>
+                    <div id="tripNavLabel" class="tripNavSub"></div>
+                </div>
+                <button id="nextTripBtn" class="app-btn" onclick="goToTrip('next')" disabled>Next trip &rsaquo;</button>
+            </div>
             <div class="infoAndMapContainer">
                 <div class="app-card"> <!-- trip info, stats, and legs navigation -->
                     <div id="legSelectorContainer">
                         <div class="legNavigator">
-                            <div id="tripDescriptionLabel" class="tripDescription"></div>
                             <div class="navButtons">
                                 <button class="app-btn" onclick="previousLeg()" title="Previous">&lt;&lt;</button>
                                 <div id="legDisplay" class="legDisplay"></div>
                                 <button class="app-btn" onclick="nextLeg()" title="Next">&gt;&gt;</button>
+                            </div>
+                            <div class="navButtons">
                                 <button class="app-btn" data-ro-hidden onclick="recalculateLegs(event)" title="Recalculate Legs">&#x21BA;</button>
                                 <button class="app-btn" data-ro-hidden onclick="goToFixEngineStatus()" title="Fix Engine Status"><app-icon name="wrench"></app-icon></button>
                             </div>
@@ -716,6 +744,7 @@
                     throw new Error(tripResult.error || 'Trip not found');
                 }
                 currentTrip = tripResult.data;
+                updateTripNav();
 
                 if (legsResponse !== null) {
                     if (!legsResponse.ok) {
@@ -781,6 +810,41 @@
             }
         }
 
+        function updateTripNav() {
+            const prevId = currentTrip.prev_trip_id;
+            const nextId = currentTrip.next_trip_id;
+            const prevBtn = document.getElementById('prevTripBtn');
+            const nextBtn = document.getElementById('nextTripBtn');
+            prevBtn.disabled = prevId == null;
+            nextBtn.disabled = nextId == null;
+            prevBtn.title = prevId != null ? 'Previous trip (Alt+Left)' : 'No earlier trip';
+            nextBtn.title = nextId != null ? 'Next trip (Alt+Right)' : 'No later trip';
+            const start = currentTrip.start_date ? currentTrip.start_date.substring(0, 10) : '';
+            document.getElementById('tripDescriptionLabel').textContent = currentTrip.description || 'Trip ' + currentTrip.id;
+            document.getElementById('tripNavLabel').textContent = 'Trip ' + currentTrip.id + (start ? ' · ' + start : '');
+        }
+
+        function goToTrip(direction) {
+            if (!currentTrip) return;
+            const id = direction === 'prev' ? currentTrip.prev_trip_id : currentTrip.next_trip_id;
+            if (id != null) {
+                window.location.href = 'trip.html?id=' + id;
+            }
+        }
+
+        document.addEventListener('keydown', function (e) {
+            if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+            const tag = (e.target && e.target.tagName) || '';
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
+            if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                goToTrip('prev');
+            } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                goToTrip('next');
+            }
+        });
+
         function goToFixEngineStatus() {
             let url = '/fix-engine-status.html?id=' + tripId;
             if (selectedLeg !== null) {
@@ -804,9 +868,6 @@
             } else {
                 window.currentLegIndex = 0;
             }
-
-            const description = currentTrip.description || 'Trip ' + currentTrip.id;
-            document.getElementById('tripDescriptionLabel').textContent = description;
 
             const displayIdx = window.currentLegIndex;
             if (displayIdx === 0) {
