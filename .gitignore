@@ -12,3 +12,4 @@ package-lock.json
 route.json
 rust_out
 .superpowers/
+config.json
