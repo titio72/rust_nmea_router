@@ -1,5 +1,7 @@
 use std::fmt;
 
+use super::sentinel::Available;
+
 #[derive(Debug, Clone)]
 pub struct EngineRapidUpdate {
     #[allow(dead_code)]
@@ -38,28 +40,13 @@ impl EngineRapidUpdate {
         let engine_instance = data[0];
         
         // Engine speed in 0.25 RPM per bit
-        let speed_raw = u16::from_le_bytes([data[1], data[2]]);
-        let engine_speed = if speed_raw == 0xFFFF {
-            None
-        } else {
-            Some(speed_raw as f64 * 0.25)
-        };
+        let engine_speed = u16::from_le_bytes([data[1], data[2]]).available().map(|r| r as f64 * 0.25);
         
         // Engine boost pressure in 100 Pa per bit
-        let boost_raw = u16::from_le_bytes([data[3], data[4]]);
-        let engine_boost_pressure = if boost_raw == 0xFFFF {
-            None
-        } else {
-            Some(boost_raw as f64 * 100.0)
-        };
+        let engine_boost_pressure = u16::from_le_bytes([data[3], data[4]]).available().map(|r| r as f64 * 100.0);
         
-        // Engine tilt/trim in 1% per bit
-        let tilt_trim = data[5] as i8;
-        let engine_tilt_trim = if tilt_trim == -128 {
-            None
-        } else {
-            Some(tilt_trim)
-        };
+        // Engine tilt/trim in 1% per bit, signed: "not available" is 0x7F, not 0x80
+        let engine_tilt_trim = (data[5] as i8).available();
 
         Some(EngineRapidUpdate {
             pgn: 127488,
@@ -118,13 +105,21 @@ mod tests {
 
     #[test]
     fn test_engine_rapid_update_invalid_values() {
-        // All invalid values (0xFF markers)
-        let data = [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x80, 0xFF, 0xFF];
+        // All values not available
+        let data = [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0xFF, 0xFF];
         let engine = EngineRapidUpdate::from_bytes(&data).unwrap();
         
         assert_eq!(engine.engine_speed, None);
         assert_eq!(engine.engine_boost_pressure, None);
         assert_eq!(engine.engine_tilt_trim, None);
+    }
+
+    #[test]
+    fn test_engine_tilt_trim_full_negative_is_a_reading() {
+        // 0x80 is -128 %, the bottom of the range, not a sentinel
+        let data = [0x00, 0x70, 0x17, 0xDC, 0x05, 0x80, 0xFF, 0xFF];
+        let engine = EngineRapidUpdate::from_bytes(&data).unwrap();
+        assert_eq!(engine.engine_tilt_trim, Some(-128));
     }
 
     #[test]

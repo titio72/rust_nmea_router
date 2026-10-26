@@ -1,6 +1,7 @@
 use std::fmt;
 
 use super::nmea2000_date_time::N2kDateTime;
+use super::sentinel::{fmt_opt, latitude, longitude, Available};
 
 /// Course/bearing reference for navigation calculations.
 #[derive(Debug, Clone, PartialEq)]
@@ -57,6 +58,9 @@ pub enum CalculationType {
 ///
 /// Bearings are in radians (SI). Distance is in metres. Closing velocity is in m/s.
 /// Lat/lon are in decimal degrees. Convert at call site as needed.
+///
+/// Every reading is optional: a plotter without an active route sends this PGN with most fields
+/// not available.
 #[derive(Debug, Clone)]
 pub struct NavigationData {
     #[allow(dead_code)]
@@ -64,25 +68,25 @@ pub struct NavigationData {
     #[allow(dead_code)]
     pub sid: u8,
     /// Distance to destination waypoint, metres.
-    pub distance_to_waypoint: f64,
+    pub distance_to_waypoint: Option<f64>,
     pub course_bearing_reference: CourseBearingReference,
     pub perpendicular_crossed: PerpendicularCrossed,
     pub arrival_circle_entered: ArrivalCircleEntered,
     pub calculation_type: CalculationType,
     /// Estimated time of arrival (date + seconds-since-midnight in 0.0001 s units).
-    pub eta: N2kDateTime,
+    pub eta: Option<N2kDateTime>,
     /// Bearing from origin waypoint to destination waypoint, radians.
-    pub bearing_origin_to_destination: f64,
+    pub bearing_origin_to_destination: Option<f64>,
     /// Bearing from current position to destination waypoint, radians.
-    pub bearing_position_to_destination: f64,
-    pub origin_waypoint_number: u32,
-    pub destination_waypoint_number: u32,
+    pub bearing_position_to_destination: Option<f64>,
+    pub origin_waypoint_number: Option<u32>,
+    pub destination_waypoint_number: Option<u32>,
     /// Destination latitude, decimal degrees (positive = North).
-    pub destination_latitude: f64,
+    pub destination_latitude: Option<f64>,
     /// Destination longitude, decimal degrees (positive = East).
-    pub destination_longitude: f64,
+    pub destination_longitude: Option<f64>,
     /// Closing velocity toward destination, m/s (negative = moving away).
-    pub waypoint_closing_velocity: f64,
+    pub waypoint_closing_velocity: Option<f64>,
 }
 
 impl NavigationData {
@@ -107,7 +111,7 @@ impl NavigationData {
         Some(Self {
             pgn: 129284,
             sid,
-            distance_to_waypoint: dist_raw as f64 * 0.01,
+            distance_to_waypoint: dist_raw.available().map(|r| r as f64 * 0.01),
             course_bearing_reference: match flags & 0x03 {
                 0 => CourseBearingReference::True,
                 1 => CourseBearingReference::Magnetic,
@@ -129,17 +133,17 @@ impl NavigationData {
                 1 => CalculationType::Rhumbline,
                 v => CalculationType::Unknown(v),
             },
-            eta: N2kDateTime {
-                date: eta_date,
-                time: eta_time_raw as f64,
-            },
-            bearing_origin_to_destination: bearing_orig_raw as f64 * 0.0001,
-            bearing_position_to_destination: bearing_pos_raw as f64 * 0.0001,
-            origin_waypoint_number: origin_wp,
-            destination_waypoint_number: dest_wp,
-            destination_latitude: dest_lat_raw as f64 * 1e-7,
-            destination_longitude: dest_lon_raw as f64 * 1e-7,
-            waypoint_closing_velocity: closing_vel_raw as f64 * 0.01,
+            eta: eta_date.available().zip(eta_time_raw.available()).map(|(date, time)| N2kDateTime {
+                date,
+                time: time as f64 * 0.0001,
+            }),
+            bearing_origin_to_destination: bearing_orig_raw.available().map(|r| r as f64 * 0.0001),
+            bearing_position_to_destination: bearing_pos_raw.available().map(|r| r as f64 * 0.0001),
+            origin_waypoint_number: origin_wp.available(),
+            destination_waypoint_number: dest_wp.available(),
+            destination_latitude: latitude(dest_lat_raw.available().map(|r| r as f64 * 1e-7)),
+            destination_longitude: longitude(dest_lon_raw.available().map(|r| r as f64 * 1e-7)),
+            waypoint_closing_velocity: closing_vel_raw.available().map(|r| r as f64 * 0.01),
         })
     }
 }
@@ -148,13 +152,13 @@ impl fmt::Display for NavigationData {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Nav Data: DTW={:.1}m brg={:.4}rad dest={:.6},{:.6} ETA day={} vel={:.2}m/s",
-            self.distance_to_waypoint,
-            self.bearing_position_to_destination,
-            self.destination_latitude,
-            self.destination_longitude,
-            self.eta.date,
-            self.waypoint_closing_velocity,
+            "Nav Data: DTW={}m brg={}rad dest={},{} ETA day={} vel={}m/s",
+            fmt_opt(self.distance_to_waypoint, 1),
+            fmt_opt(self.bearing_position_to_destination, 4),
+            fmt_opt(self.destination_latitude, 6),
+            fmt_opt(self.destination_longitude, 6),
+            self.eta.as_ref().map_or_else(|| "N/A".to_string(), |eta| eta.date.to_string()),
+            fmt_opt(self.waypoint_closing_velocity, 2),
         )
     }
 }
@@ -200,21 +204,22 @@ mod tests {
 
         assert_eq!(msg.pgn, 129284);
         assert_eq!(msg.sid, 1);
-        assert!((msg.distance_to_waypoint - 100.0).abs() < 1e-9);
+        assert!((msg.distance_to_waypoint.unwrap() - 100.0).abs() < 1e-9);
         assert_eq!(msg.course_bearing_reference, CourseBearingReference::True);
         assert_eq!(msg.perpendicular_crossed, PerpendicularCrossed::No);
         assert_eq!(msg.arrival_circle_entered, ArrivalCircleEntered::No);
         assert_eq!(msg.calculation_type, CalculationType::GreatCircle);
-        assert_eq!(msg.eta.date, 100);
-        assert!((msg.eta.time - 100000.0).abs() < 1e-9);
+        let eta = msg.eta.unwrap();
+        assert_eq!(eta.date, 100);
+        assert!((eta.time - 10.0).abs() < 1e-9);
 
-        assert!((msg.bearing_origin_to_destination - 1.5708).abs() < 1e-6);
-        assert!((msg.bearing_position_to_destination - 1.0).abs() < 1e-9);
-        assert_eq!(msg.origin_waypoint_number, 42);
-        assert_eq!(msg.destination_waypoint_number, 43);
-        assert!((msg.destination_latitude - 45.0).abs() < 1e-6);
-        assert!((msg.destination_longitude - 9.0).abs() < 1e-6);
-        assert!((msg.waypoint_closing_velocity - 5.0).abs() < 1e-9);
+        assert!((msg.bearing_origin_to_destination.unwrap() - 1.5708).abs() < 1e-6);
+        assert!((msg.bearing_position_to_destination.unwrap() - 1.0).abs() < 1e-9);
+        assert_eq!(msg.origin_waypoint_number, Some(42));
+        assert_eq!(msg.destination_waypoint_number, Some(43));
+        assert!((msg.destination_latitude.unwrap() - 45.0).abs() < 1e-6);
+        assert!((msg.destination_longitude.unwrap() - 9.0).abs() < 1e-6);
+        assert!((msg.waypoint_closing_velocity.unwrap() - 5.0).abs() < 1e-9);
     }
 
     #[test]
@@ -242,8 +247,31 @@ mod tests {
         // destinationLongitude: -70.6° → raw = -706000000
         data[28..32].copy_from_slice(&(-706000000i32).to_le_bytes());
         let msg = NavigationData::from_bytes(&data).unwrap();
-        assert!((msg.destination_latitude - (-33.9)).abs() < 1e-5);
-        assert!((msg.destination_longitude - (-70.6)).abs() < 1e-5);
+        assert!((msg.destination_latitude.unwrap() - (-33.9)).abs() < 1e-5);
+        assert!((msg.destination_longitude.unwrap() - (-70.6)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_navigation_data_not_available() {
+        let mut data = build_test_frame();
+        data[1..5].copy_from_slice(&u32::MAX.to_le_bytes());
+        data[6..10].copy_from_slice(&u32::MAX.to_le_bytes());
+        data[12..14].copy_from_slice(&u16::MAX.to_le_bytes());
+        data[14..16].copy_from_slice(&u16::MAX.to_le_bytes());
+        data[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
+        data[24..28].copy_from_slice(&i32::MAX.to_le_bytes());
+        data[28..32].copy_from_slice(&i32::MAX.to_le_bytes());
+        data[32..34].copy_from_slice(&i16::MAX.to_le_bytes());
+        let msg = NavigationData::from_bytes(&data).unwrap();
+        assert_eq!(msg.distance_to_waypoint, None);
+        assert!(msg.eta.is_none());
+        assert_eq!(msg.bearing_origin_to_destination, None);
+        assert_eq!(msg.bearing_position_to_destination, None);
+        assert_eq!(msg.origin_waypoint_number, None);
+        assert_eq!(msg.destination_waypoint_number, Some(43));
+        assert_eq!(msg.destination_latitude, None);
+        assert_eq!(msg.destination_longitude, None);
+        assert_eq!(msg.waypoint_closing_velocity, None);
     }
 
     #[test]

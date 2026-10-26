@@ -1,5 +1,7 @@
 use std::fmt;
 
+use super::sentinel::Available;
+
 #[derive(Debug, Clone)]
 pub struct GnssDops {
     #[allow(dead_code)]
@@ -49,17 +51,14 @@ impl GnssDops {
         if data.len() < 8 {
             return None;
         }
-        let hdop_raw = i16::from_le_bytes([data[2], data[3]]);
-        let vdop_raw = i16::from_le_bytes([data[4], data[5]]);
-        let tdop_raw = i16::from_le_bytes([data[6], data[7]]);
         Some(Self {
             pgn: 129539,
             sid: data[0],
             desired_mode: parse_mode(data[1] & 0x07),
             actual_mode: parse_mode((data[1] >> 3) & 0x07),
-            hdop: if hdop_raw >= i16::MAX - 1 { None } else { Some(hdop_raw as f64 * 0.01) },
-            vdop: if vdop_raw >= i16::MAX - 1 { None } else { Some(vdop_raw as f64 * 0.01) },
-            tdop: if tdop_raw >= i16::MAX - 1 { None } else { Some(tdop_raw as f64 * 0.01) },
+            hdop: i16::from_le_bytes([data[2], data[3]]).available().map(|r| r as f64 * 0.01),
+            vdop: i16::from_le_bytes([data[4], data[5]]).available().map(|r| r as f64 * 0.01),
+            tdop: i16::from_le_bytes([data[6], data[7]]).available().map(|r| r as f64 * 0.01),
         })
     }
 }

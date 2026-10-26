@@ -5,6 +5,7 @@ use super::ais_helpers::{
     extract_text_from_bytes, gnss_type_description, read_bits, repeat_indicator_description,
     type_of_ship_description,
 };
+use super::sentinel::{fmt_opt, Available};
 
 /// AIS Class A Static and Voyage Data (PGN 129794)
 /// Reports vessel name, callsign, dimensions, type, and voyage-related information
@@ -84,25 +85,28 @@ impl AisClassAStaticData {
             ais_version,
             gnss_type,
             dte,
-            eta_date_time: N2kDateTime::new(eta_date, eta_time as f64),
+            eta_date_time: eta_date
+                .available()
+                .zip(eta_time.available())
+                .map(|(date, time)| N2kDateTime { date, time: time as f64 * 0.0001 }),
             class: "A".to_string(),
         })
     }
 
-    pub fn get_length_meters(&self) -> f64 {
-        self.length_raw as f64 * 0.1
+    pub fn get_length_meters(&self) -> Option<f64> {
+        self.length_raw.available().map(|r| r as f64 * 0.1)
     }
 
-    pub fn get_beam_meters(&self) -> f64 {
-        self.beam_raw as f64 * 0.1
+    pub fn get_beam_meters(&self) -> Option<f64> {
+        self.beam_raw.available().map(|r| r as f64 * 0.1)
     }
 
-    pub fn get_draft_meters(&self) -> f64 {
-        self.draft_raw as f64 * 0.01
+    pub fn get_draft_meters(&self) -> Option<f64> {
+        self.draft_raw.available().map(|r| r as f64 * 0.01)
     }
 
-    pub fn get_eta_time_seconds(&self) -> f64 {
-        self.eta_time as f64 * 0.0001
+    pub fn get_eta_time_seconds(&self) -> Option<f64> {
+        self.eta_time.available().map(|r| r as f64 * 0.0001)
     }
 
     pub fn get_type_of_ship_description(&self) -> &'static str {
@@ -131,13 +135,13 @@ impl fmt::Display for AisClassAStaticData {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "AIS Class A Static - MMSI: {}, Name: {}, Call: {}, Type: {}, Length: {:.1}m, Draft: {:.2}m",
+            "AIS Class A Static - MMSI: {}, Name: {}, Call: {}, Type: {}, Length: {}m, Draft: {}m",
             self.mmsi,
             self.name.trim(),
             self.callsign.trim(),
             self.type_of_ship,
-            self.get_length_meters(),
-            self.get_draft_meters()
+            fmt_opt(self.get_length_meters(), 1),
+            fmt_opt(self.get_draft_meters(), 2)
         )
     }
 }
@@ -199,10 +203,10 @@ mod tests {
         assert_eq!(static_data.callsign.trim(), "9HA6246");
         assert_eq!(static_data.name.trim(), "PAPA");
         assert_eq!(static_data.type_of_ship, 37); // Pleasure
-        assert_eq!(static_data.get_length_meters(), 55.0);
-        assert_eq!(static_data.get_beam_meters(), 10.0);
-        assert_eq!(static_data.get_draft_meters(), 3.79);
-        assert_eq!(static_data.get_eta_time_seconds(), 32400.0); // 09:00:00 in seconds
+        assert_eq!(static_data.get_length_meters().unwrap(), 55.0);
+        assert_eq!(static_data.get_beam_meters().unwrap(), 10.0);
+        assert_eq!(static_data.get_draft_meters().unwrap(), 3.79);
+        assert_eq!(static_data.get_eta_time_seconds().unwrap(), 32400.0); // 09:00:00 in seconds
         assert_eq!(static_data.destination.trim(), "LIVORNO");
         assert_eq!(static_data.ais_version, 2); // ITU-R M.1371-5
         assert_eq!(static_data.gnss_type, 1); // GPS

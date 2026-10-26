@@ -1,5 +1,6 @@
 use std::fmt;
 use super::ais_helpers::{read_bits, extract_text_from_bytes, type_of_ship_description, repeat_indicator_description};
+use super::sentinel::{fmt_opt, Available};
 
 /// AIS Class B Static Data Report Part B (PGN 129810)
 /// Reports vessel type, dimensions, callsign, and other details (Part B of Class B static data)
@@ -64,12 +65,12 @@ impl AisClassBStaticDataPartB {
         })
     }
 
-    pub fn get_length_meters(&self) -> f64 {
-        self.length_raw as f64 * 0.1
+    pub fn get_length_meters(&self) -> Option<f64> {
+        self.length_raw.available().map(|r| r as f64 * 0.1)
     }
 
-    pub fn get_beam_meters(&self) -> f64 {
-        self.beam_raw as f64 * 0.1
+    pub fn get_beam_meters(&self) -> Option<f64> {
+        self.beam_raw.available().map(|r| r as f64 * 0.1)
     }
 
     pub fn get_type_of_ship_description(&self) -> &'static str {
@@ -85,11 +86,11 @@ impl fmt::Display for AisClassBStaticDataPartB {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "AIS Class B Static (Part B) - MMSI: {}, Call: {}, Type: {}, Length: {:.1}m",
+            "AIS Class B Static (Part B) - MMSI: {}, Call: {}, Type: {}, Length: {}m",
             self.mmsi,
             self.callsign.trim(),
             self.type_of_ship,
-            self.get_length_meters()
+            fmt_opt(self.get_length_meters(), 1)
         )
     }
 }

@@ -297,14 +297,14 @@ mod tests {
             N2kMessage::AisClassBPositionReport(ref report) => {
                 assert_eq!(report.mmsi, 232055903, "unexpected MMSI");
                 assert!(
-                    (report.get_latitude_degrees() - 43.6772956).abs() < 0.00001,
+                    (report.get_latitude_degrees().unwrap() - 43.6772956).abs() < 0.00001,
                     "unexpected latitude: {}",
-                    report.get_latitude_degrees()
+                    report.get_latitude_degrees().unwrap()
                 );
                 assert!(
-                    (report.get_longitude_degrees() - 10.2706747).abs() < 0.00001,
+                    (report.get_longitude_degrees().unwrap() - 10.2706747).abs() < 0.00001,
                     "unexpected longitude: {}",
-                    report.get_longitude_degrees()
+                    report.get_longitude_degrees().unwrap()
                 );
             }
             other => panic!("expected AisClassBPositionReport, got {:?}", other),
@@ -513,19 +513,19 @@ mod tests {
         match frame.message {
             N2kMessage::GnssPositionData(ref report) => {
                 assert!(
-                    (report.latitude - 43.0510216).abs() < 0.00001,
+                    (report.latitude.unwrap() - 43.0510216).abs() < 0.00001,
                     "unexpected latitude: {}",
-                    report.latitude
+                    report.latitude.unwrap()
                 );
                 assert!(
-                    (report.longitude - 9.8359051).abs() < 0.00001,
+                    (report.longitude.unwrap() - 9.8359051).abs() < 0.00001,
                     "unexpected longitude: {}",
-                    report.longitude
+                    report.longitude.unwrap()
                 );
                 assert!(
-                    (report.hdop - 0.82).abs() < 0.01,
+                    (report.hdop.unwrap() - 0.82).abs() < 0.01,
                     "unexpected hdop: {}",
-                    report.hdop
+                    report.hdop.unwrap()
                 );
             }
             other => panic!("expected GnssPositionData, got {:?}", other),
@@ -588,14 +588,14 @@ mod tests {
             N2kMessage::AisClassAPositionReport(ref report) => {
                 assert_eq!(report.mmsi, 210391000, "unexpected MMSI");
                 assert!(
-                    (report.get_latitude_degrees() - 43.5628738).abs() < 0.00001,
+                    (report.get_latitude_degrees().unwrap() - 43.5628738).abs() < 0.00001,
                     "unexpected latitude: {}",
-                    report.get_latitude_degrees()
+                    report.get_latitude_degrees().unwrap()
                 );
                 assert!(
-                    (report.get_longitude_degrees() - 10.2996549).abs() < 0.00001,
+                    (report.get_longitude_degrees().unwrap() - 10.2996549).abs() < 0.00001,
                     "unexpected longitude: {}",
-                    report.get_longitude_degrees()
+                    report.get_longitude_degrees().unwrap()
                 );
             }
             other => panic!("expected AisClassAPositionReport, got {:?}", other),

@@ -24,13 +24,12 @@ impl N2kDateTime {
         }
     }
 
-    pub fn from_bytes(data: &[u8]) -> Option<Self> {
-        if data.len() < 6 {
-            return None;
-        }
-        let date = u16::from_le_bytes([data[0], data[1]]);
-        let time = u32::from_le_bytes([data[2], data[3], data[4], data[5]]) as f64;
-        Some(N2kDateTime { date, time })
+    /// Time since midnight in whole milliseconds, rounded to the nearest one.
+    ///
+    /// Rounding absorbs the float error of the decoders' scaling, which can land just below the
+    /// true value: truncating would turn 0.57 s into 569 ms, or 45297 s into 45296 s.
+    fn millis_since_midnight(&self) -> i64 {
+        (self.time * 1000.0).round() as i64
     }
 
     /// Convert NMEA2000 date/time to Unix timestamp (seconds since epoch)
@@ -39,8 +38,7 @@ impl N2kDateTime {
         let days_since_epoch = self.date as i64;
         let seconds_from_date = days_since_epoch * 86400;
 
-        // NMEA2000 time is in units of 0.0001 seconds since midnight
-        let seconds_since_midnight = (self.time * 0.0001) as i64;
+        let seconds_since_midnight = self.millis_since_midnight() / 1000;
 
         seconds_from_date + seconds_since_midnight
     }
@@ -54,9 +52,7 @@ impl N2kDateTime {
 
     /// Get milliseconds component
     pub fn milliseconds(&self) -> u32 {
-        // Time is in units of 0.0001 seconds (100 microseconds)
-        let total_ms = (self.time * 0.0001 * 1000.0) as u32;
-        total_ms % 1000
+        (self.millis_since_midnight() % 1000) as u32
     }
 
     #[allow(dead_code)]
@@ -71,5 +67,31 @@ impl N2kDateTime {
         let duration = std::time::Duration::from_secs(unix_timestamp as u64)
             + std::time::Duration::from_millis(self.milliseconds() as u64);
         std::time::UNIX_EPOCH + duration
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_date_time_round_trip() {
+        let dt = DateTime::parse_from_rfc3339("2026-02-22T14:10:20.570Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let n2k = N2kDateTime::from_date_time(&dt);
+        assert!((n2k.time - 51020.57).abs() < 1e-6);
+        assert_eq!(n2k.to_date_time(), dt);
+    }
+
+    #[test]
+    fn test_scaled_raw_time_does_not_lose_a_unit() {
+        // Decoded as raw * 0.0001, these land just below the true value:
+        // (raw, expected whole seconds, expected milliseconds)
+        for (raw, seconds, ms) in [(5_700u32, 0, 570), (452_970_000, 45_297, 0), (863_999_990, 86_399, 999)] {
+            let n2k = N2kDateTime { date: 0, time: raw as f64 * 0.0001 };
+            assert_eq!(n2k.to_unix_timestamp(), seconds, "raw {}", raw);
+            assert_eq!(n2k.milliseconds(), ms, "raw {}", raw);
+        }
     }
 }

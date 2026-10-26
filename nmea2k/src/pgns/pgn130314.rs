@@ -1,5 +1,7 @@
 use std::fmt;
 
+use super::sentinel::Available;
+
 #[derive(Debug, Clone)]
 pub struct ActualPressure {
     #[allow(dead_code)]
@@ -37,27 +39,21 @@ impl ActualPressure {
         }
     }
 
+    /// Returns `None` when the pressure is not available.
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 6 {
             return None;
         }
-        
-        // Parse pressure (bytes 3-6) - 32-bit value
-        let pressure_raw = if data.len() >= 7 {
-            u32::from_le_bytes([
-                data[3],
-                data[4],
-                data[5],
-                data.get(6).copied().unwrap_or(0),
-            ])
-        } else {
-            u32::from_le_bytes([data[3], data[4], data[5], 0])
-        };
-        
-        // Resolution is 0.1 Pa, so divide by 10 to get Pascals
-        // But actually the resolution is 1 Pa based on standard
-        let pressure = pressure_raw as f64 / 10.0;
-        
+
+        // Pressure (bytes 3-6): signed 32-bit, 0.1 Pa per bit
+        let pressure_raw = i32::from_le_bytes([
+            data[3],
+            data[4],
+            data[5],
+            data.get(6).copied().unwrap_or(0),
+        ]);
+        let pressure = pressure_raw.available()? as f64 / 10.0;
+
         Some(Self {
             pgn: 130314,
             sid: data[0],
@@ -78,5 +74,24 @@ impl fmt::Display for ActualPressure {
             self.source,
             self.instance
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_actual_pressure_from_bytes() {
+        // canboat sample: atmospheric 101410.0 Pa
+        let data = [0xFF, 0x00, 0x00, 0x54, 0x79, 0x0F, 0x00, 0xFF];
+        let pres = ActualPressure::from_bytes(&data).unwrap();
+        assert!((pres.pressure - 101410.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_actual_pressure_not_available() {
+        let data = [0xFF, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x7F, 0xFF];
+        assert!(ActualPressure::from_bytes(&data).is_none());
     }
 }

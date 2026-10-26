@@ -249,16 +249,13 @@ mod tests {
         let current_days = (duration.as_secs() / 86400) as u16;
         let current_seconds = (duration.as_secs() % 86400) as u32;
 
-        // Convert to NMEA2000 units (0.0001 seconds)
-        let nmea_time_units = current_seconds * 10000;
-
         let nmea_time = NMEASystemTime {
             pgn: 126992,
             sid: 0,
             source: 0,
             date_time: nmea2k::pgns::nmea2000_date_time::N2kDateTime {
                 date: current_days,
-                time: nmea_time_units as f64,
+                time: current_seconds as f64,
             },
         };
 
@@ -300,7 +297,7 @@ mod tests {
             source: 0,
             date_time: nmea2k::pgns::nmea2000_date_time::N2kDateTime {
                 date: 1,        // 1 day since epoch
-                time: 600000.0, // 60 seconds * 10000 (0.0001 second units)
+                time: 60.0,     // seconds since midnight
             },
         };
 
@@ -318,12 +315,12 @@ mod tests {
             source: 0,
             date_time: nmea2k::pgns::nmea2000_date_time::N2kDateTime {
                 date: 0,
-                time: 12345.0, // 1.2345 seconds = 1234.5 ms
+                time: 1.2346, // seconds
             },
         };
 
         let ms = nmea_time.date_time.milliseconds();
-        // 12345 * 0.0001 * 1000 = 1234.5 -> 1234 ms (integer part)
-        assert_eq!(ms, 234); // 234 ms within the current second
+        // 1.2346 s = 1234.6 ms -> 1235 ms (nearest millisecond)
+        assert_eq!(ms, 235); // 235 ms within the current second
     }
 }

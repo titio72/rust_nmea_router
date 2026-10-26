@@ -4,6 +4,7 @@ use nmea2k::pgns::{
     AisClassAPositionReport, AisClassAStaticData, AisClassBPositionReport,
     AisClassBStaticDataPartA, AisClassBStaticDataPartB,
 };
+use nmea2k::pgns::nmea2000_date_time::N2kDateTime;
 use nmea2k::pgns::{GnssMethod, HeadingReference, WindReference};
 use nmea2k::{MessageHandler, N2kFrame};
 use std::collections::HashMap;
@@ -269,7 +270,10 @@ fn format_rmc(state: &RmcState) -> Option<String> {
     let lat = state.latitude?;
     let lon = state.longitude?;
     let sog_kn = state.sog_knots?;
-    let cog = state.cog_true_deg?;
+    // Receivers drop COG when stationary; RMC carries an empty course field then
+    let cog_str = state
+        .cog_true_deg
+        .map_or_else(String::new, |cog| format!("{:.0}", cog));
     let date_n2k = state.n2k_date?;
     let time_n2k = state.n2k_time_secs?;
 
@@ -280,14 +284,14 @@ fn format_rmc(state: &RmcState) -> Option<String> {
 
     // $IIRMC,HHMMSS.ss,A,DDMM.mmmm,N,DDDMM.mmmm,W,SOG,COG,T,,,DDMMYY
     let sentence_body = format!(
-        "IIRMC,{},A,{},{},{},{},{},{:.0},{}",
+        "IIRMC,{},A,{},{},{},{},{},{},{}",
         time_str,
         lat_str,
         lat_direction(lat),
         lon_str,
         lon_direction(lon),
         sog_kn,
-        cog,
+        cog_str,
         date_str
     );
     let checksum = nmea0183_checksum(&sentence_body);
@@ -446,8 +450,9 @@ fn format_vhw(speed_ms: Option<f64>) -> Option<String> {
 }
 
 /// Format DPT sentence (Water Depth)
-fn format_dpt(depth_m: f64, offset_m: f64) -> Option<String> {
-    let sentence_body = format!("IIDPT,{:.1},{:.1},", depth_m, offset_m);
+fn format_dpt(depth_m: f64, offset_m: Option<f64>) -> Option<String> {
+    let offset_str = offset_m.map_or_else(String::new, |offset| format!("{:.1}", offset));
+    let sentence_body = format!("IIDPT,{:.1},{},", depth_m, offset_str);
     let checksum = nmea0183_checksum(&sentence_body);
     Some(format!("${}*{}\r\n", sentence_body, checksum))
 }
@@ -568,37 +573,38 @@ fn wrap_ais_vdm(payload: &str, fill_bits: u8) -> String {
     format!("!{}*{}\r\n", body, checksum)
 }
 
-/// Convert N2K COG raw (0.0001 rad units) to AIS COG (1/10 degree, 0-3599; 3600=not available)
-fn n2k_cog_to_ais(cog_raw: u16) -> u16 {
-    if cog_raw == 0xFFFF {
-        return 3600;
+// The converters below take the decoder's readings, which are `None` for N2K "not available",
+// and map that onto AIS's own "not available" codes.
+
+/// Convert COG (degrees) to AIS COG (1/10 degree, 0-3599; 3600=not available)
+fn n2k_cog_to_ais(cog_deg: Option<f64>) -> u16 {
+    match cog_deg {
+        Some(cog) => ((cog * 10.0).round() as u16).min(3599),
+        None => 3600,
     }
-    let deg_tenths = cog_raw as f64 * 0.0001 * (180.0 / std::f64::consts::PI) * 10.0;
-    (deg_tenths.round() as u16).min(3599)
 }
 
-/// Convert N2K SOG raw (0.01 m/s units) to AIS SOG (1/10 knot; 1023=not available)
-fn n2k_sog_to_ais(sog_raw: u16) -> u16 {
-    if sog_raw == 0xFFFF {
-        return 1023;
+/// Convert SOG (knots) to AIS SOG (1/10 knot; 1023=not available)
+fn n2k_sog_to_ais(sog_kn: Option<f64>) -> u16 {
+    match sog_kn {
+        Some(sog) => ((sog * 10.0).round() as u16).min(1022),
+        None => 1023,
     }
-    (sog_raw as f64 * 0.194384).round() as u16
 }
 
-/// Convert N2K heading raw (0.0001 rad units) to AIS heading (integer degrees 0-359; 511=not available)
-fn n2k_heading_to_ais(heading_raw: u16) -> u16 {
-    if heading_raw == 0xFFFF {
-        return 511;
+/// Convert heading (degrees) to AIS heading (integer degrees 0-359; 511=not available)
+fn n2k_heading_to_ais(heading_deg: Option<f64>) -> u16 {
+    match heading_deg {
+        Some(heading) => (heading.round() as u16) % 360,
+        None => 511,
     }
-    ((heading_raw as f64 * 0.0001 * (180.0 / std::f64::consts::PI)).round() as u16) % 360
 }
 
-/// Convert N2K ROT raw (3.125e-5 rad/s, signed 16-bit) to AIS ROT (signed 8-bit, 4.733×sqrt units)
-fn n2k_rot_to_ais(rot_raw: i16) -> i8 {
-    if rot_raw == i16::MAX || rot_raw == i16::MIN {
-        return -128i8; // not available
-    }
-    let rot_deg_min = rot_raw as f64 * 3.125e-5 * (180.0 / std::f64::consts::PI) * 60.0;
+/// Convert ROT (degrees/minute) to AIS ROT (signed 8-bit, 4.733×sqrt units; -128=not available)
+fn n2k_rot_to_ais(rot_deg_min: Option<f64>) -> i8 {
+    let Some(rot_deg_min) = rot_deg_min else {
+        return -128i8;
+    };
     if rot_deg_min.abs() < 0.0001 {
         return 0;
     }
@@ -606,13 +612,14 @@ fn n2k_rot_to_ais(rot_raw: i16) -> i8 {
     ais.clamp(-127.0, 127.0) as i8
 }
 
-/// Encode N2K position (1e-7 degrees) to AIS position integer (1/10000 min, 28-bit for lon, 27-bit for lat)
-fn n2k_lon_to_ais(lon_raw: i32) -> i32 {
-    (lon_raw as f64 * 1e-7 * 600_000.0).round() as i32
+/// Encode longitude (degrees) to AIS position integer (1/10000 min, 28-bit; 181°=not available)
+fn n2k_lon_to_ais(lon_deg: Option<f64>) -> i32 {
+    (lon_deg.unwrap_or(181.0) * 600_000.0).round() as i32
 }
 
-fn n2k_lat_to_ais(lat_raw: i32) -> i32 {
-    (lat_raw as f64 * 1e-7 * 600_000.0).round() as i32
+/// Encode latitude (degrees) to AIS position integer (1/10000 min, 27-bit; 91°=not available)
+fn n2k_lat_to_ais(lat_deg: Option<f64>) -> i32 {
+    (lat_deg.unwrap_or(91.0) * 600_000.0).round() as i32
 }
 
 /// Format !AIVDM sentence for AIS Type 1 (Class A position report)
@@ -622,13 +629,13 @@ fn format_vdm_class_a_position(msg: &AisClassAPositionReport) -> String {
     bw.write_u(msg.repeat_indicator as u64, 2);
     bw.write_u(msg.mmsi as u64, 30);
     bw.write_u(msg.nav_status as u8 as u64, 4);
-    bw.write_i(n2k_rot_to_ais(msg.rate_of_turn_raw) as i64, 8);
-    bw.write_u(n2k_sog_to_ais(msg.sog_raw) as u64, 10);
+    bw.write_i(n2k_rot_to_ais(msg.get_rate_of_turn_degrees_per_min()) as i64, 8);
+    bw.write_u(n2k_sog_to_ais(msg.get_sog_knots()) as u64, 10);
     bw.write_u(msg.position_accuracy as u64, 1);
-    bw.write_i(n2k_lon_to_ais(msg.longitude_raw) as i64, 28);
-    bw.write_i(n2k_lat_to_ais(msg.latitude_raw) as i64, 27);
-    bw.write_u(n2k_cog_to_ais(msg.cog_raw) as u64, 12);
-    bw.write_u(n2k_heading_to_ais(msg.heading_raw) as u64, 9);
+    bw.write_i(n2k_lon_to_ais(msg.get_longitude_degrees()) as i64, 28);
+    bw.write_i(n2k_lat_to_ais(msg.get_latitude_degrees()) as i64, 27);
+    bw.write_u(n2k_cog_to_ais(msg.get_cog_degrees()) as u64, 12);
+    bw.write_u(n2k_heading_to_ais(msg.get_heading_degrees()) as u64, 9);
     bw.write_u(msg.time_stamp as u64, 6);
     bw.write_u(msg.special_maneuver_indicator as u64, 2);
     bw.write_u(0, 3); // spare
@@ -645,12 +652,12 @@ fn format_vdm_class_b_position(msg: &AisClassBPositionReport) -> String {
     bw.write_u(msg.repeat_indicator as u64, 2);
     bw.write_u(msg.mmsi as u64, 30);
     bw.write_u(0, 8); // reserved
-    bw.write_u(n2k_sog_to_ais(msg.sog_raw) as u64, 10);
+    bw.write_u(n2k_sog_to_ais(msg.get_sog_knots()) as u64, 10);
     bw.write_u(msg.position_accuracy as u64, 1);
-    bw.write_i(n2k_lon_to_ais(msg.longitude_raw) as i64, 28);
-    bw.write_i(n2k_lat_to_ais(msg.latitude_raw) as i64, 27);
-    bw.write_u(n2k_cog_to_ais(msg.cog_raw) as u64, 12);
-    bw.write_u(n2k_heading_to_ais(msg.heading_raw) as u64, 9);
+    bw.write_i(n2k_lon_to_ais(msg.get_longitude_degrees()) as i64, 28);
+    bw.write_i(n2k_lat_to_ais(msg.get_latitude_degrees()) as i64, 27);
+    bw.write_u(n2k_cog_to_ais(msg.get_cog_degrees()) as u64, 12);
+    bw.write_u(n2k_heading_to_ais(msg.get_heading_degrees()) as u64, 9);
     bw.write_u(msg.time_stamp as u64, 6);
     bw.write_u(msg.regional_application as u64, 2);
     bw.write_u(msg.unit_type as u64, 1);
@@ -665,26 +672,23 @@ fn format_vdm_class_b_position(msg: &AisClassBPositionReport) -> String {
     wrap_ais_vdm(&payload, fill)
 }
 
+/// AIS Type 5 ETA fields (month, day, hour, minute); 0/0/24/60 when not available
+fn ais_eta_fields(eta: Option<&N2kDateTime>) -> (u8, u8, u8, u8) {
+    let utc = eta.and_then(|dt| Utc.timestamp_opt(dt.to_unix_timestamp(), 0).single());
+    match utc {
+        Some(t) => (
+            t.month() as u8,
+            t.day() as u8,
+            t.hour() as u8,
+            t.minute() as u8,
+        ),
+        None => (0u8, 0u8, 24u8, 60u8), // not available
+    }
+}
+
 /// Format !AIVDM sentence for AIS Type 5 (Class A static & voyage data)
 fn format_vdm_class_a_static(msg: &AisClassAStaticData) -> String {
-    // Derive ETA fields from eta_date_time when available
-    let (eta_month, eta_day, eta_hour, eta_minute) = if let Some(ref dt) = msg.eta_date_time {
-        let utc = Utc
-            .timestamp_opt((dt.date as i64) * 86400 + dt.time as i64, 0)
-            .single();
-        if let Some(t) = utc {
-            (
-                t.month() as u8,
-                t.day() as u8,
-                t.hour() as u8,
-                t.minute() as u8,
-            )
-        } else {
-            (0u8, 0u8, 24u8, 60u8) // not available
-        }
-    } else {
-        (0u8, 0u8, 24u8, 60u8) // not available
-    };
+    let (eta_month, eta_day, eta_hour, eta_minute) = ais_eta_fields(msg.eta_date_time.as_ref());
 
     let to_bow = ((msg.position_ref_bow as f64 * 0.1).round() as u16).min(511);
     let to_stern = ((msg.length_raw as f64 * 0.1 - to_bow as f64)
@@ -696,7 +700,10 @@ fn format_vdm_class_a_static(msg: &AisClassAStaticData) -> String {
         .max(0.0)
         .round() as u16)
         .min(63);
-    let draught_ais = (msg.get_draft_meters() * 10.0).round() as u8;
+    // AIS draught is 1/10 m, 0 = not available
+    let draught_ais = msg
+        .get_draft_meters()
+        .map_or(0, |draft| ((draft * 10.0).round() as u16).min(255) as u8);
 
     let mut bw = BitWriter::new();
     bw.write_u(msg.message_id as u64, 6);
@@ -778,8 +785,8 @@ impl MessageHandler for UdpBroadcaster {
 
             // COG/SOG - update state only (convert from m/s to knots, rad to degrees)
             N2kMessage::CogSogRapidUpdate(msg) => {
-                self.rmc_state.sog_knots = Some(msg.sog * 1.94384); // m/s to knots
-                self.rmc_state.cog_true_deg = Some(msg.cog.to_degrees() % 360.0);
+                self.rmc_state.sog_knots = msg.sog_knots();
+                self.rmc_state.cog_true_deg = msg.cog_degrees().map(|cog| cog % 360.0);
             }
 
             // System Time - update state, emit ZDA
@@ -794,13 +801,14 @@ impl MessageHandler for UdpBroadcaster {
 
             // GNSS Position - update state, emit RMC and GGA
             N2kMessage::GnssPositionData(msg) => {
-                self.rmc_state.latitude = Some(msg.latitude);
-                self.rmc_state.longitude = Some(msg.longitude);
-                self.rmc_state.altitude_m = Some(msg.altitude);
-                self.rmc_state.num_svs = Some(msg.num_svs);
-                self.rmc_state.hdop = Some(msg.hdop);
-                self.rmc_state.n2k_date = Some(msg.date_time.date);
-                self.rmc_state.n2k_time_secs = Some(msg.date_time.time);
+                // Without a fix these are not available, which suppresses RMC/GGA below
+                self.rmc_state.latitude = msg.latitude;
+                self.rmc_state.longitude = msg.longitude;
+                self.rmc_state.altitude_m = msg.altitude;
+                self.rmc_state.num_svs = msg.num_svs;
+                self.rmc_state.hdop = msg.hdop;
+                self.rmc_state.n2k_date = msg.date_time.as_ref().map(|dt| dt.date);
+                self.rmc_state.n2k_time_secs = msg.date_time.as_ref().map(|dt| dt.time);
 
                 // Map GnssMethod to fix quality: 0=invalid, 1=GPS, 2=DGPS
                 self.rmc_state.fix_quality = Some(match msg.method {
@@ -1012,6 +1020,22 @@ mod tests {
     }
 
     #[test]
+    fn test_format_rmc_without_cog() {
+        // Stationary: SOG 0, COG not available -> empty course field, sentence still sent
+        let state = RmcState {
+            latitude: Some(52.373126),
+            longitude: Some(13.403818),
+            sog_knots: Some(0.0),
+            cog_true_deg: None,
+            n2k_date: Some(19254),
+            n2k_time_secs: Some(43200.0),
+            ..Default::default()
+        };
+        let rmc = format_rmc(&state).expect("RMC should format without COG");
+        assert!(rmc.contains(",0,,"), "expected empty COG field: {}", rmc);
+    }
+
+    #[test]
     fn test_format_gga_incomplete_state() {
         let state = RmcState::default();
         let result = format_gga(&state);
@@ -1125,11 +1149,39 @@ mod tests {
     }
 
     #[test]
+    fn test_format_zda_from_system_time_frame() {
+        use nmea2k::pgns::NMEASystemTime;
+        // PGN 126992: 2026-02-22 (day 20506), 12:34:56.5 UTC (raw 452965000 x 0.0001 s)
+        let data = [0x00, 0x00, 0x1A, 0x50, 0x88, 0xB2, 0xFF, 0x1A];
+        let msg = NMEASystemTime::from_bytes(&data).unwrap();
+        let zda = format_zda(msg.date_time.date, msg.date_time.time).unwrap();
+        assert!(
+            zda.starts_with("$IIZDA,123456,22,02,2026,00,00*"),
+            "unexpected ZDA: {}",
+            zda
+        );
+    }
+
+    #[test]
+    fn test_ais_eta_fields() {
+        // 2026-09-23 (day 20719) 09:00:00, as the 129794 decoder produces it
+        let eta = N2kDateTime { date: 20719, time: 32400.0 };
+        assert_eq!(ais_eta_fields(Some(&eta)), (9, 23, 9, 0));
+        assert_eq!(ais_eta_fields(None), (0, 0, 24, 60));
+    }
+
+    #[test]
     fn test_format_dpt() {
-        let result = format_dpt(5.5, 0.0);
+        let result = format_dpt(5.5, Some(0.0));
         assert!(result.is_some());
         let dpt = result.unwrap();
         assert!(dpt.starts_with("$IIDPT"));
+    }
+
+    #[test]
+    fn test_format_dpt_offset_not_available() {
+        let dpt = format_dpt(5.5, None).unwrap();
+        assert!(dpt.starts_with("$IIDPT,5.5,,*"), "unexpected DPT: {}", dpt);
     }
 
     #[test]
@@ -1211,34 +1263,44 @@ mod tests {
 
     #[test]
     fn test_n2k_sog_to_ais_zero() {
-        assert_eq!(n2k_sog_to_ais(0), 0);
+        assert_eq!(n2k_sog_to_ais(Some(0.0)), 0);
     }
 
     #[test]
     fn test_n2k_sog_to_ais_not_available() {
-        assert_eq!(n2k_sog_to_ais(0xFFFF), 1023);
+        assert_eq!(n2k_sog_to_ais(None), 1023);
     }
 
     #[test]
     fn test_n2k_cog_to_ais_not_available() {
-        assert_eq!(n2k_cog_to_ais(0xFFFF), 3600);
+        assert_eq!(n2k_cog_to_ais(None), 3600);
     }
 
     #[test]
     fn test_n2k_heading_to_ais_not_available() {
-        assert_eq!(n2k_heading_to_ais(0xFFFF), 511);
+        assert_eq!(n2k_heading_to_ais(None), 511);
+    }
+
+    #[test]
+    fn test_n2k_rot_to_ais_not_available() {
+        assert_eq!(n2k_rot_to_ais(None), -128);
+    }
+
+    #[test]
+    fn test_n2k_lat_lon_to_ais_not_available() {
+        assert_eq!(n2k_lat_to_ais(None), 91 * 600_000);
+        assert_eq!(n2k_lon_to_ais(None), 181 * 600_000);
     }
 
     #[test]
     fn test_n2k_lon_to_ais_zero() {
-        assert_eq!(n2k_lon_to_ais(0), 0);
+        assert_eq!(n2k_lon_to_ais(Some(0.0)), 0);
     }
 
     #[test]
     fn test_n2k_lon_to_ais_positive() {
         // 10.0 degrees east = 10.0 * 600000 = 6000000
-        let raw = (10.0 / 1e-7) as i32; // = 100_000_000
-        let ais = n2k_lon_to_ais(raw);
+        let ais = n2k_lon_to_ais(Some(10.0));
         assert!(
             (ais - 6_000_000).abs() < 10,
             "expected ~6000000, got {}",

@@ -60,6 +60,27 @@ pub struct SignalKBroadcaster {
     last_variation_rad: Option<f64>,
 }
 
+/// Adds `path` to a delta only when the reading is available: NMEA2000 "not available" fields
+/// are left out rather than broadcast as null.
+fn push_reading(values: &mut Vec<SignalKValue>, path: &str, reading: Option<f64>) {
+    if let Some(v) = reading {
+        values.push(SignalKValue {
+            path: path.to_string(),
+            value: json!(v),
+        });
+    }
+}
+
+/// Adds `navigation.position` to a delta only when both coordinates are available.
+fn push_position(values: &mut Vec<SignalKValue>, latitude: Option<f64>, longitude: Option<f64>) {
+    if let (Some(latitude), Some(longitude)) = (latitude, longitude) {
+        values.push(SignalKValue {
+            path: "navigation.position".to_string(),
+            value: json!({ "latitude": latitude, "longitude": longitude }),
+        });
+    }
+}
+
 impl SignalKBroadcaster {
     pub fn new(rate_limit_ms: u64, vessel_uuid: String) -> Self {
         Self {
@@ -238,26 +259,22 @@ impl MessageHandler for SignalKBroadcaster {
             // SignalK: navigation.speedOverGround (m/s), navigation.courseOverGroundTrue (radians)
             N2kMessage::CogSogRapidUpdate(cog_sog) => {
                 // Cache SOG for true wind calculations (store in m/s)
-                self.last_sog_ms = Some(cog_sog.sog);
-                self.last_sog_timestamp = Some(now);
+                if let Some(sog) = cog_sog.sog {
+                    self.last_sog_ms = Some(sog);
+                    self.last_sog_timestamp = Some(now);
+                }
 
                 let mut values = Vec::new();
 
                 // Speed over ground - use raw field (m/s)
-                if self.should_broadcast(self.last_sog_broadcast, now) {
-                    values.push(SignalKValue {
-                        path: "navigation.speedOverGround".to_string(),
-                        value: json!(cog_sog.sog),
-                    });
+                if cog_sog.sog.is_some() && self.should_broadcast(self.last_sog_broadcast, now) {
+                    push_reading(&mut values, "navigation.speedOverGround", cog_sog.sog);
                     self.last_sog_broadcast = Some(now);
                 }
 
-                // Course over ground - use raw field (radians)
-                if self.should_broadcast(self.last_cog_broadcast, now) {
-                    values.push(SignalKValue {
-                        path: "navigation.courseOverGroundTrue".to_string(),
-                        value: json!(cog_sog.cog),
-                    });
+                // Course over ground - use raw field (radians); not available when stationary
+                if cog_sog.cog.is_some() && self.should_broadcast(self.last_cog_broadcast, now) {
+                    push_reading(&mut values, "navigation.courseOverGroundTrue", cog_sog.cog);
                     self.last_cog_broadcast = Some(now);
                 }
 
@@ -515,26 +532,7 @@ impl MessageHandler for SignalKBroadcaster {
                 }
 
             N2kMessage::AisClassAPositionReport(ais) => {
-                let values = vec![
-                    SignalKValue {
-                        path: "navigation.position".to_string(),
-                        value: json!({
-                            "latitude": ais.get_latitude_degrees(),
-                            "longitude": ais.get_longitude_degrees(),
-                        }),
-                    },
-                    SignalKValue {
-                        path: "navigation.speedOverGround".to_string(),
-                        value: json!(ais.get_sog_ms()),
-                    },
-                    SignalKValue {
-                        path: "navigation.courseOverGroundTrue".to_string(),
-                        value: json!(ais.get_cog_radians()),
-                    },
-                    SignalKValue {
-                        path: "navigation.headingTrue".to_string(),
-                        value: json!(ais.get_heading_radians()),
-                    },
+                let mut values = vec![
                     SignalKValue {
                         path: "navigation.state".to_string(),
                         value: json!(ais.nav_status.to_string()),
@@ -544,87 +542,44 @@ impl MessageHandler for SignalKBroadcaster {
                         value: json!("A"),
                     },
                 ];
+                push_position(&mut values, ais.get_latitude_degrees(), ais.get_longitude_degrees());
+                push_reading(&mut values, "navigation.speedOverGround", ais.get_sog_ms());
+                push_reading(&mut values, "navigation.courseOverGroundTrue", ais.get_cog_radians());
+                push_reading(&mut values, "navigation.headingTrue", ais.get_heading_radians());
 
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
             }
 
             N2kMessage::AisClassBPositionReport(ais) => {
-                let values = vec![
-                    SignalKValue {
-                        path: "navigation.position".to_string(),
-                        value: json!({
-                            "latitude": ais.get_latitude_degrees(),
-                            "longitude": ais.get_longitude_degrees(),
-                        }),
-                    },
-                    SignalKValue {
-                        path: "navigation.speedOverGround".to_string(),
-                        value: json!(ais.get_sog_ms()),
-                    },
-                    SignalKValue {
-                        path: "navigation.courseOverGroundTrue".to_string(),
-                        value: json!(ais.get_cog_radians()),
-                    },
-                    SignalKValue {
-                        path: "navigation.headingTrue".to_string(),
-                        value: json!(ais.get_heading_radians()),
-                    },
-                    SignalKValue {
-                        path: "sensors.ais.class".to_string(),
-                        value: json!("B"),
-                    },
-                ];
+                let mut values = vec![SignalKValue {
+                    path: "sensors.ais.class".to_string(),
+                    value: json!("B"),
+                }];
+                push_position(&mut values, ais.get_latitude_degrees(), ais.get_longitude_degrees());
+                push_reading(&mut values, "navigation.speedOverGround", ais.get_sog_ms());
+                push_reading(&mut values, "navigation.courseOverGroundTrue", ais.get_cog_radians());
+                push_reading(&mut values, "navigation.headingTrue", ais.get_heading_radians());
 
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
             }
 
             N2kMessage::AisClassBExtPositionReport(ais) => {
-                let values = vec![
-                    SignalKValue {
-                        path: "navigation.position".to_string(),
-                        value: json!({
-                            "latitude": ais.get_latitude_degrees(),
-                            "longitude": ais.get_longitude_degrees(),
-                        }),
-                    },
-                    SignalKValue {
-                        path: "navigation.speedOverGround".to_string(),
-                        value: json!(ais.get_sog_ms()),
-                    },
-                    SignalKValue {
-                        path: "navigation.courseOverGroundTrue".to_string(),
-                        value: json!(ais.get_cog_radians()),
-                    },
-                    SignalKValue {
-                        path: "navigation.headingTrue".to_string(),
-                        value: json!(ais.get_heading_radians()),
-                    },
-                    SignalKValue {
-                        path: "design.length".to_string(),
-                        value: json!(ais.get_length_meters()),
-                    },
-                    SignalKValue {
-                        path: "design.beam".to_string(),
-                        value: json!(ais.get_beam_meters()),
-                    },
-                    SignalKValue {
-                        path: "sensors.ais.class".to_string(),
-                        value: json!("B"),
-                    },
-                ];
+                let mut values = vec![SignalKValue {
+                    path: "sensors.ais.class".to_string(),
+                    value: json!("B"),
+                }];
+                push_position(&mut values, ais.get_latitude_degrees(), ais.get_longitude_degrees());
+                push_reading(&mut values, "navigation.speedOverGround", ais.get_sog_ms());
+                push_reading(&mut values, "navigation.courseOverGroundTrue", ais.get_cog_radians());
+                push_reading(&mut values, "navigation.headingTrue", ais.get_heading_radians());
+                push_reading(&mut values, "design.length", ais.get_length_meters());
+                push_reading(&mut values, "design.beam", ais.get_beam_meters());
 
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
             }
 
             N2kMessage::AisAtonReport(ais) => {
-                let values = vec![
-                    SignalKValue {
-                        path: "navigation.position".to_string(),
-                        value: json!({
-                            "latitude": ais.get_latitude_degrees(),
-                            "longitude": ais.get_longitude_degrees(),
-                        }),
-                    },
+                let mut values = vec![
                     SignalKValue {
                         path: "sensors.ais.class".to_string(),
                         value: json!("AtoN"),
@@ -638,24 +593,22 @@ impl MessageHandler for SignalKBroadcaster {
                         value: json!(ais.name.trim()),
                     },
                 ];
+                push_position(&mut values, ais.get_latitude_degrees(), ais.get_longitude_degrees());
 
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
             }
 
             N2kMessage::AisUtcDateReport(ais) => {
-                let values = vec![SignalKValue {
-                    path: "navigation.position".to_string(),
-                    value: json!({
-                        "latitude": ais.get_latitude_degrees(),
-                        "longitude": ais.get_longitude_degrees(),
-                    }),
-                }];
+                let mut values = Vec::new();
+                push_position(&mut values, ais.get_latitude_degrees(), ais.get_longitude_degrees());
 
-                self.send_ais_delta(ais.mmsi, source, timestamp, values);
+                if !values.is_empty() {
+                    self.send_ais_delta(ais.mmsi, source, timestamp, values);
+                }
             }
 
             N2kMessage::AisClassAStaticData(ais) => {
-                let values = vec![
+                let mut values = vec![
                     SignalKValue {
                         path: "name".to_string(),
                         value: json!(ais.name.trim()),
@@ -669,18 +622,6 @@ impl MessageHandler for SignalKBroadcaster {
                         value: json!(ais.type_of_ship),
                     },
                     SignalKValue {
-                        path: "design.length".to_string(),
-                        value: json!(ais.get_length_meters()),
-                    },
-                    SignalKValue {
-                        path: "design.beam".to_string(),
-                        value: json!(ais.get_beam_meters()),
-                    },
-                    SignalKValue {
-                        path: "design.draft".to_string(),
-                        value: json!(ais.get_draft_meters()),
-                    },
-                    SignalKValue {
                         path: "navigation.destination".to_string(),
                         value: json!(ais.destination.trim()),
                     },
@@ -689,6 +630,9 @@ impl MessageHandler for SignalKBroadcaster {
                         value: json!("A"),
                     },
                 ];
+                push_reading(&mut values, "design.length", ais.get_length_meters());
+                push_reading(&mut values, "design.beam", ais.get_beam_meters());
+                push_reading(&mut values, "design.draft", ais.get_draft_meters());
 
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
             }
@@ -709,7 +653,7 @@ impl MessageHandler for SignalKBroadcaster {
             }
 
             N2kMessage::AisClassBStaticDataPartB(ais) => {
-                let values = vec![
+                let mut values = vec![
                     SignalKValue {
                         path: "design.aisShipType".to_string(),
                         value: json!(ais.type_of_ship),
@@ -719,18 +663,12 @@ impl MessageHandler for SignalKBroadcaster {
                         value: json!(ais.callsign.trim()),
                     },
                     SignalKValue {
-                        path: "design.length".to_string(),
-                        value: json!(ais.get_length_meters()),
-                    },
-                    SignalKValue {
-                        path: "design.beam".to_string(),
-                        value: json!(ais.get_beam_meters()),
-                    },
-                    SignalKValue {
                         path: "sensors.ais.class".to_string(),
                         value: json!("B"),
                     },
                 ];
+                push_reading(&mut values, "design.length", ais.get_length_meters());
+                push_reading(&mut values, "design.beam", ais.get_beam_meters());
 
                 self.send_ais_delta(ais.mmsi, source, timestamp, values);
             }
@@ -738,11 +676,10 @@ impl MessageHandler for SignalKBroadcaster {
             // Attitude data - PGN 127257
             // SignalK: navigation.roll (radians)
             N2kMessage::Attitude(attitude)
-                if self.should_broadcast(self.last_roll_broadcast, now) => {
-                    let values = vec![SignalKValue {
-                        path: "navigation.roll".to_string(),
-                        value: json!(attitude.roll),
-                    }];
+                if attitude.roll.is_some()
+                    && self.should_broadcast(self.last_roll_broadcast, now) => {
+                    let mut values = Vec::new();
+                    push_reading(&mut values, "navigation.roll", attitude.roll);
 
                     self.send_delta(source, timestamp, values);
                     self.last_roll_broadcast = Some(now);

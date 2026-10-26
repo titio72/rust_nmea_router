@@ -1,5 +1,6 @@
 use std::fmt;
 use super::ais_helpers::{read_bits, read_signed_bits, extract_text_from_bytes, repeat_indicator_description, time_stamp_description};
+use super::sentinel::{fmt_opt, latitude, longitude, Available};
 
 /// AIS Aid-to-Navigation (AtoN) Report (PGN 129041)
 /// Reports position and status of navigational aids (buoys, beacons, etc.)
@@ -196,20 +197,20 @@ impl AisAtonReport {
         })
     }
 
-    pub fn get_longitude_degrees(&self) -> f64 {
-        self.longitude_raw as f64 * 1e-7
+    pub fn get_longitude_degrees(&self) -> Option<f64> {
+        longitude(self.longitude_raw.available().map(|r| r as f64 * 1e-7))
     }
 
-    pub fn get_latitude_degrees(&self) -> f64 {
-        self.latitude_raw as f64 * 1e-7
+    pub fn get_latitude_degrees(&self) -> Option<f64> {
+        latitude(self.latitude_raw.available().map(|r| r as f64 * 1e-7))
     }
 
-    pub fn get_length_meters(&self) -> f64 {
-        self.length_raw as f64 * 0.1
+    pub fn get_length_meters(&self) -> Option<f64> {
+        self.length_raw.available().map(|r| r as f64 * 0.1)
     }
 
-    pub fn get_beam_meters(&self) -> f64 {
-        self.beam_raw as f64 * 0.1
+    pub fn get_beam_meters(&self) -> Option<f64> {
+        self.beam_raw.available().map(|r| r as f64 * 0.1)
     }
 
     pub fn get_repeat_indicator_description(&self) -> &'static str {
@@ -225,12 +226,12 @@ impl fmt::Display for AisAtonReport {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "AIS AtoN - ID: {}, Name: {}, Type: {}, Lat: {:.6}, Lon: {:.6}",
+            "AIS AtoN - ID: {}, Name: {}, Type: {}, Lat: {}, Lon: {}",
             self.mmsi,
             self.name.trim(),
             self.aton_type,
-            self.get_latitude_degrees(),
-            self.get_longitude_degrees()
+            fmt_opt(self.get_latitude_degrees(), 6),
+            fmt_opt(self.get_longitude_degrees(), 6)
         )
     }
 }
@@ -259,8 +260,8 @@ mod tests {
         println!("{}", aton_report);
         assert_eq!(aton_report.name, "MPA SECCHE DELLA MEL  IA-D");
         assert_eq!(aton_report.aton_type, AisAtonType::SpecialMark);
-        assert!((aton_report.get_latitude_degrees() - 43.5349998).abs() < 0.0000001);
-        assert!((aton_report.get_longitude_degrees() - 10.2388334).abs() < 0.0000001);
+        assert!((aton_report.get_latitude_degrees().unwrap() - 43.5349998).abs() < 0.0000001);
+        assert!((aton_report.get_longitude_degrees().unwrap() - 10.2388334).abs() < 0.0000001);
     }
 
 }

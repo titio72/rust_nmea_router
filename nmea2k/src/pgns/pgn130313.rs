@@ -1,5 +1,7 @@
 use std::fmt;
 
+use super::sentinel::Available;
+
 #[derive(Debug, Clone)]
 pub struct Humidity {
     #[allow(dead_code)]
@@ -38,26 +40,21 @@ impl Humidity {
         }
     }
 
+    /// Returns `None` when the actual humidity is not available.
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 6 {
             return None;
         }
-        
-        // Parse actual humidity (bytes 3-4)
-        let actual = u16::from_le_bytes([data[3], data[4]]) as f64 * 0.004;
-        
-        // Parse set humidity if available (bytes 5-6)
+
+        // Both humidities are signed 16-bit, 0.004 % per bit: "not available" is 0x7FFF.
+        let actual = i16::from_le_bytes([data[3], data[4]]).available()? as f64 * 0.004;
+
         let set_hum = if data.len() >= 7 {
-            let val = u16::from_le_bytes([data[5], data.get(6).copied().unwrap_or(0xFF)]);
-            if val == 0xFFFF {
-                None
-            } else {
-                Some(val as f64 * 0.004)
-            }
+            i16::from_le_bytes([data[5], data[6]]).available().map(|r| r as f64 * 0.004)
         } else {
             None
         };
-        
+
         Some(Self {
             pgn: 130313,
             sid: data[0],
@@ -82,5 +79,25 @@ impl fmt::Display for Humidity {
             write!(f, " | Set: {:.1}%", set)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_humidity_from_bytes() {
+        // canboat sample: outside 60.116 %, set humidity not available (0x7FFF)
+        let data = [0x17, 0x00, 0x01, 0xB5, 0x3A, 0xFF, 0x7F, 0xFF];
+        let hum = Humidity::from_bytes(&data).unwrap();
+        assert!((hum.actual_humidity - 60.116).abs() < 1e-9);
+        assert_eq!(hum.set_humidity, None);
+    }
+
+    #[test]
+    fn test_humidity_not_available() {
+        let data = [0x17, 0x00, 0x01, 0xFF, 0x7F, 0xFF, 0x7F, 0xFF];
+        assert!(Humidity::from_bytes(&data).is_none());
     }
 }

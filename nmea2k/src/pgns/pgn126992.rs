@@ -1,6 +1,7 @@
 use std::fmt;
 
 use super::nmea2000_date_time::N2kDateTime;
+use super::sentinel::Available;
 
 #[derive(Debug, Clone)]
 pub struct NMEASystemTime {
@@ -39,6 +40,7 @@ impl NMEASystemTime {
         }
     }
 
+    /// Returns `None` unless both date and time are available: a partial clock is no clock.
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         if data.len() < 8 {
             return None;
@@ -46,14 +48,16 @@ impl NMEASystemTime {
 
         let sid = data[0];
         let source = data[1];
-        let date = u16::from_le_bytes([data[2], data[3]]);
-        let time = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as f64;
+        let date = u16::from_le_bytes([data[2], data[3]]).available()?;
+        // On the wire, time is in units of 0.0001 seconds since midnight
+        let time_s =
+            u32::from_le_bytes([data[4], data[5], data[6], data[7]]).available()? as f64 * 0.0001;
 
         Some(NMEASystemTime {
             pgn: 126992,
             sid,
             source,
-            date_time: N2kDateTime { date, time },
+            date_time: N2kDateTime { date, time: time_s },
         })
     }
 }
@@ -65,7 +69,7 @@ impl fmt::Display for NMEASystemTime {
 
         // Convert to date/time components
         let days_since_epoch = self.date_time.date as i64;
-        let seconds_since_midnight = (self.date_time.time * 0.0001) as i64;
+        let seconds_since_midnight = timestamp - days_since_epoch * 86400;
 
         let hours = seconds_since_midnight / 3600;
         let minutes = (seconds_since_midnight % 3600) / 60;
@@ -89,14 +93,24 @@ mod tests {
             0x01, // SID
             0x02, // Source
             0x0A, 0x00, // Date = 10 days
-            0x80, 0x51, 0x01, 0x00, // Time = 86400 (in 0.0001 second units = 8.64 seconds)
+            0x80, 0x51, 0x01, 0x00, // Time = 8.64 seconds (raw 86400 on the wire)
         ];
 
         let time = NMEASystemTime::from_bytes(&data).unwrap();
         assert_eq!(time.sid, 1);
         assert_eq!(time.source, 2);
         assert_eq!(time.date_time.date, 10);
-        assert_eq!(time.date_time.time as i64, 86400); // Raw time value
+        assert!((time.date_time.time - 8.64).abs() < 1e-9); // Seconds since midnight
+    }
+
+    #[test]
+    fn test_system_time_not_available() {
+        // GNSS without a fix: date and time not available
+        let data = [0x01, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+        assert!(NMEASystemTime::from_bytes(&data).is_none());
+        // Date known, time not available
+        let data = [0x01, 0x00, 0x0A, 0x00, 0xFF, 0xFF, 0xFF, 0xFF];
+        assert!(NMEASystemTime::from_bytes(&data).is_none());
     }
 
     #[test]
@@ -143,7 +157,7 @@ mod tests {
             source: 0,
             date_time: N2kDateTime {
                 date: 1,
-                time: 36000000.0,
+                time: 3600.0,
             },
         };
 
@@ -171,10 +185,7 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date_time: N2kDateTime {
-                date: 0,
-                time: 15000.0,
-            },
+            date_time: N2kDateTime { date: 0, time: 1.5 },
         };
 
         let ms = time.date_time.milliseconds();
@@ -188,10 +199,7 @@ mod tests {
             pgn: 126992,
             sid: 0,
             source: 0,
-            date_time: N2kDateTime {
-                date: 0,
-                time: 10000.0,
-            },
+            date_time: N2kDateTime { date: 0, time: 1.0 },
         };
 
         let ms = time.date_time.milliseconds();
@@ -207,7 +215,7 @@ mod tests {
             source: 0,
             date_time: N2kDateTime {
                 date: 0,
-                time: 37500.0,
+                time: 3.75,
             },
         };
 

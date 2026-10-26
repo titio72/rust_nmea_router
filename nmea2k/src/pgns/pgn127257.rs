@@ -1,3 +1,5 @@
+use super::sentinel::Available;
+
 #[derive(Debug, Clone)]
 pub struct Attitude {
     #[allow(dead_code)]
@@ -31,28 +33,13 @@ impl Attitude {
             let sid = data[0];
             
             // Yaw (bytes 1-2): int16, 0.0001 radians
-            let yaw_raw = i16::from_le_bytes([data[1], data[2]]);
-            let yaw = if yaw_raw == i16::MAX {
-                None
-            } else {
-                Some(yaw_raw as f64 * 0.0001)
-            };
+            let yaw = i16::from_le_bytes([data[1], data[2]]).available().map(|r| r as f64 * 0.0001);
             
             // Pitch (bytes 3-4): int16, 0.0001 radians
-            let pitch_raw = i16::from_le_bytes([data[3], data[4]]);
-            let pitch = if pitch_raw == i16::MAX {
-                None
-            } else {
-                Some(pitch_raw as f64 * 0.0001)
-            };
+            let pitch = i16::from_le_bytes([data[3], data[4]]).available().map(|r| r as f64 * 0.0001);
             
             // Roll (bytes 5-6): int16, 0.0001 radians
-            let roll_raw = i16::from_le_bytes([data[5], data[6]]);
-            let roll = if roll_raw == i16::MAX {
-                None
-            } else {
-                Some(roll_raw as f64 * 0.0001)
-            };
+            let roll = i16::from_le_bytes([data[5], data[6]]).available().map(|r| r as f64 * 0.0001);
             
             return Some(Attitude {
                 pgn: 127257,

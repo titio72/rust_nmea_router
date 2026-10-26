@@ -1,5 +1,6 @@
 use std::fmt;
 use super::ais_helpers::{read_bits, read_signed_bits, ais_transceiver_info_description, repeat_indicator_description, time_stamp_description};
+use super::sentinel::{fmt_opt, latitude, longitude, Available};
 
 /// AIS Class A Position Report (PGN 129038)
 /// Fast Packet message from Class A transponders reporting vessel position and motion
@@ -137,44 +138,44 @@ impl AisClassAPositionReport {
         })
     }
 
-    pub fn get_longitude_degrees(&self) -> f64 {
-        self.longitude_raw as f64 * 1e-7
+    pub fn get_longitude_degrees(&self) -> Option<f64> {
+        longitude(self.longitude_raw.available().map(|r| r as f64 * 1e-7))
     }
 
-    pub fn get_latitude_degrees(&self) -> f64 {
-        self.latitude_raw as f64 * 1e-7
+    pub fn get_latitude_degrees(&self) -> Option<f64> {
+        latitude(self.latitude_raw.available().map(|r| r as f64 * 1e-7))
     }
 
-    pub fn get_cog_degrees(&self) -> f64 {
-        self.cog_raw as f64 * 0.0001 * 180.0 / std::f64::consts::PI
+    pub fn get_cog_degrees(&self) -> Option<f64> {
+        self.cog_raw.available().map(|r| r as f64 * 0.0001 * 180.0 / std::f64::consts::PI)
     }
 
-    pub fn get_cog_radians(&self) -> f64 {
-        self.cog_raw as f64 * 0.0001
+    pub fn get_cog_radians(&self) -> Option<f64> {
+        self.cog_raw.available().map(|r| r as f64 * 0.0001)
     }
 
-    pub fn get_sog_knots(&self) -> f64 {
-        self.sog_raw as f64 * 0.01 * 1.94384  // m/s to knots
+    pub fn get_sog_knots(&self) -> Option<f64> {
+        self.sog_raw.available().map(|r| r as f64 * 0.01 * 1.94384)  // m/s to knots
     }
 
-    pub fn get_sog_ms(&self) -> f64 {
-        self.sog_raw as f64 * 0.01
+    pub fn get_sog_ms(&self) -> Option<f64> {
+        self.sog_raw.available().map(|r| r as f64 * 0.01)
     }
 
-    pub fn get_heading_degrees(&self) -> f64 {
-        self.heading_raw as f64 * 0.0001 * 180.0 / std::f64::consts::PI
+    pub fn get_heading_degrees(&self) -> Option<f64> {
+        self.heading_raw.available().map(|r| r as f64 * 0.0001 * 180.0 / std::f64::consts::PI)
     }
 
-    pub fn get_heading_radians(&self) -> f64 {
-        self.heading_raw as f64 * 0.0001
+    pub fn get_heading_radians(&self) -> Option<f64> {
+        self.heading_raw.available().map(|r| r as f64 * 0.0001)
     }
 
-    pub fn get_rate_of_turn_rad_per_sec(&self) -> f64 {
-        self.rate_of_turn_raw as f64 * 3.125e-5
+    pub fn get_rate_of_turn_rad_per_sec(&self) -> Option<f64> {
+        self.rate_of_turn_raw.available().map(|r| r as f64 * 3.125e-5)
     }
 
-    pub fn get_rate_of_turn_degrees_per_min(&self) -> f64 {
-        self.get_rate_of_turn_rad_per_sec() * 180.0 / std::f64::consts::PI * 60.0
+    pub fn get_rate_of_turn_degrees_per_min(&self) -> Option<f64> {
+        self.get_rate_of_turn_rad_per_sec().map(|r| r * 180.0 / std::f64::consts::PI * 60.0)
     }
 
     pub fn get_special_maneuver_description(&self) -> &'static str {
@@ -203,15 +204,15 @@ impl fmt::Display for AisClassAPositionReport {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "AIS Class A (ID:{}|{}): MMSI:{} Lat:{:.6}° Lon:{:.6}° SOG:{:.2}kn COG:{:.1}° HDG:{:.1}° Status:{} Accuracy:{}",
+            "AIS Class A (ID:{}|{}): MMSI:{} Lat:{}° Lon:{}° SOG:{}kn COG:{}° HDG:{}° Status:{} Accuracy:{}",
             self.message_id,
             self.repeat_indicator,
             self.mmsi,
-            self.get_latitude_degrees(),
-            self.get_longitude_degrees(),
-            self.get_sog_knots(),
-            self.get_cog_degrees(),
-            self.get_heading_degrees(),
+            fmt_opt(self.get_latitude_degrees(), 6),
+            fmt_opt(self.get_longitude_degrees(), 6),
+            fmt_opt(self.get_sog_knots(), 2),
+            fmt_opt(self.get_cog_degrees(), 1),
+            fmt_opt(self.get_heading_degrees(), 1),
             self.nav_status,
             if self.position_accuracy { "HIGH" } else { "LOW" }
         )
@@ -231,11 +232,11 @@ mod tests {
         let p = AisClassAPositionReport::from_bytes(&payload).unwrap();
         println!("{}", p);
         assert_eq!(247228600, p.mmsi);
-        assert!((43.0530014 - p.get_latitude_degrees()).abs() < 0.00001);
-        assert!((10.0111665 - p.get_longitude_degrees()).abs() < 0.00001);
-        assert!((27.0 - p.get_heading_degrees()).abs() < 0.01);
-        assert!((16.8 - p.get_sog_knots()).abs() < 0.01);
-        assert!((28.0 - p.get_cog_degrees()).abs() < 0.01);
+        assert!((43.0530014 - p.get_latitude_degrees().unwrap()).abs() < 0.00001);
+        assert!((10.0111665 - p.get_longitude_degrees().unwrap()).abs() < 0.00001);
+        assert!((27.0 - p.get_heading_degrees().unwrap()).abs() < 0.01);
+        assert!((16.8 - p.get_sog_knots().unwrap()).abs() < 0.01);
+        assert!((28.0 - p.get_cog_degrees().unwrap()).abs() < 0.01);
         assert_eq!(AisNavStatus::UnderWayEngine, p.nav_status);
     }
 
@@ -247,5 +248,13 @@ mod tests {
             0x08,0xff,0xff,0xff,0x7f,0xf5,0xfe, 0x00];
         let p = AisClassAPositionReport::from_bytes(&payload).unwrap();
         println!("{:?}", p);
+        // Transponder without a fix: every kinematic field is "not available"
+        assert_eq!(p.get_latitude_degrees(), None);
+        assert_eq!(p.get_longitude_degrees(), None);
+        assert_eq!(p.get_cog_radians(), None);
+        assert_eq!(p.get_sog_ms(), None);
+        assert_eq!(p.get_heading_radians(), None);
+        assert_eq!(p.get_rate_of_turn_rad_per_sec(), None);
+        println!("{}", p);
     }
 }

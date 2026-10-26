@@ -229,8 +229,10 @@ impl EnvironmentalMonitor {
     }
 
     fn process_cog_sog(&mut self, msg_sog: &nmea2k::pgns::CogSogRapidUpdate, now: Instant) {
-        self.last_boat_speed_event = Some(now);
-        self.last_boat_speed_knots = Some(msg_sog.sog_knots());
+        if let Some(sog_knots) = msg_sog.sog_knots() {
+            self.last_boat_speed_event = Some(now);
+            self.last_boat_speed_knots = Some(sog_knots);
+        }
     }
 
     pub fn cleanup_all_samples(&mut self, metric_id: MetricId) {

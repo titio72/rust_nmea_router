@@ -4,6 +4,7 @@ use std::fmt;
 use super::ais_helpers::{
     gnss_type_description, read_bits, read_signed_bits, repeat_indicator_description,
 };
+use super::sentinel::{fmt_opt, latitude, longitude, Available};
 
 /// AIS UTC and Date Report (PGN 129793)
 /// Reports precise time and date synchronization from AIS receiver
@@ -20,7 +21,7 @@ pub struct AisUtcDateReport {
     pub position_time_raw: u32, // × 0.0001 seconds since midnight
     pub position_date: u16,     // Days since epoch (1970-01-01)
     pub gnss_type: u8,          // GNSS position type
-    pub date_time: N2kDateTime,
+    pub date_time: Option<N2kDateTime>,
 }
 
 impl AisUtcDateReport {
@@ -40,7 +41,10 @@ impl AisUtcDateReport {
         let position_date = read_bits(data, 168, 16) as u16;
         let gnss_type = read_bits(data, 188, 4) as u8;
 
-        let date_time = N2kDateTime::new(position_date, position_time_raw as f64)?;
+        let date_time = position_date
+            .available()
+            .zip(position_time_raw.available())
+            .map(|(date, time)| N2kDateTime { date, time: time as f64 * 0.0001 });
 
         Some(Self {
             pgn: 129793,
@@ -58,12 +62,12 @@ impl AisUtcDateReport {
         })
     }
 
-    pub fn get_longitude_degrees(&self) -> f64 {
-        self.longitude_raw as f64 * 1e-7
+    pub fn get_longitude_degrees(&self) -> Option<f64> {
+        longitude(self.longitude_raw.available().map(|r| r as f64 * 1e-7))
     }
 
-    pub fn get_latitude_degrees(&self) -> f64 {
-        self.latitude_raw as f64 * 1e-7
+    pub fn get_latitude_degrees(&self) -> Option<f64> {
+        latitude(self.latitude_raw.available().map(|r| r as f64 * 1e-7))
     }
 
     pub fn get_gnss_type_description(&self) -> &'static str {
@@ -79,12 +83,12 @@ impl fmt::Display for AisUtcDateReport {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "AIS UTC Report - MMSI: {}, Lat: {:.6}, Lon: {:.6}, Time: {:.2}s, Date: {} days",
+            "AIS UTC Report - MMSI: {}, Lat: {}, Lon: {}, Time: {}s, Date: {} days",
             self.mmsi,
-            self.get_latitude_degrees(),
-            self.get_longitude_degrees(),
-            self.date_time.time,
-            self.date_time.date
+            fmt_opt(self.get_latitude_degrees(), 6),
+            fmt_opt(self.get_longitude_degrees(), 6),
+            fmt_opt(self.date_time.as_ref().map(|dt| dt.time), 2),
+            self.date_time.as_ref().map_or_else(|| "N/A".to_string(), |dt| dt.date.to_string())
         )
     }
 }
@@ -131,10 +135,10 @@ mod tests {
             0xc0, 0x08, 0x69, 0x1e, 0x00, 0x00, 0x08, 0x1a, 0x50, 0x7f, 0x00, 0xfc, 0xff,
         ];
         let report = AisUtcDateReport::from_bytes(&payload).unwrap();
-        assert_eq!(report.get_longitude_degrees(), 9.8166666);
-        assert_eq!(report.get_latitude_degrees(), 44.0666656);
+        assert_eq!(report.get_longitude_degrees().unwrap(), 9.8166666);
+        assert_eq!(report.get_latitude_degrees().unwrap(), 44.0666656);
         assert_eq!(
-            report.date_time.to_date_time(),
+            report.date_time.unwrap().to_date_time(),
             DateTime::parse_from_rfc3339("2026-02-22T14:10:20+00:00").unwrap()
         ); // 2026-02-22T14:10:20Z
         assert_eq!(report.gnss_type, 7); // Surveyed

@@ -76,19 +76,28 @@ impl AisTargetCache {
             .or_insert_with(|| AisTargetData::new(mmsi, now_ms))
     }
 
-    fn update_position(&mut self, mmsi: u32, lat: f64, lon: f64, now_ms: u64) {
+    // A field the latest report marks "not available" is cleared rather than left at its
+    // previous value: a stale position or heading presented as current is worse than none.
+    fn update_position(&mut self, mmsi: u32, lat: Option<f64>, lon: Option<f64>, now_ms: u64) {
         let e = self.entry(mmsi, now_ms);
         e.last_seen = now_ms;
-        e.latitude = Some(lat);
-        e.longitude = Some(lon);
+        e.latitude = lat;
+        e.longitude = lon;
     }
 
-    fn update_motion(&mut self, mmsi: u32, sog: f64, cog: f64, heading: f64, now_ms: u64) {
+    fn update_motion(
+        &mut self,
+        mmsi: u32,
+        sog: Option<f64>,
+        cog: Option<f64>,
+        heading: Option<f64>,
+        now_ms: u64,
+    ) {
         let e = self.entry(mmsi, now_ms);
         e.last_seen = now_ms;
-        e.sog = Some(sog);
-        e.cog = Some(cog);
-        e.heading = Some(heading);
+        e.sog = sog;
+        e.cog = cog;
+        e.heading = heading;
     }
 
     fn evict_old(&mut self, now_ms: u64) {
@@ -573,6 +582,47 @@ mod tests {
     }
 
     #[test]
+    fn test_class_b_position_not_available_fields() {
+        // Class B transponders without a heading sensor report heading 0xFFFF
+        let mut cache = AisTargetCache::new();
+        let frame = make_frame(N2kMessage::AisClassBPositionReport(AisClassBPositionReport {
+            pgn: 129039,
+            message_id: 18,
+            repeat_indicator: 0,
+            mmsi: 338000002,
+            latitude_raw: i32::MAX,
+            longitude_raw: i32::MAX,
+            position_accuracy: false,
+            raim: false,
+            time_stamp: 0,
+            cog_raw: u16::MAX,
+            sog_raw: 0,
+            communication_state: 0,
+            ais_transceiver_info: 0,
+            heading_raw: u16::MAX,
+            regional_application: 0,
+            regional_application_b: 0,
+            unit_type: 1,
+            integrated_display: false,
+            dsc: false,
+            band: false,
+            can_handle_msg22: false,
+            assigned: false,
+        }));
+        cache.handle_message(&frame, Instant::now());
+
+        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let targets = cache.get_recent(now_ms);
+        assert_eq!(targets.len(), 1);
+        let t = &targets[0];
+        assert!(t.latitude.is_none());
+        assert!(t.longitude.is_none());
+        assert_eq!(t.sog, Some(0.0));
+        assert!(t.cog.is_none());
+        assert!(t.heading.is_none());
+    }
+
+    #[test]
     fn test_class_b_ext_position_stores_fields() {
         let mut cache = AisTargetCache::new();
         let frame = make_frame(N2kMessage::AisClassBExtPositionReport(
@@ -667,7 +717,7 @@ mod tests {
             position_time_raw: 0,
             position_date: 19000,
             gnss_type: 0,
-            date_time: N2kDateTime::new(19000, 0.0).unwrap(),
+            date_time: N2kDateTime::new(19000, 0.0),
         }));
         cache.handle_message(&frame, Instant::now());
 

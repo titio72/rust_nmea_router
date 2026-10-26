@@ -174,7 +174,9 @@ impl VesselMonitor {
     /// Process a COG & SOG rapid update message
     /// Expected maximum rate is 10 Hz
     pub fn process_cog_sog(&mut self, cog_sog_msg: &CogSogRapidUpdate, timestamp: Instant) {
-        let sog_kn = cog_sog_msg.sog_knots();
+        let Some(sog_kn) = cog_sog_msg.sog_knots() else {
+            return; // SOG not available
+        };
 
         // Noise filter: Reject unrealistic SOG values (> 25 knots)
         if sog_kn > MAX_VALID_SOG_KN {
@@ -183,12 +185,13 @@ impl VesselMonitor {
 
         // calculate VMG for mooring detection
         // we use the vmg because the vessel moves sideways at anchor or moored (in the latter case, it does not move at all)
-        if let Some(last_heading) = self.headings.get_latest() {
-            let cog_deg = cog_sog_msg.cog.to_degrees();
+        if let (Some(last_heading), Some(cog_deg)) =
+            (self.headings.get_latest(), cog_sog_msg.cog_degrees())
+        {
             let vmg_kn = sog_kn * (cog_deg - last_heading).to_radians().cos();
             self.vmg_for_mooring.add_sample(vmg_kn, timestamp);
         } else {
-            // No valid heading available, cannot calculate VMG for mooring detection, but the raw sog is almost as good as an approximation for mooring detection, so we can still add the speed sample to the mooring detection queue
+            // No valid heading or COG available (receivers commonly drop COG when stationary), cannot calculate VMG for mooring detection, but the raw sog is almost as good as an approximation for mooring detection, so we can still add the speed sample to the mooring detection queue
             self.vmg_for_mooring.add_sample(sog_kn, timestamp);
         }
 
