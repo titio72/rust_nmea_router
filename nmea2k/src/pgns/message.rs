@@ -21,6 +21,7 @@ use super::pgn129794::AisClassAStaticData;
 use super::pgn129809::AisClassBStaticDataPartA;
 use super::pgn129810::AisClassBStaticDataPartB;
 use super::pgn130306::WindData;
+use super::pgn130310::EnvironmentalParameters;
 use super::pgn130312::Temperature;
 use super::pgn130313::Humidity;
 use super::pgn130314::ActualPressure;
@@ -48,6 +49,7 @@ pub enum N2kMessage {
     NavigationData(NavigationData),
     GnssDops(GnssDops),
     WindData(WindData),
+    EnvironmentalParameters(EnvironmentalParameters),
     Temperature(Temperature),
     Humidity(Humidity),
     ActualPressure(ActualPressure),
@@ -128,6 +130,9 @@ impl N2kMessage {
             130306 => WindData::from_bytes(data)
                 .map(N2kMessage::WindData)
                 .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
+            130310 => EnvironmentalParameters::from_bytes(data)
+                .map(N2kMessage::EnvironmentalParameters)
+                .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
             130312 => Temperature::from_bytes(data)
                 .map(N2kMessage::Temperature)
                 .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
@@ -158,6 +163,7 @@ impl fmt::Display for N2kMessage {
             N2kMessage::NavigationData(msg) => write!(f, "{}", msg),
             N2kMessage::GnssDops(msg) => write!(f, "{}", msg),
             N2kMessage::WindData(msg) => write!(f, "{}", msg),
+            N2kMessage::EnvironmentalParameters(msg) => write!(f, "{}", msg),
             N2kMessage::Temperature(msg) => write!(f, "{}", msg),
             N2kMessage::Humidity(msg) => write!(f, "{}", msg),
             N2kMessage::ActualPressure(msg) => write!(f, "{}", msg),

@@ -79,9 +79,10 @@ The supported messages are:
 19. 129809 AIS Class B Static Data Part A
 20. 129810 AIS Class B Static Data Part B
 21. 130306 Wind speed and direction
-22. 130312 Temperature
-23. 130313 Humidity
-24. 130314 Pressure
+22. 130310 Environmental Parameters (obsolete: water/air temperature, atmospheric pressure; decoded, not yet used)
+23. 130312 Temperature
+24. 130313 Humidity
+25. 130314 Pressure
 The application constantly monitors the status of the CAN bus, and, in case of failure, start retrying until reconnection. In case of repeated failure, each retry must be at least 5s apart.
 
 NMEA 2000 messages reference is available in pgns.json

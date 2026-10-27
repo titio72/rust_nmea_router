@@ -159,6 +159,7 @@ External Systems:
 | PGN | Message Type | Description | Update Rate |
 |-----|--------------|-------------|-------------|
 | 130306 | WindData | Wind speed, angle, reference | 100ms |
+| 130310 | EnvironmentalParameters | Water/air temperature, atmospheric pressure (obsolete PGN; decoded, not yet used) | 500ms |
 | 130312 | Temperature | Multi-instance temperature | 2s |
 | 130313 | Humidity | Relative humidity | 2s |
 | 130314 | ActualPressure | Barometric pressure | 2s |
