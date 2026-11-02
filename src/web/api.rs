@@ -730,6 +730,22 @@ pub async fn trim_trip(
     }
 }
 
+pub async fn bump_trip_version(
+    State(state): State<AppState>,
+    Query(params): Query<TripIdQuery>,
+) -> Result<Json<ApiResponse<()>>, StatusCode> {
+    match state.db().bump_trip_version(params.id as i64) {
+        Ok(()) => {
+            info!(trip_id = params.id, "Trip version bumped");
+            Ok(Json(ApiResponse::ok(())))
+        }
+        Err(e) => {
+            error!(error = %e, trip_id = params.id, "Failed to bump trip version");
+            Ok(Json(ApiResponse::error(e.to_string())))
+        }
+    }
+}
+
 pub async fn correct_engine_status(
     State(state): State<AppState>,
     Json(params): Json<CorrectEngineStatusQuery>,
@@ -2255,6 +2271,7 @@ pub fn create_api_router(state: AppState) -> Router {
             .route("/trip_description", post(update_trip_description))
             .route("/delete_trip", delete(delete_trip))
             .route("/trim_trip", post(trim_trip))
+            .route("/bump_trip_version", post(bump_trip_version))
             .route("/correct_engine_status", post(correct_engine_status))
             .route("/fix_mooring_status", post(fix_mooring_status))
             .route("/invalidate_trip_legs", post(invalidate_trip_legs))
@@ -4403,6 +4420,7 @@ mod tests {
         let post_routes = [
             "/trip_description",
             "/trim_trip?id=1",
+            "/bump_trip_version?id=1",
             "/import_trip",
             "/tracking/status",
             "/metrics/status",

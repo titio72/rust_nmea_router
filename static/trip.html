@@ -16,6 +16,84 @@
     <script src="/js/map-lat-lon-panel.js"></script>
     <script src="/js/map-measure-tool.js"></script>
     <style>
+        .tripMenu { position: relative; }
+        .tripMenuPanel {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 100%;
+            z-index: 1500;
+            min-width: 190px;
+            padding: 4px 0;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            box-shadow: 0 4px 20px var(--card-shadow);
+        }
+        .tripMenuPanel.open { display: block; }
+        .tripMenuItem {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            padding: 8px 14px;
+            background: none;
+            border: none;
+            color: var(--text-primary);
+            font-size: 14px;
+            text-align: left;
+            cursor: pointer;
+        }
+        .tripMenuItem:hover { background: var(--btn-hover); }
+        .tripMenuItem:disabled { opacity: 0.5; cursor: not-allowed; }
+        .tripMenuDanger { color: #e74c3c; }
+        .tripMenuIcon { display: inline-block; width: 16px; text-align: center; font-size: 16px; }
+        .tripVersion { font-size: 0.75em; color: var(--text-secondary, #888); align-self: center; margin-right: 6px; }
+        .tripMenuSep { height: 1px; margin: 4px 0; background: var(--border-color); }
+        .edit-modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        .edit-modal.active { display: flex; align-items: center; justify-content: center; }
+        .edit-modal-content {
+            background: var(--bg-secondary);
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px var(--card-shadow);
+            max-width: 500px;
+            width: 90%;
+        }
+        .edit-modal-header { font-size: 20px; font-weight: bold; color: var(--text-bold); margin-bottom: 20px; }
+        .edit-modal-input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 14px;
+            font-family: Arial, sans-serif;
+            box-sizing: border-box;
+            margin-bottom: 20px;
+            resize: vertical;
+            min-height: 100px;
+        }
+        .edit-modal-buttons { display: flex; gap: 10px; justify-content: flex-end; }
+        .edit-modal-buttons button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .edit-modal-save { background-color: var(--sailing-color); color: white; }
+        .edit-modal-cancel { background-color: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color); }
         #tripDetails {
             width: 100%;
             padding: 0;
@@ -252,6 +330,16 @@
     </style>
 </head>
 <body>
+    <div id="editModal" class="edit-modal">
+        <div class="edit-modal-content">
+            <div class="edit-modal-header">Edit Trip Description</div>
+            <textarea id="editModalInput" class="edit-modal-input" placeholder="Enter trip description..."></textarea>
+            <div class="edit-modal-buttons">
+                <button class="edit-modal-cancel" onclick="closeEditModal()">Cancel</button>
+                <button class="edit-modal-save" onclick="saveEditModal()">Save</button>
+            </div>
+        </div>
+    </div>
     <div id="headerContainer"></div>
     <div id="tripContainer" class="level-1-container">
         <div id="tripDetails">
@@ -273,8 +361,20 @@
                                 <button class="app-btn" onclick="nextLeg()" title="Next">&gt;&gt;</button>
                             </div>
                             <div class="navButtons">
-                                <button class="app-btn" data-ro-hidden onclick="recalculateLegs(event)" title="Recalculate Legs">&#x21BA;</button>
-                                <button class="app-btn" data-ro-hidden onclick="goToFixEngineStatus()" title="Fix Engine Status"><app-icon name="wrench"></app-icon></button>
+                                <span id="tripVersion" class="tripVersion" title="Trip version: sync pushes a trip only when its version is higher than the remote's"></span>
+                                <div class="tripMenu" data-ro-hidden>
+                                    <button class="app-btn" id="tripMenuBtn" onclick="toggleTripMenu(event)" title="Trip actions"><app-icon name="menu"></app-icon></button>
+                                    <div class="tripMenuPanel" id="tripMenuPanel">
+                                        <button class="tripMenuItem" onclick="menuAction(recalculateLegs, event)"><span class="tripMenuIcon">&#x21BA;</span>Refresh legs</button>
+                                        <button class="tripMenuItem" onclick="menuAction(goToFixEngineStatus, event)"><app-icon name="wrench"></app-icon>Fix engine status</button>
+                                        <div class="tripMenuSep"></div>
+                                        <button class="tripMenuItem" onclick="menuAction(openEditModal, event)"><app-icon name="pencil"></app-icon>Rename</button>
+                                        <button class="tripMenuItem" onclick="menuAction(exportTrip, event)"><app-icon name="download"></app-icon>Download</button>
+                                        <button class="tripMenuItem" onclick="menuAction(trimTrip, event)"><app-icon name="scissors"></app-icon>Trim</button>
+                                        <button class="tripMenuItem" onclick="menuAction(bumpTripVersion, event)"><span class="tripMenuIcon">&#x2191;</span>Bump version</button>
+                                        <button class="tripMenuItem tripMenuDanger" onclick="menuAction(deleteTrip, event)"><app-icon name="trash"></app-icon>Delete</button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -414,12 +514,13 @@
 
         // This page always displays timestamps in UTC (vessel data has no meaningful
         // "local" timezone), overriding the local-time formatters from shared-theme.js.
-        // Every formatted timestamp is suffixed " UTC" so it's never mistaken for local time.
+        // Every formatted time is suffixed " UTC" so it's never mistaken for local time
+        // (dates alone are not, since the time shown next to them carries the suffix).
         function formatDate(dateStr) {
             if (!dateStr) return 'Unknown';
             try {
                 const date = new Date(dateStr);
-                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit', timeZone: 'UTC' }) + ' UTC';
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit', timeZone: 'UTC' });
             } catch (e) {
                 return dateStr;
             }
@@ -744,6 +845,7 @@
                     throw new Error(tripResult.error || 'Trip not found');
                 }
                 currentTrip = tripResult.data;
+                document.getElementById('tripVersion').textContent = 'v' + currentTrip.version;
                 updateTripNav();
 
                 if (legsResponse !== null) {
@@ -789,11 +891,144 @@
             }
         }
 
-        async function recalculateLegs(event) {
-            const btn = event.currentTarget;
-            btn.disabled = true;
-            const original = btn.textContent;
-            btn.textContent = 'Recalculating…';
+        // ---------------- Trip actions menu ----------------
+        function toggleTripMenu(event) {
+            event.stopPropagation();
+            document.getElementById('tripMenuPanel').classList.toggle('open');
+        }
+
+        function closeTripMenu() {
+            document.getElementById('tripMenuPanel').classList.remove('open');
+        }
+
+        function menuAction(fn, event) {
+            event.stopPropagation();
+            closeTripMenu();
+            fn(event);
+        }
+
+        document.addEventListener('click', closeTripMenu);
+
+        function tripTitle() {
+            return (currentTrip && currentTrip.description) || 'Trip ' + tripId;
+        }
+
+        function openEditModal() {
+            const input = document.getElementById('editModalInput');
+            input.value = (currentTrip && currentTrip.description) || '';
+            document.getElementById('editModal').classList.add('active');
+            input.focus();
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModal').classList.remove('active');
+        }
+
+        async function saveEditModal() {
+            const newDescription = document.getElementById('editModalInput').value.trim();
+            try {
+                const response = await fetch('/api/trip_description', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: parseInt(tripId, 10), description: newDescription })
+                });
+                if (!response.ok) throw new Error('Failed to update trip description');
+                const result = await response.json();
+                if (result.status === 'ok') {
+                    currentTrip.description = newDescription;
+                    closeEditModal();
+                    updateTripNav();
+                } else {
+                    alert('Error: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error updating trip description:', error);
+                alert('Failed to update trip description: ' + error.message);
+            }
+        }
+
+        async function exportTrip() {
+            try {
+                const response = await fetch(`/api/export_trip?id=${tripId}`);
+                if (!response.ok) throw new Error('Failed to export trip');
+                const result = await response.json();
+                if (result.status !== 'ok') throw new Error(result.message || 'Export failed');
+                const link = document.createElement('a');
+                link.href = `/exports/trip_${tripId}.json`;
+                link.download = `trip_${tripId}.json`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } catch (error) {
+                console.error('Export error:', error);
+                alert('Export failed: ' + error.message);
+            }
+        }
+
+        function trimTrip() {
+            showConfirm({
+                icon: 'scissors',
+                title: 'Trim Trip?',
+                message: `"${tripTitle()}"\n\nThis will remove idle periods before the boat starts moving and after it moors. Safety buffers of 1 hour are applied before and after.\n\nThis action cannot be undone.`,
+                confirmLabel: 'Trim',
+                onConfirm: async () => {
+                    try {
+                        const resp = await fetch(`/api/trim_trip?id=${tripId}`, { method: 'POST' });
+                        const data = await resp.json();
+                        if (data.status !== 'ok') throw new Error(data.message || 'Unknown error');
+                        alert('Trip trimmed successfully. Data outside the movement period has been removed.');
+                        location.reload();
+                    } catch (error) {
+                        console.error('Error trimming trip:', error);
+                        alert('Failed to trim trip: ' + error.message);
+                    }
+                }
+            });
+        }
+
+        function bumpTripVersion() {
+            showConfirm({
+                icon: 'wrench',
+                title: 'Bump Version?',
+                message: `"${tripTitle()}"\n\nCurrent version: ${currentTrip.version}. Raises it by one so the next sync pushes this trip to the remote, replacing the remote copy.`,
+                confirmLabel: 'Bump',
+                onConfirm: async () => {
+                    try {
+                        const resp = await fetch(`/api/bump_trip_version?id=${tripId}`, { method: 'POST' });
+                        const data = await resp.json();
+                        if (data.status !== 'ok') throw new Error(data.message || 'Unknown error');
+                        location.reload();
+                    } catch (error) {
+                        console.error('Error bumping trip version:', error);
+                        alert('Failed to bump version: ' + error.message);
+                    }
+                }
+            });
+        }
+
+        function deleteTrip() {
+            // Neighbours are captured now: after the delete the trip no longer exists to ask.
+            const fallbackId = currentTrip.prev_trip_id != null ? currentTrip.prev_trip_id : currentTrip.next_trip_id;
+            showConfirm({
+                icon: 'trash',
+                title: 'Delete Trip?',
+                message: `"${tripTitle()}"\n\nThis will also delete all associated environmental and vessel status data.\n\nThis action cannot be undone.`,
+                confirmLabel: 'Delete',
+                onConfirm: async () => {
+                    try {
+                        const resp = await fetch(`/api/delete_trip?id=${tripId}`, { method: 'DELETE' });
+                        const data = await resp.json();
+                        if (data.status !== 'ok') throw new Error(data.message || 'Unknown error');
+                        window.location.href = fallbackId != null ? 'trip.html?id=' + fallbackId : 'index.html';
+                    } catch (error) {
+                        console.error('Error deleting trip:', error);
+                        alert('Failed to delete trip: ' + error.message);
+                    }
+                }
+            });
+        }
+
+        async function recalculateLegs() {
             try {
                 const resp = await fetch('/api/invalidate_trip_legs?id=' + tripId, {
                     method: 'POST', credentials: 'same-origin'
@@ -804,9 +1039,6 @@
                 await loadTripAndLegs(tripId);
             } catch (err) {
                 alert('Failed to recalculate legs: ' + err.message);
-            } finally {
-                btn.disabled = false;
-                btn.textContent = original;
             }
         }
 

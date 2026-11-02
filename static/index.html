@@ -692,6 +692,7 @@
                 card.setAttribute('data-motoring-time', trip.motoring_time_ms);
                 card.setAttribute('data-moored-time', trip.moored_time_ms || 0);
                 card.setAttribute('data-uuid', trip.uuid || '');
+                if (trip.version != null) card.setAttribute('data-version', trip.version);
                 if (readOnly) card.setAttribute('data-readonly', 'true');
 
                 grid.appendChild(card);

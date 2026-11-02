@@ -333,7 +333,7 @@ impl VesselDatabase {
                      total_distance_sailed, total_distance_motoring,
                      (total_distance_sailed + total_distance_motoring) as total_distance,
                      (total_time_sailing + total_time_motoring + total_time_moored) as total_time,
-                     total_time_sailing, total_time_motoring, total_time_moored, uuid,
+                     total_time_sailing, total_time_motoring, total_time_moored, uuid, version,
                      total_distance_upwind, total_distance_reaching, total_distance_running,
                      total_time_upwind, total_time_reaching, total_time_running
               FROM trips
@@ -346,6 +346,7 @@ impl VesselDatabase {
         if let Some(row) = row {
             let trip = TripSummary {
                 id: get_or_log(&row, "id", 0u32, "fetch_trip"),
+                version: get_or_log(&row, "version", 0u64, "fetch_trip"),
                 uuid: row
                     .get_opt::<Option<String>, _>("uuid")
                     .and_then(|v| v.ok())
@@ -430,7 +431,7 @@ impl VesselDatabase {
                     total_distance_motoring as total_distance_motoring,
                     total_distance_upwind, total_distance_reaching, total_distance_running,
                     total_time_upwind, total_time_reaching, total_time_running,
-                    uuid
+                    uuid, version
              FROM trips WHERE ";
 
         let mut conn = self.pool.get_conn()?;
@@ -459,6 +460,7 @@ impl VesselDatabase {
             .iter()
             .map(|row| TripSummary {
                 id: get_or_log(row, "id", 0u32, "fetch_trips"),
+                version: get_or_log(row, "version", 0u64, "fetch_trips"),
                 uuid: row
                     .get_opt::<Option<String>, _>("uuid")
                     .and_then(|v| v.ok())
@@ -505,7 +507,7 @@ impl VesselDatabase {
                      total_distance_sailed, total_distance_motoring,
                      (total_distance_sailed + total_distance_motoring) as total_distance,
                      (total_time_sailing + total_time_motoring + total_time_moored) as total_time,
-                     total_time_sailing, total_time_motoring, total_time_moored, uuid,
+                     total_time_sailing, total_time_motoring, total_time_moored, uuid, version,
                      total_distance_upwind, total_distance_reaching, total_distance_running,
                      total_time_upwind, total_time_reaching, total_time_running
               FROM trips
@@ -518,6 +520,7 @@ impl VesselDatabase {
         if let Some(row) = row {
             let trip = TripSummary {
                 id: get_or_log(&row, "id", 0u32, "fetch_trip_by_uuid"),
+                version: get_or_log(&row, "version", 0u64, "fetch_trip_by_uuid"),
                 uuid: row
                     .get_opt::<Option<String>, _>("uuid")
                     .and_then(|v| v.ok())

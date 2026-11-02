@@ -53,6 +53,7 @@ pub struct HealthCheckManager {
 #[derive(Debug, serde::Serialize)]
 pub struct TripSummary {
     pub id: u32,
+    pub version: u64,
     pub uuid: Option<String>,
     pub description: String,
     pub start_date: String,

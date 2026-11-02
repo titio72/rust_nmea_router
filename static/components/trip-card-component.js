@@ -22,6 +22,7 @@ class TripCard extends HTMLElement {
             motoring_time_ms: parseInt(this.getAttribute('data-motoring-time')) || 0,
             moored_time_ms: parseInt(this.getAttribute('data-moored-time')) || 0,
             uuid: this.getAttribute('data-uuid') || '',
+            version: this.getAttribute('data-version') || '',
             readOnly: this.getAttribute('data-readonly') === 'true'
         };
 
@@ -93,7 +94,7 @@ class TripCard extends HTMLElement {
                     <div class="trip-header">
                         <div class="trip-title">
                             ${desc}
-                            <span class="trip-sub-title-tiny">(ID: ${trip_data.id}${trip_data.uuid ? `, UUID: ${trip_data.uuid}` : ''})</span><br>
+                            <span class="trip-sub-title-tiny">(ID: ${trip_data.id}${trip_data.version ? `, v${trip_data.version}` : ''}${trip_data.uuid ? `, UUID: ${trip_data.uuid}` : ''})</span><br>
                             <span class="trip-sub-title">${this.format_date(trip_data.start_date)} - ${this.format_date(trip_data.end_date)}</span>
                         </div>
                     </div>
