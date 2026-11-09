@@ -2844,13 +2844,36 @@
 
             const layer = L.layerGroup().addTo(map);
 
+            // Icons are quantized (5° bearing, 2px length, 0.5kn color) and cached so
+            // thousands of arrows share a small set of images instead of each
+            // decoding its own unique data-URI SVG.
+            const iconCache = new Map();
+            function cachedIcon(bearing, len, speed) {
+                const b = (Math.round(bearing / 5) * 5) % 360;
+                const l = Math.round(len / 2) * 2;
+                const s = Math.round(speed * 2) / 2;
+                const key = b + '|' + l + '|' + s;
+                let icon = iconCache.get(key);
+                if (!icon) {
+                    icon = windArrowIcon(b, l, windColor(s));
+                    iconCache.set(key, icon);
+                }
+                return icon;
+            }
+
             function redraw() {
                 layer.clearLayers();
+                // Only create markers inside the (padded) viewport. The spacing
+                // sample is still computed over all points so arrows stay stable
+                // while panning.
+                const bounds = map.getBounds().pad(0.2);
                 let lastPixel = null;
                 for (const pt of validPoints) {
                     const pixel = map.latLngToLayerPoint([pt.latitude, pt.longitude]);
                     if (lastPixel && pixel.distanceTo(lastPixel) < WIND_ARROW_MIN_SPACING_PX) continue;
                     lastPixel = pixel;
+
+                    if (!bounds.contains([pt.latitude, pt.longitude])) continue;
 
                     let bearing = (pt.average_heading_deg + pt.average_wind_angle_deg + 180) % 360;
                     if (bearing < 0) bearing += 360;
@@ -2861,15 +2884,16 @@
                     );
 
                     L.marker([pt.latitude, pt.longitude], {
-                        icon: windArrowIcon(bearing, len, windColor(pt.average_wind_speed_kn)),
+                        icon: cachedIcon(bearing, len, pt.average_wind_speed_kn),
                         interactive: false,
+                        keyboard: false,
                         zIndexOffset: -100
                     }).addTo(layer);
                 }
             }
 
             redraw();
-            map.on('zoomend', redraw);
+            map.on('zoomend moveend', redraw);
         }
 
         function initializeMap(trackData, isFullTrip, navStartTs, navEndTs) {
