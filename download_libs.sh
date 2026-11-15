@@ -66,4 +66,24 @@ if [ -f "$LIBS_DIR/wind-gl.js" ]; then
             "$LIBS_DIR/wind-gl.js"
         echo -e "${GREEN}✓ patched wind-gl.js (lat-aware distortion correction)${NC}"
     fi
+
+    # Patch wind-gl.js: the particle field (canvas) can be a sub-rectangle of the wind
+    # texture, so pan/zoom doesn't need the texture rebuilt. Adds u_tex_origin/u_tex_scale
+    # uniforms (particle pos p samples the wind at origin + p * scale; defaults = whole
+    # texture) and frees the textures the stock code leaks on resize/setWind/numParticles.
+    # Must run after the lat patch above (it anchors on the u_lat_max uniform).
+    if ! grep -q "u_tex_origin" "$LIBS_DIR/wind-gl.js"; then
+        sed -i \
+            -e 's/uniform vec2 u_wind_max;\\nuniform sampler2D u_color_ramp;/&\\nuniform vec2 u_tex_origin;\\nuniform vec2 u_tex_scale;/' \
+            -e 's/texture2D(u_wind, v_particle_pos).rg/texture2D(u_wind, u_tex_origin + v_particle_pos * u_tex_scale).rg/' \
+            -e 's/uniform float u_lat_max;\\n\\nvarying vec2 v_tex_pos;/uniform float u_lat_max;\\nuniform vec2 u_tex_origin;\\nuniform vec2 u_tex_scale;\\n\\nvarying vec2 v_tex_pos;/' \
+            -e 's/lookup_wind(pos));/lookup_wind(u_tex_origin + pos * u_tex_scale));/' \
+            -e 's/^    this.latMax = 90;$/&\n\n    this.texOrigin = [0, 0];\n    this.texScale = [1, 1];/' \
+            -e 's/^    var emptyPixels = new Uint8Array(gl.canvas.width \* gl.canvas.height \* 4);$/&\n    if (this.backgroundTexture) { gl.deleteTexture(this.backgroundTexture); }\n    if (this.screenTexture) { gl.deleteTexture(this.screenTexture); }/' \
+            -e 's/^    \/\/ textures to hold the particle state for the current and the next frame$/    if (this.particleStateTexture0) { gl.deleteTexture(this.particleStateTexture0); }\n    if (this.particleStateTexture1) { gl.deleteTexture(this.particleStateTexture1); }\n    if (this.particleIndexBuffer) { gl.deleteBuffer(this.particleIndexBuffer); }\n&/' \
+            -e 's/^    this.windTexture = createTexture(this.gl, this.gl.LINEAR, windData.image);$/    if (this.windTexture) { this.gl.deleteTexture(this.windTexture); }\n&/' \
+            -e 's/gl.uniform2f(program.u_wind_max, this.windData.uMax, this.windData.vMax);/&\n    gl.uniform2f(program.u_tex_origin, this.texOrigin[0], this.texOrigin[1]);\n    gl.uniform2f(program.u_tex_scale, this.texScale[0], this.texScale[1]);/' \
+            "$LIBS_DIR/wind-gl.js"
+        echo -e "${GREEN}✓ patched wind-gl.js (texture sub-rectangle + texture cleanup)${NC}"
+    fi
 fi

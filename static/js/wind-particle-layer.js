@@ -5,8 +5,13 @@
 // rectangle. The field is rebuilt from data already fetched by plan.html
 // (lastGridPts via /api/forecast/grid-points) — no network calls of its own.
 //
+// The wind field is rasterized ONCE per data load (or gust/wind toggle) over the area's
+// full bounds and uploaded to the GPU. Pan/zoom only resizes the canvas, tells the
+// shader which sub-rectangle of that texture the canvas shows (texOrigin/texScale), and
+// repaints the background wash from the cached raster — no IDW work per gesture.
+//
 // Depends on globals defined in plan.html: buildSpatialIndex, idwInterpolateIndexed,
-// lastGridPts, showGust, windColor.
+// nativeGridSteps, lastGridPts, showGust, windColor.
 
 const KN_TO_MS = 0.514444;
 
@@ -16,6 +21,19 @@ const WHITE_RAMP = { '0.0': '#ffffff', '1.0': '#ffffff' };
 
 // Alpha (0-255) of the translucent intensity wash, so map tiles stay visible underneath.
 const INTENSITY_ALPHA = 140;
+
+// windColor() returns an "rgb(r,g,b)" string; parsing it per texel is expensive, so cache
+// the parsed channels per 0.1 kn bucket (the scale is smooth, so the quantization is invisible).
+const rgbCache = new Map();
+function windRgb(speedKn) {
+    const key = Math.round(speedKn * 10);
+    let rgb = rgbCache.get(key);
+    if (!rgb) {
+        rgb = windColor(key / 10).match(/\d+/g).map(Number);
+        rgbCache.set(key, rgb);
+    }
+    return rgb;
+}
 
 function pointsInArea(pts, area) {
     return pts.filter(p =>
@@ -106,7 +124,7 @@ function rasterizeWindField(pts, texW, texH, bounds, useGust) {
         vectorBytes[i * 4 + 3] = 255;
 
         if (valid[i]) {
-            const [r, g, b] = windColor(speedKn[i]).match(/\d+/g).map(Number);
+            const [r, g, b] = windRgb(speedKn[i]);
             intensityBytes[i * 4] = r;
             intensityBytes[i * 4 + 1] = g;
             intensityBytes[i * 4 + 2] = b;
@@ -126,6 +144,10 @@ const activeWindLayers = new Set();
     requestAnimationFrame(tick);
 })();
 
+// Wind texture density: ~2 texels per native forecast-grid step (GPU bilinear filtering
+// smooths between them), clamped so one full-area IDW pass stays cheap.
+const TEX_PER_GRID_STEP = 2;
+const TEX_MIN_SIDE = 8;
 const TEX_MAX_SIDE = 256;
 
 class WindParticleLayer {
@@ -141,6 +163,11 @@ class WindParticleLayer {
         this.visibleBounds = null;
         this.rebuildTimer = null;
         this.enabled = true;   // false when the user has toggled the wind overlay off
+        this.fieldDirty = true;        // data or gust/wind mode changed since the last rasterization
+        this.intensityCanvas = null;   // cached full-area color-by-speed raster (texW x texH)
+        // Canvas sub-rectangle of the full-area texture, as fractions (see reposition()).
+        this.texOrigin = [0, 0];
+        this.texScale = [1, 1];
     }
 
     onAdd(map) {
@@ -229,44 +256,91 @@ class WindParticleLayer {
         this.wind.latMax = rect.latMax;
         this.wind.numParticles = Math.min(4096, Math.max(256, Math.round((rect.width * rect.height) / 200)));
 
-        // Defer the IDW rasterization to its own task instead of running it inline here.
-        // The canvas resize/reposition above is what needs to land immediately after a
-        // zoom/pan gesture so the browser can paint it; rebuildTexture() is the expensive
-        // part (up to a few hundred ms across all visible areas) and running it in the
-        // same synchronous block delays that paint, making the overlay look like it
-        // "freezes" while the rest of the map keeps responding.
+        // The wind texture spans the whole area (row 0 = north edge); tell the shaders which
+        // slice of it this canvas shows. Same linear-in-lat/lon mapping the old per-viewport
+        // texture used, just offset/scaled.
+        const a = this.area;
+        const lonSpan = a.lon_max - a.lon_min;
+        const latSpan = a.lat_max - a.lat_min;
+        this.texOrigin = [(rect.lonMin - a.lon_min) / lonSpan, (a.lat_max - rect.latMax) / latSpan];
+        this.texScale = [(rect.lonMax - rect.lonMin) / lonSpan, (rect.latMax - rect.latMin) / latSpan];
+        this.wind.texOrigin = this.texOrigin;
+        this.wind.texScale = this.texScale;
+
+        if (!this.fieldDirty) {
+            // Cheap path (every pan/zoom): the field is already on the GPU, only the
+            // background wash needs to be re-sliced from the cached raster.
+            this.paintBackground();
+            return;
+        }
+
+        // The IDW rasterization is the expensive part. Run it in its own task so the canvas
+        // resize/reposition above can paint first instead of freezing the overlay.
         this.rebuildTimer = setTimeout(() => {
             this.rebuildTimer = null;
-            this.rebuildTexture();
+            this.buildField();
         }, 0);
     }
 
-    // Called after reposition(), and whenever lastGridPts/showGust changes.
+    // Called when lastGridPts or showGust changes: invalidates the cached field. It is
+    // rasterized right away if the area is on screen, otherwise on the next reposition()
+    // that brings it into view.
     rebuildTexture() {
-        if (!this.gl || !this.visible || !this.visibleBounds) return;
-        const pts = pointsInArea(lastGridPts, this.area);
-        const rb = this.visibleBounds;
+        if (!this.gl) return;
+        this.fieldDirty = true;
+        if (!this.visible || !this.visibleBounds) return;
+        if (this.rebuildTimer) { clearTimeout(this.rebuildTimer); this.rebuildTimer = null; }
+        this.buildField();
+    }
 
-        const aspect = (rb.lonMax - rb.lonMin) / (rb.latMax - rb.latMin || 1e-9);
-        const texW = aspect >= 1 ? TEX_MAX_SIDE : Math.max(8, Math.round(TEX_MAX_SIDE * aspect));
-        const texH = aspect >= 1 ? Math.max(8, Math.round(TEX_MAX_SIDE / aspect)) : TEX_MAX_SIDE;
+    // Rasterizes the wind field over the area's FULL bounds (independent of the viewport),
+    // uploads the vector texture, and caches the color-by-speed raster for the background.
+    buildField() {
+        if (!this.gl) return;
+        const a = this.area;
+        const bounds = { latMin: a.lat_min, latMax: a.lat_max, lonMin: a.lon_min, lonMax: a.lon_max };
+        const pts = pointsInArea(lastGridPts, a);
 
-        const field = rasterizeWindField(pts, texW, texH, rb, showGust);
-        this.bgCtx.clearRect(0, 0, this.bgCanvas.width, this.bgCanvas.height);
+        let texW = TEX_MAX_SIDE, texH = TEX_MAX_SIDE;
+        if (pts.length >= 2) {
+            const step = nativeGridSteps(pts);
+            const clamp = n => Math.min(TEX_MAX_SIDE, Math.max(TEX_MIN_SIDE, Math.ceil(n)));
+            texW = clamp((bounds.lonMax - bounds.lonMin) / step.lon * TEX_PER_GRID_STEP);
+            texH = clamp((bounds.latMax - bounds.latMin) / step.lat * TEX_PER_GRID_STEP);
+        }
+
+        const field = rasterizeWindField(pts, texW, texH, bounds, showGust);
+        this.fieldDirty = false;
         if (!field) {
             this.wind.windData = null;
+            this.intensityCanvas = null;
+            this.bgCtx.clearRect(0, 0, this.bgCanvas.width, this.bgCanvas.height);
             return;
         }
         this.wind.setWind(field.vector);
 
-        // Paint the low-res intensity raster scaled up into the full-size background canvas;
-        // image smoothing turns the coarse grid into a soft gradient wash.
         const off = document.createElement('canvas');
         off.width = texW;
         off.height = texH;
         off.getContext('2d').putImageData(field.intensity, 0, 0);
-        this.bgCtx.imageSmoothingEnabled = true;
-        this.bgCtx.drawImage(off, 0, 0, texW, texH, 0, 0, this.bgCanvas.width, this.bgCanvas.height);
+        this.intensityCanvas = off;
+        this.paintBackground();
+    }
+
+    // Paints the visible slice of the cached intensity raster into the background canvas;
+    // image smoothing turns the coarse grid into a soft gradient wash.
+    paintBackground() {
+        const ctx = this.bgCtx;
+        ctx.clearRect(0, 0, this.bgCanvas.width, this.bgCanvas.height);
+        const src = this.intensityCanvas;
+        if (!src || !this.visible) return;
+        const sx = this.texOrigin[0] * src.width;
+        const sy = this.texOrigin[1] * src.height;
+        const sw = Math.min(this.texScale[0] * src.width, src.width - sx);
+        const sh = Math.min(this.texScale[1] * src.height, src.height - sy);
+        if (sw <= 0 || sh <= 0) return;
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(src, sx, sy, sw, sh, 0, 0, this.bgCanvas.width, this.bgCanvas.height);
     }
 
     draw() {
