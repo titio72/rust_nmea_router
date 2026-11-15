@@ -1,3 +1,4 @@
+use crate::db::operations::vessel_status::storable_speed_kn;
 use crate::db::types::VesselDatabase;
 use crate::error::AppError;
 use mysql::params;
@@ -59,6 +60,10 @@ struct ExportVesselStatus {
     average_wind_speed_kn: Option<f64>,
     #[serde(rename = "twa")]
     average_wind_angle_deg: Option<f64>,
+    #[serde(rename = "aws")]
+    average_apparent_wind_speed_kn: Option<f64>,
+    #[serde(rename = "awa")]
+    average_apparent_wind_angle_deg: Option<f64>,
     #[serde(rename = "cog")]
     cog_deg: Option<f64>,
     #[serde(rename = "hdg")]
@@ -177,7 +182,8 @@ impl VesselDatabase {
                     "SELECT timestamp, latitude, longitude, average_speed_kn, max_speed_kn,
                              is_moored, engine_on, total_distance_nm, total_time_ms,
                              average_wind_speed_kn, average_wind_angle_deg, cog_deg,
-                             average_heading_deg
+                             average_heading_deg,
+                             average_apparent_wind_speed_kn, average_apparent_wind_angle_deg
                      FROM vessel_status
                      WHERE timestamp >= :start_ts AND timestamp <= :end_ts
                      ORDER BY timestamp ASC",
@@ -224,6 +230,8 @@ impl VesselDatabase {
                 average_wind_angle_deg: row.get_opt(10).and_then(|v| v.ok()).flatten(),
                 cog_deg:                row.get_opt(11).and_then(|v| v.ok()).flatten(),
                 average_heading_deg:    row.get_opt(12).and_then(|v| v.ok()).flatten(),
+                average_apparent_wind_speed_kn:  row.get_opt(13).and_then(|v| v.ok()).flatten(),
+                average_apparent_wind_angle_deg: row.get_opt(14).and_then(|v| v.ok()).flatten(),
             });
         }
 
@@ -418,6 +426,8 @@ impl VesselDatabase {
                 wind_ang: Option<f64>,
                 cog: Option<f64>,
                 hdg: Option<f64>,
+                app_wind_spd: Option<f64>,
+                app_wind_ang: Option<f64>,
             }
 
             let mut vs_rows: Vec<VsRow> = Vec::with_capacity(statuses.len());
@@ -437,27 +447,29 @@ impl VesselDatabase {
                     ts: ts_datetime,
                     lat: status["lat"].as_f64(),
                     lon: status["lon"].as_f64(),
-                    avg_spd: status["sog"].as_f64(),
-                    max_spd: status["sog_max"].as_f64(),
+                    avg_spd: status["sog"].as_f64().map(storable_speed_kn),
+                    max_spd: status["sog_max"].as_f64().map(storable_speed_kn),
                     moored: is_moored,
                     engine: engine_on,
                     tot_dist: status["dist"].as_f64(),
                     tot_time: status["dur"].as_u64(),
-                    wind_spd: status["tws"].as_f64(),
+                    wind_spd: status["tws"].as_f64().map(storable_speed_kn),
                     wind_ang: status["twa"].as_f64(),
                     cog: status["cog"].as_f64(),
                     hdg: status["hdg"].as_f64(),
+                    app_wind_spd: status["aws"].as_f64().map(storable_speed_kn),
+                    app_wind_ang: status["awa"].as_f64(),
                 });
             }
 
             const VS_BATCH: usize = 500;
             for chunk in vs_rows.chunks(VS_BATCH) {
                 let placeholders = chunk.iter()
-                    .map(|_| "(?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                    .map(|_| "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                     .collect::<Vec<_>>()
                     .join(",");
                 let sql = format!(
-                    "INSERT INTO vessel_status (timestamp, latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on, total_distance_nm, total_time_ms, average_wind_speed_kn, average_wind_angle_deg, cog_deg, average_heading_deg) VALUES {}",
+                    "INSERT INTO vessel_status (timestamp, latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on, total_distance_nm, total_time_ms, average_wind_speed_kn, average_wind_angle_deg, cog_deg, average_heading_deg, average_apparent_wind_speed_kn, average_apparent_wind_angle_deg) VALUES {}",
                     placeholders
                 );
                 let flat: Vec<mysql::Value> = chunk.iter().flat_map(|r| {
@@ -475,6 +487,8 @@ impl VesselDatabase {
                         mysql::Value::from(r.wind_ang),
                         mysql::Value::from(r.cog),
                         mysql::Value::from(r.hdg),
+                        mysql::Value::from(r.app_wind_spd),
+                        mysql::Value::from(r.app_wind_ang),
                     ]
                 }).collect();
                 tx.exec_drop(sql, flat)?;

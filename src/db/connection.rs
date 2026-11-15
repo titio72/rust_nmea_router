@@ -16,16 +16,18 @@ impl VesselDatabase {
     ///     timestamp DATETIME(3) NOT NULL COMMENT 'UTC timezone',
     ///     latitude DOUBLE,
     ///     longitude DOUBLE,
-    ///     average_speed_kn DECIMAL(6,3) NOT NULL,
-    ///     max_speed_kn DECIMAL(6,3) NOT NULL,
+    ///     average_speed_kn DECIMAL(4,2) NOT NULL,
+    ///     max_speed_kn DECIMAL(4,2) NOT NULL,
     ///     is_moored BOOLEAN NOT NULL,
     ///     engine_on TINYINT(1) NOT NULL DEFAULT 2, -- 0 = off, 1 = on, 2 = unknown
     ///     total_distance_nm DOUBLE NOT NULL DEFAULT 0,
     ///     total_time_ms BIGINT NOT NULL DEFAULT 0,
-    ///     average_wind_speed_kn DECIMAL(6,3),
-    ///     average_wind_angle_deg DECIMAL(6,3),
-    ///     cog_deg DECIMAL(6,3),
-    ///     average_heading_deg DECIMAL(6,3),
+    ///     average_wind_speed_kn DECIMAL(4,2),
+    ///     average_wind_angle_deg DECIMAL(4,1),
+    ///     cog_deg DECIMAL(4,1),
+    ///     average_heading_deg DECIMAL(4,1),
+    ///     average_apparent_wind_speed_kn DECIMAL(4,2),
+    ///     average_apparent_wind_angle_deg DECIMAL(4,1),
     ///     INDEX idx_timestamp (timestamp)
     /// );
     /// ```
@@ -96,6 +98,8 @@ impl VesselDatabase {
                 "ALTER TABLE trips ADD COLUMN total_time_reaching BIGINT NOT NULL DEFAULT 0",
                 "ALTER TABLE trips ADD COLUMN total_time_running BIGINT NOT NULL DEFAULT 0",
                 "ALTER TABLE trips ADD COLUMN version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT 'Bumped on every change to this row; drives remote sync change-detection'",
+                "ALTER TABLE vessel_status ADD COLUMN average_apparent_wind_speed_kn DECIMAL(4,2) COMMENT 'Average apparent wind speed over reporting period in knots (NULL if no wind data)'",
+                "ALTER TABLE vessel_status ADD COLUMN average_apparent_wind_angle_deg DECIMAL(4,1) COMMENT 'Average apparent wind angle (bow-relative, 0-360) over reporting period in degrees (NULL if no wind data)'",
             ] {
                 let _ = conn.query_drop(sql);
             }

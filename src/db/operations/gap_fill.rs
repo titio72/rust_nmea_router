@@ -13,6 +13,7 @@ use mysql::prelude::Queryable;
 use crate::error::AppError;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::db::operations::trip_update::exec_trip_update;
+use crate::db::operations::vessel_status::storable_speed_kn;
 
 /// A detected gap between two consecutive vessel_status records.
 #[derive(Debug)]
@@ -85,6 +86,8 @@ impl VesselDatabase {
                      total_time_ms,
                      average_wind_speed_kn,
                      average_wind_angle_deg,
+                     average_apparent_wind_speed_kn,
+                     average_apparent_wind_angle_deg,
                      cog_deg,
                      average_heading_deg
               FROM vessel_status
@@ -132,6 +135,10 @@ impl VesselDatabase {
                         row.get_opt("average_wind_speed_kn").and_then(|r| r.ok());
                     let wind_angle: Option<f64> =
                         row.get_opt("average_wind_angle_deg").and_then(|r| r.ok());
+                    let apparent_wind_speed: Option<f64> =
+                        row.get_opt("average_apparent_wind_speed_kn").and_then(|r| r.ok());
+                    let apparent_wind_angle: Option<f64> =
+                        row.get_opt("average_apparent_wind_angle_deg").and_then(|r| r.ok());
                     let cog_deg: Option<f64> = row.get_opt("cog_deg").and_then(|r| r.ok());
 
                     let after_record = VesselStatusOperation {
@@ -150,6 +157,8 @@ impl VesselDatabase {
                         wind_speed_variance: None,
                         wind_angle_deg: wind_angle,
                         wind_angle_variance: None,
+                        apparent_wind_speed_kn: apparent_wind_speed,
+                        apparent_wind_angle_deg: apparent_wind_angle,
                         cog_deg,
                         average_heading_deg: heading_deg,
                     };
@@ -205,23 +214,29 @@ impl VesselDatabase {
             r"INSERT INTO vessel_status
                 (timestamp, latitude, longitude, average_speed_kn, max_speed_kn,
                  is_moored, engine_on, total_distance_nm, total_time_ms,
-                 average_wind_speed_kn, average_wind_angle_deg, cog_deg, average_heading_deg)
+                 average_wind_speed_kn, average_wind_angle_deg,
+                 average_apparent_wind_speed_kn, average_apparent_wind_angle_deg,
+                 cog_deg, average_heading_deg)
               VALUES
                 (:timestamp, :latitude, :longitude, :avg_speed, :max_speed,
                  :is_moored, :engine_on, :total_distance, :total_time,
-                 :avg_wind_speed, :avg_wind_angle, :cog_deg, :avg_heading_deg)",
+                 :avg_wind_speed, :avg_wind_angle,
+                 :avg_app_wind_speed, :avg_app_wind_angle,
+                 :cog_deg, :avg_heading_deg)",
             params! {
                 "timestamp" => timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
                 "latitude" => op.position.latitude,
                 "longitude" => op.position.longitude,
-                "avg_speed" => op.average_speed_kn,
-                "max_speed" => op.max_speed_kn,
+                "avg_speed" => storable_speed_kn(op.average_speed_kn),
+                "max_speed" => storable_speed_kn(op.max_speed_kn),
                 "is_moored" => op.is_moored,
                 "engine_on" => op.engine_on.as_u8(),
                 "total_distance" => op.total_distance_nm,
                 "total_time" => op.total_time_ms,
-                "avg_wind_speed" => op.wind_speed_kn,
+                "avg_wind_speed" => op.wind_speed_kn.map(storable_speed_kn),
                 "avg_wind_angle" => op.wind_angle_deg,
+                "avg_app_wind_speed" => op.apparent_wind_speed_kn.map(storable_speed_kn),
+                "avg_app_wind_angle" => op.apparent_wind_angle_deg,
                 "cog_deg" => op.cog_deg,
                 "avg_heading_deg" => op.average_heading_deg,
             },
@@ -842,6 +857,8 @@ mod tests {
             wind_speed_variance: None,
             wind_angle_deg: None,
             wind_angle_variance: None,
+            apparent_wind_speed_kn: None,
+            apparent_wind_angle_deg: None,
             cog_deg: None,
             average_heading_deg: None,
         };

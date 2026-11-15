@@ -199,11 +199,15 @@ fn synthesize_interval(
     // ---- Wind -------------------------------------------------------------
     let mut tws_values: Vec<f64> = Vec::new();
     let mut twa_values: Vec<f64> = Vec::new();
+    let mut aws_values: Vec<f64> = Vec::new();
+    let mut awa_values: Vec<f64> = Vec::new();
     for e in &interval_entries {
         if let LogEntry::Wind(w) = e {
             let (tws, twa) = calculate_true_wind(w.speed_kn, w.angle_deg, avg_sog_for_wind);
             tws_values.push(tws);
             twa_values.push(twa);
+            aws_values.push(w.speed_kn);
+            awa_values.push(w.angle_deg);
         }
     }
     let wind_speed_kn = opt_avg(&tws_values);
@@ -211,6 +215,12 @@ fn synthesize_interval(
         None
     } else {
         Some(normalize0_360(average_angle(&twa_values)))
+    };
+    let apparent_wind_speed_kn = opt_avg(&aws_values);
+    let apparent_wind_angle_deg = if awa_values.is_empty() {
+        None
+    } else {
+        Some(normalize0_360(average_angle(&awa_values)))
     };
 
     // ---- Engine status ----------------------------------------------------
@@ -319,6 +329,8 @@ fn synthesize_interval(
             wind_speed_variance: None,
             wind_angle_deg,
             wind_angle_variance: None,
+            apparent_wind_speed_kn,
+            apparent_wind_angle_deg,
             cog_deg,
             average_heading_deg,
         },
@@ -531,6 +543,11 @@ mod tests {
         assert_eq!(p.vessel_status.average_heading_deg, Some(270.0));
         // Wind should be present
         assert!(p.vessel_status.wind_speed_kn.is_some());
+        // Apparent wind is the plain average of the logged readings (4.0@330, 3.5@320)
+        let aws = p.vessel_status.apparent_wind_speed_kn.unwrap();
+        assert!((aws - 3.75).abs() < 1e-9, "AWS {aws}");
+        let awa = p.vessel_status.apparent_wind_angle_deg.unwrap();
+        assert!((awa - 325.0).abs() < 1e-6, "AWA {awa}");
     }
 
     #[test]

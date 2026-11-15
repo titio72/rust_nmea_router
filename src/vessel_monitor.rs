@@ -34,6 +34,8 @@ pub struct VesselStatus {
     pub wind_speed_variance: Option<f64>,
     pub wind_angle_deg: Option<f64>,
     pub wind_angle_variance: Option<f64>,
+    pub apparent_wind_speed_kn: Option<f64>,
+    pub apparent_wind_angle_deg: Option<f64>,
     pub average_heading_deg: Option<f64>,
     pub timestamp: Instant,
     pub period: Duration,
@@ -98,6 +100,8 @@ pub struct VesselMonitor {
     vmg_for_mooring: MooringDetectionQueue,
     wind_speeds: TimedQueue<f64>,
     wind_angles: TimedQueue<f64>,
+    apparent_wind_speeds: TimedQueue<f64>,
+    apparent_wind_angles: TimedQueue<f64>,
     headings: TimedQueue<f64>,
     last_event_time: Instant,
     engine_on: EngineStatus,
@@ -131,6 +135,8 @@ impl VesselMonitor {
             ),
             wind_speeds: TimedQueue::new(sample_age_window),
             wind_angles: TimedQueue::new(sample_age_window),
+            apparent_wind_speeds: TimedQueue::new(sample_age_window),
+            apparent_wind_angles: TimedQueue::new(sample_age_window),
             headings: TimedQueue::new(sample_age_window),
             last_event_time: now,
             engine_on: EngineStatus::Unknown,
@@ -208,8 +214,18 @@ impl VesselMonitor {
     /// Process a wind data message
     /// Expected maximum rate is 10 Hz
     fn process_wind(&mut self, wind_msg: &nmea2k::pgns::WindData, timestamp: Instant) {
+        // Both the apparent-wind record and the true-wind calculation below assume an
+        // apparent reading; true/ground-referenced wind messages on the bus are ignored.
+        if !matches!(wind_msg.reference, nmea2k::pgns::WindReference::Apparent) {
+            return;
+        }
         let wind_speed_kn = wind_msg.speed_knots(); // knots
         let wind_angle_deg = wind_msg.angle.to_degrees();
+        self.apparent_wind_speeds.add_sample(wind_speed_kn, timestamp);
+        self.apparent_wind_angles.add_sample(
+            crate::utilities::normalize0_360(wind_angle_deg),
+            timestamp,
+        );
         // verify if the speed sample is recent enough
         let speed_sample = self.speeds.get_latest_sample();
         if let Some(speed) = speed_sample {
@@ -352,6 +368,12 @@ impl VesselMonitor {
             .wind_angles
             .get_average_as_angle_deg(self.status_report_period, now);
         let max_wind_speed_kn = self.wind_speeds.get_max(self.status_report_period, now);
+        let apparent_wind_speed_kn = self
+            .apparent_wind_speeds
+            .get_average(self.status_report_period, now);
+        let apparent_wind_angle_deg = self
+            .apparent_wind_angles
+            .get_average_as_angle_deg(self.status_report_period, now);
 
         let average_heading = self
             .headings
@@ -375,6 +397,8 @@ impl VesselMonitor {
             wind_speed_variance: None, // Variance calculation not implemented
             wind_angle_deg,
             wind_angle_variance: None, // Variance calculation not implemented
+            apparent_wind_speed_kn,
+            apparent_wind_angle_deg,
             average_heading_deg: average_heading,
         })
     }
@@ -468,6 +492,55 @@ mod tests {
         );
         // Wind buffer should remain empty
         assert_eq!(monitor.wind_speeds.len(), 0);
+    }
+
+    /// Raw PGN 130306 payload, so tests can build a non-apparent wind reference.
+    fn wind_with_reference(speed_kn: f64, angle_deg: f64, reference: u8) -> WindData {
+        let speed = ((speed_kn * 0.514444) / 0.01).round() as u16;
+        let angle = (angle_deg.to_radians() / 0.0001).round() as u16;
+        let [s0, s1] = speed.to_le_bytes();
+        let [a0, a1] = angle.to_le_bytes();
+        WindData::from_bytes(&[0, s0, s1, a0, a1, reference, 0xFF, 0xFF]).unwrap()
+    }
+
+    #[test]
+    fn test_apparent_wind_recorded_without_boat_speed() {
+        let mut monitor = VesselMonitor::default();
+        for i in 0..10 {
+            let position_msg = PositionRapidUpdate {
+                pgn: 129025,
+                latitude: 45.0,
+                longitude: -122.0,
+            };
+            monitor.process_position(&position_msg, Instant::now() + Duration::from_millis(i));
+        }
+        // No speed sample: true wind can't be computed, apparent wind is still recorded.
+        // 350° and 10° straddle the bow: the circular mean is 0°, not 180°.
+        make_wind_sample(&mut monitor, 10.0, 350.0, Instant::now());
+        make_wind_sample(&mut monitor, 14.0, 10.0, Instant::now());
+        monitor.status_report_ready = true;
+
+        let status = monitor.generate_status(Instant::now()).unwrap();
+        assert!(status.wind_speed_kn.is_none());
+        let aws = status.apparent_wind_speed_kn.unwrap();
+        assert!((aws - 12.0).abs() < 0.05, "AWS {aws}");
+        let awa = status.apparent_wind_angle_deg.unwrap();
+        assert!(awa < 0.1 || awa > 359.9, "AWA {awa}");
+    }
+
+    #[test]
+    fn test_non_apparent_wind_reference_ignored() {
+        let mut monitor = VesselMonitor::default();
+        let now = Instant::now();
+        make_speed_sample(&mut monitor, 5.0, now);
+        monitor.process_wind(&wind_with_reference(10.0, 45.0, 3), now); // TrueBoat
+        monitor.process_wind(&wind_with_reference(10.0, 45.0, 0), now); // TrueGroundNorth
+        assert_eq!(monitor.apparent_wind_speeds.len(), 0);
+        assert_eq!(monitor.wind_speeds.len(), 0);
+
+        monitor.process_wind(&wind_with_reference(10.0, 45.0, 2), now); // Apparent
+        assert_eq!(monitor.apparent_wind_speeds.len(), 1);
+        assert_eq!(monitor.wind_speeds.len(), 1);
     }
 
     #[test]

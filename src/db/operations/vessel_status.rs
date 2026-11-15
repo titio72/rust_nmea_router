@@ -8,6 +8,16 @@ use mysql::prelude::Queryable;
 use std::error::Error;
 use std::time::SystemTime;
 
+/// Largest value the `vessel_status` speed columns (`DECIMAL(4,2)`) can hold.
+const MAX_STORABLE_SPEED_KN: f64 = 99.99;
+
+/// Clamp a speed (knots) into the `DECIMAL(4,2)` range of the `vessel_status` speed
+/// columns. Under strict SQL mode an out-of-range value (e.g. a GPS glitch spike)
+/// would fail the whole INSERT and its enclosing transaction; clamping keeps the row.
+pub(crate) fn storable_speed_kn(speed_kn: f64) -> f64 {
+    speed_kn.clamp(-MAX_STORABLE_SPEED_KN, MAX_STORABLE_SPEED_KN)
+}
+
 impl VesselDatabase {
     /// Insert vessel status and create/update trip in a single transaction
     /// This ensures atomicity - either both operations succeed or both fail
@@ -25,20 +35,22 @@ impl VesselDatabase {
 
         tx.exec_drop(
             r"INSERT INTO vessel_status
-                (timestamp, latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on, total_distance_nm, total_time_ms, average_wind_speed_kn, average_wind_angle_deg, cog_deg, average_heading_deg)
-                VALUES (:timestamp, :latitude, :longitude, :avg_speed, :max_speed, :is_moored, :engine_on, :total_distance, :total_time, :avg_wind_speed, :avg_wind_angle, :cog_deg, :avg_heading_deg)",
+                (timestamp, latitude, longitude, average_speed_kn, max_speed_kn, is_moored, engine_on, total_distance_nm, total_time_ms, average_wind_speed_kn, average_wind_angle_deg, average_apparent_wind_speed_kn, average_apparent_wind_angle_deg, cog_deg, average_heading_deg)
+                VALUES (:timestamp, :latitude, :longitude, :avg_speed, :max_speed, :is_moored, :engine_on, :total_distance, :total_time, :avg_wind_speed, :avg_wind_angle, :avg_app_wind_speed, :avg_app_wind_angle, :cog_deg, :avg_heading_deg)",
             params! {
                 "timestamp" => timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
                 "latitude" => status_op.position.latitude,
                 "longitude" => status_op.position.longitude,
-                "avg_speed" => status_op.average_speed_kn,
-                "max_speed" => status_op.max_speed_kn,
+                "avg_speed" => storable_speed_kn(status_op.average_speed_kn),
+                "max_speed" => storable_speed_kn(status_op.max_speed_kn),
                 "is_moored" => status_op.is_moored,
                 "engine_on" => status_op.engine_on.as_u8(),
                 "total_distance" => status_op.total_distance_nm,
                 "total_time" => status_op.total_time_ms,
-                "avg_wind_speed" => status_op.wind_speed_kn,
+                "avg_wind_speed" => status_op.wind_speed_kn.map(storable_speed_kn),
                 "avg_wind_angle" => status_op.wind_angle_deg,
+                "avg_app_wind_speed" => status_op.apparent_wind_speed_kn.map(storable_speed_kn),
+                "avg_app_wind_angle" => status_op.apparent_wind_angle_deg,
                 "cog_deg" => status_op.cog_deg,
                 "avg_heading_deg" => status_op.average_heading_deg,
             },
@@ -258,7 +270,9 @@ impl VesselDatabase {
                 average_wind_speed_kn,
                 average_wind_angle_deg,
                 cog_deg,
-                average_heading_deg
+                average_heading_deg,
+                average_apparent_wind_speed_kn,
+                average_apparent_wind_angle_deg
              FROM vessel_status
              ORDER BY timestamp DESC
              LIMIT 1",
@@ -279,6 +293,8 @@ impl VesselDatabase {
             let wind_angle_deg: Option<f64> = row.get_opt(10).and_then(|v| v.ok()).flatten();
             let cog_deg: Option<f64> = row.get_opt(11).and_then(|v| v.ok()).flatten();
             let average_heading_deg: Option<f64> = row.get_opt(12).and_then(|v| v.ok()).flatten();
+            let apparent_wind_speed_kn: Option<f64> = row.get_opt(13).and_then(|v| v.ok()).flatten();
+            let apparent_wind_angle_deg: Option<f64> = row.get_opt(14).and_then(|v| v.ok()).flatten();
 
             // Convert timestamp string to Instant via SystemTime
             let ts_clean = timestamp_str.trim_end_matches('Z');
@@ -307,6 +323,8 @@ impl VesselDatabase {
                 wind_speed_variance: None,
                 wind_angle_deg,
                 wind_angle_variance: None,
+                apparent_wind_speed_kn,
+                apparent_wind_angle_deg,
                 cog_deg,
                 average_heading_deg,
             }))
@@ -327,6 +345,14 @@ mod tests {
     use crate::trip::Trip;
     use crate::utilities::EngineStatus;
     use mysql::prelude::Queryable;
+
+    #[test]
+    fn test_storable_speed_kn_clamps_to_decimal_4_2_range() {
+        assert_eq!(storable_speed_kn(6.5), 6.5);
+        assert_eq!(storable_speed_kn(99.99), 99.99);
+        assert_eq!(storable_speed_kn(150.0), 99.99);
+        assert_eq!(storable_speed_kn(-150.0), -99.99);
+    }
     use std::ops::Add;
     use std::time::{Duration, Instant, SystemTime};
 
@@ -348,6 +374,8 @@ mod tests {
             wind_speed_variance: None,
             wind_angle_deg: Some(45.0),
             wind_angle_variance: None,
+            apparent_wind_speed_kn: None,
+            apparent_wind_angle_deg: None,
             cog_deg: Some(90.0),
             average_heading_deg: Some(92.0),
         }
@@ -540,6 +568,8 @@ mod tests {
             wind_speed_variance: None,
             wind_angle_deg: None,
             wind_angle_variance: None,
+            apparent_wind_speed_kn: None,
+            apparent_wind_angle_deg: None,
             cog_deg: None,
             average_heading_deg: None,
         };

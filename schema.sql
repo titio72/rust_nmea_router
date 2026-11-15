@@ -41,20 +41,28 @@ CREATE TABLE IF NOT EXISTS vessel_status (
     timestamp DATETIME(3) NOT NULL COMMENT 'Report generation time in UTC with millisecond precision',
     latitude DOUBLE COMMENT 'Vessel latitude in decimal degrees (NULL if no position fix)',
     longitude DOUBLE COMMENT 'Vessel longitude in decimal degrees (NULL if no position fix)',
-    average_speed_kn DECIMAL(6,3) NOT NULL COMMENT 'Average speed over reporting period in knots',
-    max_speed_kn DECIMAL(6,3) NOT NULL COMMENT 'Maximum speed over reporting period in knots',
-    average_wind_speed_kn DECIMAL(6,3) COMMENT 'Average wind speed over reporting period in knots (NULL if no wind data)',
-    average_wind_angle_deg DECIMAL(6,3) COMMENT 'Average wind direction over reporting period in degrees (NULL if no wind data)',
+    average_speed_kn DECIMAL(4,2) NOT NULL COMMENT 'Average speed over reporting period in knots',
+    max_speed_kn DECIMAL(4,2) NOT NULL COMMENT 'Maximum speed over reporting period in knots',
+    average_wind_speed_kn DECIMAL(4,2) COMMENT 'Average wind speed over reporting period in knots (NULL if no wind data)',
+    average_wind_angle_deg DECIMAL(4,1) COMMENT 'Average wind direction over reporting period in degrees (NULL if no wind data)',
     is_moored BOOLEAN NOT NULL COMMENT 'TRUE if vessel is moored (position stable for 2+ minutes within 30m radius)',
     engine_on TINYINT NOT NULL DEFAULT 2 COMMENT 'Engine status: 0=off, 1=on, 2=unknown',
     total_distance_nm DOUBLE NOT NULL DEFAULT 0 COMMENT 'Distance traveled since last report in nautical miles (straight-line Haversine)',
     total_time_ms BIGINT NOT NULL DEFAULT 0 COMMENT 'Time elapsed since last report in milliseconds',
-    cog_deg DECIMAL(6,3) COMMENT 'Course over ground over reporting period in degrees (NULL if no position fix)',
-    average_heading_deg DECIMAL(6,3) COMMENT 'Average heading over reporting period in degrees (NULL if no heading data)',
+    cog_deg DECIMAL(4,1) COMMENT 'Course over ground over reporting period in degrees (NULL if no position fix)',
+    average_heading_deg DECIMAL(4,1) COMMENT 'Average heading over reporting period in degrees (NULL if no heading data)',
+    average_apparent_wind_speed_kn DECIMAL(4,2) COMMENT 'Average apparent wind speed over reporting period in knots (NULL if no wind data)',
+    average_apparent_wind_angle_deg DECIMAL(4,1) COMMENT 'Average apparent wind angle (bow-relative, 0-360) over reporting period in degrees (NULL if no wind data)',
     INDEX idx_timestamp (timestamp),
     INDEX idx_moored (is_moored, timestamp)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Stores vessel navigation status reports';
+
+-- For existing databases with the old DECIMAL(6,3) speed/angle columns, run
+-- schema_migration_vessel_status_precision.sql (manually: it rebuilds the table).
+-- Apparent wind columns (VesselDatabase::new() applies these best-effort at startup):
+-- ALTER TABLE vessel_status ADD COLUMN average_apparent_wind_speed_kn DECIMAL(4,2) COMMENT 'Average apparent wind speed over reporting period in knots (NULL if no wind data)';
+-- ALTER TABLE vessel_status ADD COLUMN average_apparent_wind_angle_deg DECIMAL(4,1) COMMENT 'Average apparent wind angle (bow-relative, 0-360) over reporting period in degrees (NULL if no wind data)';
 
 -- ============================================================================
 -- ENVIRONMENTAL DATA TABLE

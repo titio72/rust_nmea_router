@@ -101,10 +101,12 @@ Every 30 seconds, the following vessel status data is written to the database:
 | `timestamp` | DATETIME(3) | Report generation time (millisecond precision) |
 | `latitude` | DOUBLE | Vessel latitude in decimal degrees (NULL if no fix) |
 | `longitude` | DOUBLE | Vessel longitude in decimal degrees (NULL if no fix) |
-| `average_speed_kn` | DECIMAL(6,3) | Average speed over reporting period in knots |
-| `max_speed_kn` | DECIMAL(6,3) | Maximum speed over reporting period in knots |
-| `average_wind_speed_kn` | DECIMAL(6,3) | Average wind speed over reporting period in knots (NULL if no wind data) |
-| `average_wind_angle_deg` | DECIMAL(6,3) | Average wind direction over reporting period in degrees (NULL if no wind data) |
+| `average_speed_kn` | DECIMAL(4,2) | Average speed over reporting period in knots |
+| `max_speed_kn` | DECIMAL(4,2) | Maximum speed over reporting period in knots |
+| `average_wind_speed_kn` | DECIMAL(4,2) | Average wind speed over reporting period in knots (NULL if no wind data) |
+| `average_wind_angle_deg` | DECIMAL(4,1) | Average wind direction over reporting period in degrees (NULL if no wind data) |
+| `average_apparent_wind_speed_kn` | DECIMAL(4,2) | Average apparent wind speed over reporting period in knots (NULL if no wind data) |
+| `average_apparent_wind_angle_deg` | DECIMAL(4,1) | Average apparent wind angle (bow-relative, 0–360) in degrees (NULL if no wind data) |
 | `is_moored` | BOOLEAN | TRUE if moored (VMG < 0.25 kn for 85% of 180 s window) |
 | `engine_on` | BOOLEAN | TRUE if engine is running |
 | `total_distance_nm` | DOUBLE | Distance traveled since last report in nautical miles |

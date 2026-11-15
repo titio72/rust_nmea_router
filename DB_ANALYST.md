@@ -44,7 +44,13 @@ to vessel_status and environmental_data manually.
 - `is_moored` (BOOLEAN) — TRUE when position stable within 45 m radius of a 10-min reference point for 2+ min
 - `engine_on` (TINYINT) — 0 = off, 1 = on, 2 = unknown
 - `average_wind_speed_kn` / `average_wind_angle_deg` — true wind (nullable)
+- `average_apparent_wind_speed_kn` / `average_apparent_wind_angle_deg` — apparent wind as measured
+  by the masthead unit, bow-relative 0–360 (nullable; NULL on rows recorded before these columns existed)
 - `average_speed_kn` / `max_speed_kn` — speed over ground in knots
+- Precision: speeds (`average_speed_kn`, `max_speed_kn`, `average_wind_speed_kn`,
+  `average_apparent_wind_speed_kn`) are `DECIMAL(4,2)` — max 99.99 kn, the app clamps higher values
+  (GPS spikes) on insert; angles (`average_wind_angle_deg`, `average_apparent_wind_angle_deg`,
+  `cog_deg`, `average_heading_deg`) are `DECIMAL(4,1)` — 0.1° resolution, 0–360
 - `total_distance_nm` — distance sailed in this reporting interval (not cumulative)
 - `total_time_ms` — duration of this reporting interval in milliseconds
 - `cog_deg` — course over ground; `average_heading_deg` — true heading

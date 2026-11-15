@@ -3,6 +3,7 @@
 // to the moored reporting cadence. See DB_ANALYST.md for the manual protocol this
 // automates and AGENTS.md for the REST endpoint.
 use crate::db::operations::trip_update::exec_trip_update;
+use crate::db::operations::vessel_status::storable_speed_kn;
 use crate::db::types::VesselDatabase;
 use crate::error::AppError;
 use crate::position_utils::Position;
@@ -30,6 +31,8 @@ struct RawSample {
     average_heading_deg: Option<f64>,
     average_wind_speed_kn: Option<f64>,
     average_wind_angle_deg: Option<f64>,
+    average_apparent_wind_speed_kn: Option<f64>,
+    average_apparent_wind_angle_deg: Option<f64>,
 }
 
 struct ResampledRow {
@@ -44,6 +47,8 @@ struct ResampledRow {
     total_time_ms: u64,
     average_wind_speed_kn: Option<f64>,
     average_wind_angle_deg: Option<f64>,
+    average_apparent_wind_speed_kn: Option<f64>,
+    average_apparent_wind_angle_deg: Option<f64>,
 }
 
 fn parse_mysql_dt(s: &str) -> Result<DateTime<Utc>, AppError> {
@@ -69,6 +74,26 @@ fn median_position(samples: &[&RawSample]) -> Position {
     Position {
         latitude: median(&mut lats),
         longitude: median(&mut lons),
+    }
+}
+
+/// Arithmetic mean of the bucket's non-NULL values of `field`, or `None` if all are NULL.
+fn bucket_mean(bucket: &[&RawSample], field: impl Fn(&RawSample) -> Option<f64>) -> Option<f64> {
+    let values: Vec<f64> = bucket.iter().filter_map(|s| field(s)).collect();
+    if values.is_empty() {
+        None
+    } else {
+        Some(values.iter().sum::<f64>() / values.len() as f64)
+    }
+}
+
+/// Circular mean (0–360) of the bucket's non-NULL angles in `field`, or `None` if all are NULL.
+fn bucket_angle_mean(bucket: &[&RawSample], field: impl Fn(&RawSample) -> Option<f64>) -> Option<f64> {
+    let values: Vec<f64> = bucket.iter().filter_map(|s| field(s)).collect();
+    if values.is_empty() {
+        None
+    } else {
+        Some(average_angle(&values))
     }
 }
 
@@ -154,33 +179,13 @@ fn resample_buckets(
             .map(|s| s.max_speed_kn)
             .fold(0.0_f64, f64::max);
         let engine_on = mode_engine_on(bucket);
-        let headings: Vec<f64> = bucket
-            .iter()
-            .filter_map(|s| s.average_heading_deg)
-            .collect();
-        let average_heading_deg = if headings.is_empty() {
-            None
-        } else {
-            Some(average_angle(&headings))
-        };
-        let wind_speeds: Vec<f64> = bucket
-            .iter()
-            .filter_map(|s| s.average_wind_speed_kn)
-            .collect();
-        let average_wind_speed_kn = if wind_speeds.is_empty() {
-            None
-        } else {
-            Some(wind_speeds.iter().sum::<f64>() / wind_speeds.len() as f64)
-        };
-        let wind_angles: Vec<f64> = bucket
-            .iter()
-            .filter_map(|s| s.average_wind_angle_deg)
-            .collect();
-        let average_wind_angle_deg = if wind_angles.is_empty() {
-            None
-        } else {
-            Some(average_angle(&wind_angles))
-        };
+        let average_heading_deg = bucket_angle_mean(bucket, |s| s.average_heading_deg);
+        let average_wind_speed_kn = bucket_mean(bucket, |s| s.average_wind_speed_kn);
+        let average_wind_angle_deg = bucket_angle_mean(bucket, |s| s.average_wind_angle_deg);
+        let average_apparent_wind_speed_kn =
+            bucket_mean(bucket, |s| s.average_apparent_wind_speed_kn);
+        let average_apparent_wind_angle_deg =
+            bucket_angle_mean(bucket, |s| s.average_apparent_wind_angle_deg);
 
         rows.push(ResampledRow {
             timestamp: ts,
@@ -194,6 +199,8 @@ fn resample_buckets(
             total_time_ms,
             average_wind_speed_kn,
             average_wind_angle_deg,
+            average_apparent_wind_speed_kn,
+            average_apparent_wind_angle_deg,
         });
 
         prev_position = position;
@@ -304,7 +311,8 @@ impl VesselDatabase {
             let sample_rows: Vec<mysql::Row> = tx.exec(
                 r"SELECT DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:%S.%f') AS ts,
                          latitude, longitude, max_speed_kn, engine_on,
-                         average_heading_deg, average_wind_speed_kn, average_wind_angle_deg
+                         average_heading_deg, average_wind_speed_kn, average_wind_angle_deg,
+                         average_apparent_wind_speed_kn, average_apparent_wind_angle_deg
                   FROM vessel_status WHERE timestamp BETWEEN :start AND :end ORDER BY timestamp ASC",
                 params! { "start" => &start_str, "end" => &end_str },
             )?;
@@ -331,6 +339,12 @@ impl VesselDatabase {
                 let average_wind_angle_deg: Option<f64> = row
                     .get_opt("average_wind_angle_deg")
                     .and_then(|r| r.ok());
+                let average_apparent_wind_speed_kn: Option<f64> = row
+                    .get_opt("average_apparent_wind_speed_kn")
+                    .and_then(|r| r.ok());
+                let average_apparent_wind_angle_deg: Option<f64> = row
+                    .get_opt("average_apparent_wind_angle_deg")
+                    .and_then(|r| r.ok());
                 samples.push(RawSample {
                     ts: parse_mysql_dt(&ts_str)?,
                     position: Position { latitude, longitude },
@@ -339,6 +353,8 @@ impl VesselDatabase {
                     average_heading_deg,
                     average_wind_speed_kn,
                     average_wind_angle_deg,
+                    average_apparent_wind_speed_kn,
+                    average_apparent_wind_angle_deg,
                 });
             }
 
@@ -371,22 +387,28 @@ impl VesselDatabase {
                     r"INSERT INTO vessel_status
                         (timestamp, latitude, longitude, average_speed_kn, max_speed_kn,
                          is_moored, engine_on, total_distance_nm, total_time_ms,
-                         average_wind_speed_kn, average_wind_angle_deg, cog_deg, average_heading_deg)
+                         average_wind_speed_kn, average_wind_angle_deg,
+                         average_apparent_wind_speed_kn, average_apparent_wind_angle_deg,
+                         cog_deg, average_heading_deg)
                       VALUES
                         (:timestamp, :latitude, :longitude, :avg_speed, :max_speed,
                          1, :engine_on, :total_distance, :total_time,
-                         :avg_wind_speed, :avg_wind_angle, :cog_deg, :avg_heading_deg)",
+                         :avg_wind_speed, :avg_wind_angle,
+                         :avg_app_wind_speed, :avg_app_wind_angle,
+                         :cog_deg, :avg_heading_deg)",
                     params! {
                         "timestamp" => row.timestamp.format(MYSQL_TS_FMT).to_string(),
                         "latitude" => row.position.latitude,
                         "longitude" => row.position.longitude,
-                        "avg_speed" => row.average_speed_kn,
-                        "max_speed" => row.max_speed_kn,
+                        "avg_speed" => storable_speed_kn(row.average_speed_kn),
+                        "max_speed" => storable_speed_kn(row.max_speed_kn),
                         "engine_on" => row.engine_on,
                         "total_distance" => row.total_distance_nm,
                         "total_time" => row.total_time_ms,
-                        "avg_wind_speed" => row.average_wind_speed_kn,
+                        "avg_wind_speed" => row.average_wind_speed_kn.map(storable_speed_kn),
                         "avg_wind_angle" => row.average_wind_angle_deg,
+                        "avg_app_wind_speed" => row.average_apparent_wind_speed_kn.map(storable_speed_kn),
+                        "avg_app_wind_angle" => row.average_apparent_wind_angle_deg,
                         "cog_deg" => row.cog_deg,
                         "avg_heading_deg" => row.average_heading_deg,
                     },
@@ -523,6 +545,8 @@ mod tests {
             average_heading_deg: Some(heading),
             average_wind_speed_kn: Some(wind_speed),
             average_wind_angle_deg: Some(wind_angle),
+            average_apparent_wind_speed_kn: Some(wind_speed),
+            average_apparent_wind_angle_deg: Some(wind_angle),
         }
     }
 

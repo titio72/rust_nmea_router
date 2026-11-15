@@ -84,6 +84,8 @@ impl VesselStatusHandler {
             wind_speed_variance: status.wind_speed_variance,
             wind_angle_deg: status.wind_angle_deg,
             wind_angle_variance: status.wind_angle_variance,
+            apparent_wind_speed_kn: status.apparent_wind_speed_kn,
+            apparent_wind_angle_deg: status.apparent_wind_angle_deg,
             cog_deg,
             average_heading_deg,
         }
@@ -318,6 +320,8 @@ mod tests {
             wind_speed_variance: None,
             wind_angle_deg: None,
             wind_angle_variance: None,
+            apparent_wind_speed_kn: None,
+            apparent_wind_angle_deg: None,
             cog_deg: None,
             average_heading_deg: None,
         };
@@ -367,6 +371,8 @@ mod tests {
             wind_speed_variance: None,
             wind_angle_deg: Some(180.0),
             wind_angle_variance: None,
+            apparent_wind_speed_kn: None,
+            apparent_wind_angle_deg: None,
             cog_deg: Some(090.0),
             average_heading_deg: Some(090.0),
         };

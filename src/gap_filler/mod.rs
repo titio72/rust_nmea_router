@@ -208,6 +208,8 @@ fn build_corrected_restart_record(
         wind_speed_variance: None,
         wind_angle_deg: gap.after_record.wind_angle_deg,
         wind_angle_variance: None,
+        apparent_wind_speed_kn: gap.after_record.apparent_wind_speed_kn,
+        apparent_wind_angle_deg: gap.after_record.apparent_wind_angle_deg,
         cog_deg,
         average_heading_deg: gap.after_record.average_heading_deg,
     }

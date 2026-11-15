@@ -22,6 +22,8 @@ pub struct VesselStatusOperation {
     pub wind_angle_deg: Option<f64>,
     #[allow(dead_code)]
     pub wind_angle_variance: Option<f64>,
+    pub apparent_wind_speed_kn: Option<f64>,
+    pub apparent_wind_angle_deg: Option<f64>,
     pub cog_deg: Option<f64>,
     pub average_heading_deg: Option<f64>,
 }
