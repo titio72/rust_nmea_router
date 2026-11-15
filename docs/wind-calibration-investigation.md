@@ -1,213 +1,195 @@
 # Wind Calibration Investigation
 
-**Status:** open — root cause not fully identified. This document summarizes an
-investigation into an apparent wind-instrument discrepancy observed across
-several tacks, and records what's been ruled out so the next person (or
-session) doesn't re-walk the same ground.
+**Status (2026-11-11):** the bias is measured and reproducible; its mechanism is
+not identified. All data so far comes from the original wind-sensor hardware
+(ESP32 internal ADC), which is therefore the baseline for any hardware change.
 
-## Trigger
+## The problem
 
-Looking at the tack around 08:50 UTC on 2026-08-08, the wind appeared fairly
-constant before and after the maneuver, but the *computed* true wind
-direction (TWD) shifted by ~15-20°. The initial hypothesis was that the
-apparent wind speed (AWS) sensor was miscalibrated.
+True wind does not change across a tack, but the computed true wind direction
+(TWD = heading + true wind angle) does: with the wind on the starboard side it
+reads systematically higher than with the wind on the port side. A tack shows
+about twice the per-side error, because the error flips sign with the side.
+A positive gap (starboard TWD above port TWD) means the instrument chain reads
+the wind angle too far from the bow.
 
-## Method
+It was first noticed on 2026-08-08 (~08:50 UTC): the wind looked constant across
+a tack but TWD moved by ~17°. Live apparent wind readings look right while
+sailing, which is why the problem is easy to miss; it only shows up in derived
+true wind.
 
-For a tack or jibe, true wind (speed and direction) shouldn't change over the
-few minutes the maneuver takes. So: take a steady-state window of track data
-immediately before the maneuver and another immediately after, average each,
-and compute absolute true wind direction as
+## How to measure it
 
-```
-TWD = heading + average_wind_angle_deg   (mod 360)
-```
+`scripts/wind_split.py` reads `/api/track` from a running router (standard
+library only, no database access):
 
-`average_wind_angle_deg` (from `vessel_status` / `get_track`) is true wind
-angle **relative to the bow**, not an absolute bearing — see
-`vessel_monitor.rs`, which stores `normalize0_360(true_wind_angle_deg)` from
-`calculate_true_wind()` without adding heading. Any difference between the
-pre- and post-maneuver TWD is unexplained by real wind and points at
-something in the sensor chain or the calculation.
-
-To go further, the apparent wind vector fed into `calculate_true_wind()` can
-be recovered exactly, since the function is invertible:
-
-```
-aw_x = TWS·cos(TWA) + SOG
-aw_y = TWS·sin(TWA)
-AWS  = sqrt(aw_x² + aw_y²)
-AWA  = atan2(aw_y, aw_x)
+```bash
+scripts/wind_split.py --url http://localhost:8080                      # everything
+scripts/wind_split.py --url http://localhost:8080 --events             # list each maneuver
+scripts/wind_split.py --url http://localhost:8080 --compare-from 2026-12-01   # before/after a change
+scripts/wind_split.py --url http://localhost:8080 --cache /tmp/track.json     # reuse the download
+scripts/wind_split.py --cache /tmp/track.json --null-test --fit-correction    # control + correction fit
 ```
 
-This lets various correction hypotheses (scaling AWS, rotating AWA, fixing
-the boat-velocity vector) be tested against the pre/post data by asking "what
-value of the correction parameter makes TWD_pre = TWD_post?"
+If `web.auth_password` is set the API needs a session, and the script will fail
+with a connection error.
 
-**Caveat on method:** the per-event pre/post averages in this investigation
-were computed as simple arithmetic means of `average_wind_angle_deg` /
-`average_heading_deg` across each window, not the project's mandated
-`atan2(avg_sin, avg_cos)` circular mean (see CLAUDE.md, "Angle averaging").
-This is a minor methodological shortcut — over each window the angles stayed
-within a ~30-70° span with no wraparound, so the arithmetic mean and the
-proper circular mean would agree to a small fraction of a degree — but any
-follow-up work that touches instrumentation code should use the circular
-mean as usual.
+**Method.** A maneuver is a heading change of more than 40° within 60 s
+(clustered, at most 240 s long). For each one, take the 8 minutes before and
+after it, skipping 30 s next to the turn. A leg is kept only if the engine is
+off (≤10% of samples), SOG > 2 kn, TWS > 4 kn, the heading stays within 20° of
+the leg mean, and the wind stays on one side of the bow (≥85%). The two legs
+must be on opposite sides and have a TWS within 35% of each other. Then:
 
-## Events analyzed
-
-| Event | Type | Pre AWA / HDG / SOG / TWS | Post AWA / HDG / SOG / TWS | TWD gap | Leeway (HDG−COG) pre/post | Roll pre/post |
-|---|---|---|---|---|---|---|
-| 2026-08-08 ~08:50 UTC | Tack | 49.6° / 290.1° / 5.84kn / 11.28kn | 311.2° / 11.6° / 6.22kn / 11.99kn | **16.8°** | +10.9° / −1.0° | −17.4° / +21.0° |
-| 2026-07-30 ~16:08 UTC | Jibe | 227.5° / 70.1° / 5.19kn / 10.49kn | 158.6° / 143.4° / 4.19kn / 10.44kn | **4.4°** | +0.2° / −4.0° | +4.0° / −1.5° |
-| 2026-07-31 ~08:46 UTC | Tack | 312.2° / 48.3° / 3.91kn / 5.61kn | 64.8° / 320.3° / 4.64kn / 6.30kn | **24.6°** | −3.6° / +6.4° | +5.6° / −5.5° |
-| 2026-08-05 ~07:31 UTC | Tack | 48.7° / 67.2° / 4.51kn / 7.37kn | 311.9° / 147.9° / 5.72kn / 9.10kn | **16.2°** | +4.8° / +2.3° | −7.5° / +14.0° |
-
-Pattern: **all three tacks show a 16-25° TWD gap; the one jibe shows only
-~4°.** This point-of-sail split is the most solid empirical fact to come out
-of the investigation and constrains every hypothesis below.
-
-## Hypotheses tested and ruled out
-
-### 1. AWS (apparent wind speed) scale error
-
-Solved for a constant multiplier `k` (`AWS_actual = k × AWS_displayed`) that
-reconciles each event's pre/post TWD:
-
-- Aug 8 tack: k ≈ 1.75
-- Jul 31 tack: k ≈ 1.75 (matches, despite a completely different heading
-  sector and much lighter wind — rules out a heading-dependent compass
-  deviation curve as the driver)
-- Jul 30 jibe: k ≈ 1.17 (doesn't match the tacks)
-
-**Ruled out:** a real fixed calibration factor should give the same `k`
-regardless of point of sail; it doesn't (jibe disagrees). Independently, a
-sensor reading 75-80% low would be obvious in daily use — but live AWA/AWS
-readouts look correct while sailing, which is decisive against this.
-
-### 2. AWA (wind angle) offset
-
-Solved for a constant rotation `β` applied to the apparent wind vector
-before the true-wind calculation:
-
-- Aug 8 tack: β ≈ 42.6°
-- Jul 31 tack: β ≈ 37.7°
-- Jul 30 jibe: β ≈ 38.5°
-
-These three cluster tightly (~38-43°) regardless of point of sail, which
-initially looked like a much better fit than the AWS-scale theory.
-
-**Ruled out:** a masthead/wind-vane misalignment of ~40° would be blatantly
-obvious sailing — AWA readouts would look physically wrong against
-telltales and sail trim at all times, not just show up as a subtle
-5-minute-averaged discrepancy. The live instrument reads correctly while
-sailing, which rules this out regardless of how well the numbers cluster.
-
-### 3. Heel-proportional sensor error (masthead tilt / mainsail upwash)
-
-Roll (heel) data exists in `environmental_data` (`metric_id = 7`, ~30s
-sampling) — `get_metrics(roll)` returned empty for these windows during the
-investigation (tool issue, not a data gap); querying the table directly
-works. If a heeled masthead unit read apparent wind low, or upwash from a
-heeled mainsail affected the reading, the TWD gap should scale with heel
-angle.
-
-**Ruled out:** the Jul 31 tack had much less heel (~5.6° avg) than the Aug 8
-tack (~19°) yet produced the *larger* TWD gap (24.6° vs 16.8°) — the
-opposite of what a heel-proportional theory predicts.
-
-### 4. Port/starboard rig or sensor asymmetry
-
-Leeway (`heading − COG`) showed a pattern correlated with which side the
-wind was on (roughly +6 to +11° when wind was to starboard, −1 to −4° when
-to port) across the first two tacks, independent of absolute heading —
-suggestive of a physical asymmetry (mast unit not centered/level, or a real
-port/starboard difference in how the boat makes leeway).
-
-**Weakened, not fully ruled out:** the fourth tack (Aug 5) broke the
-pattern — leeway was small on *both* sides that day (+4.8°/+2.3°, both
-positive) yet the gap was still ~16°, as large as events with much bigger
-leeway asymmetry. Kept as a loose thread rather than a leading theory.
-
-## Root cause candidate: a `calculate_true_wind()` modeling gap
-
-`calculate_true_wind()` in `src/utilities.rs` takes three scalars —
-apparent wind speed, apparent wind angle (relative to bow), and
-`boat_speed_kn` — and does all its work in the boat's own body frame. It has
-**no heading or COG parameter**. The relevant line:
-
-```rust
-// Subtract boat speed from the x component
-let tw_x = aw_x - bs;
-let tw_y = aw_y;
+```
+gap = circular_mean(heading + TWA, starboard leg) - circular_mean(heading + TWA, port leg)
 ```
 
-This subtracts `boat_speed_kn` **only from the x-component**, i.e. it
-implicitly assumes the boat's own velocity lies entirely along the bow axis
-with zero athwartships (sideways) component. That assumption is exactly
-correct if `boat_speed_kn` is speed-through-water (STW, by definition along
-the keel line). It is **not** correct if `boat_speed_kn` is SOG
-(speed-over-ground), because SOG's true direction is COG, not heading — and
-the code does feed it SOG (`sog_kn` from the COG/SOG PGN, confirmed in both
-`vessel_monitor.rs` and `environmental_monitor.rs`).
+Circular means throughout. The thresholds are constants at the top of the
+script. Changing them breaks comparability with the baseline below.
 
-Whenever there's leeway (COG ≠ heading — reliably present when close-hauled/
-tacking, reliably near zero when running/jibing, matching the observed
-tack-vs-jibe split above), the boat's true ground-velocity has an
-athwartships component that this line silently drops to zero. This corrupts
-the *derived* true wind angle without touching the raw AWA/AWS readings at
-all — consistent with the instrument looking correct while sailing, since a
-sailor trims to apparent wind, not to this internal calculation.
+Timestamps in this document and in the script are UTC.
 
-**Tested:** resolving the boat's velocity vector using its actual direction
-(COG − heading, i.e. the leeway angle) instead of forcing it onto the x-axis,
-and re-subtracting:
+## Baseline: original hardware
 
-| Event | Gap before | Gap after correction | Reduction |
+178,877 track points, 2025-06-02 to 2026-11-08; 87 valid maneuvers.
+
+| Group | n | Mean gap | sd | Positive |
+|---|---|---|---|---|
+| All maneuvers | 87 | **+14.7°** | 13.0 | 77 / 87 |
+| \|TWA\| < 60° | 30 | +17.4° | 9.8 | 30 / 30 |
+| \|TWA\| 60–90° | 9 | +22.5° | 10.3 | 9 / 9 |
+| \|TWA\| 90–140° | 9 | +18.7° | 8.5 | 9 / 9 |
+| \|TWA\| > 140° (running) | 39 | +9.9° | 14.9 | 29 / 39 |
+| TWS < 8 kn | 33 | +20.9° | 13.7 | 31 / 33 |
+| TWS 8–12 kn | 29 | +11.7° | 12.0 | 25 / 29 |
+| TWS > 12 kn | 25 | +10.1° | 9.8 | 21 / 25 |
+
+Upwind and reaching (\|TWA\| < 140°) all 48 events are positive, mean about
++18°. Correlation between gap and TWS is −0.38. Wind speed and point of sail are
+correlated in this data, so the TWS rows do not separate the two.
+
+**Control (`--null-test`).** The same measurement on 1,230 pairs of consecutive
+legs on the *same* side with no maneuver between them gives mean −0.1°, sd 8.1°.
+So the method has no bias of its own (the +14.7° is real), and about 8° of
+per-event scatter is noise: wind variability over ~10 minutes plus instrument
+noise. No correction can remove that part. Per-event spread beyond noise is
+√(13.0² − 8.1²) ≈ 10°.
+
+The most recent event, 2026-10-31 14:29–14:32 UTC (wind from port at 242° true
+wind angle, heading 189°, to wind from starboard at 90° true wind angle, heading
+5°, TWS 13 kn both sides): TWD 71.2° → 95.5°, gap +24°, which is typical for a
+tack.
+
+## AWA correction prototype
+
+`--fit-correction` inverts the stored true wind back to apparent wind (exact:
+`calculate_true_wind()` is invertible; at zero correction the recomputed gaps match
+the stored ones to 1e-13°), narrows the apparent angle by ε, recomputes true
+wind and the gap, and fits ε by least squares on the gaps. To check
+generalisation, each model is also fitted on the 36 events of 2025 and scored on
+the 51 events of 2026.
+
+| Model | Params (all data) | 2026 out of sample: mean / sd / rms | All data: mean / sd |
 |---|---|---|---|
-| Aug 8 tack | 16.8° | ~12.1° | ~28% |
-| Jul 30 jibe | 4.4° | ~2.9° | ~35% |
-| Jul 31 tack | 24.6° | ~20.4° | ~17% |
-| Aug 5 tack | 16.2° | ~15.0° | ~7% |
+| none | – | +15.7 / 14.9 / 21.5 | +14.7 / 13.0 |
+| constant ε | ε = 7.3° | +3.8 / 14.6 / 14.9 | +0.8 / 12.5 |
+| table by \|AWA\| (4 bins) | 6.0 / 11.8 / 8.3 / 8.2° | +3.7 / 14.5 / 14.8 | +0.3 / 12.2 |
+| ε = a + b·(10/AWS)² | a = 5.0°, b = 1.9° | **+1.9 / 13.6 / 13.6** | −0.4 / 11.4 |
+| ε = a + c·\|AWA\|/90 + b·(10/AWS)² | a = 5.3°, c = −0.9°, b = 2.0° | +1.9 / 13.5 / 13.5 | −0.2 / 11.3 |
+| table by \|AWA\| + b·(10/AWS)² | 4.4 / 8.2 / 0.8 / 7.2°, b = 2.1° | +1.6 / 13.5 / 13.5 | −0.2 / 11.1 |
 
-**Conclusion:** this is a real, verified defect — the correction helped on
-all four events, never hurt — but it is clearly **not sufficient** to
-explain most of the gap. The Aug 5 event is the strongest counter-evidence:
-it has the smallest leeway of the four (+4.8°/+2.3°) yet a gap as large as
-Aug 8's (which had leeway more than double that). If leeway/COG omission
-were the dominant driver, gap size should track leeway magnitude — it
-doesn't, cleanly.
+Residual mean gap by point of sail after the all-data fit:
 
-## Current state / open questions
+| Model | \|TWA\| < 60 | 60–90 | 90–140 | > 140 |
+|---|---|---|---|---|
+| none | +17.4 | +22.5 | +18.7 | +9.9 |
+| constant | −3.3 | +4.4 | +7.6 | +1.7 |
+| \|AWA\| table | −1.3 | +2.0 | +2.7 | +0.5 |
+| a + b(10/AWS)² | −1.2 | +4.1 | +4.7 | −2.1 |
+| a + c\|AWA\| + b(10/AWS)² | −1.6 | +4.0 | +4.9 | −1.4 |
+| \|AWA\| table + b(10/AWS)² | −0.8 | +1.9 | +1.9 | −0.6 |
 
-- **Not** an AWS calibration problem, **not** an AWA alignment problem — both
-  ruled out primarily because live readings look correct while sailing (a
-  75-80% AWS error or ~40° AWA offset would not).
-- **Not** heel-proportional.
-- The `calculate_true_wind()` SOG/leeway omission is real and worth fixing,
-  but only accounts for 7-35% of the observed gap, inconsistently across
-  events.
-- The dominant remaining driver is **unidentified**. The strongest structural
-  clue — tacks show 16-25° gaps, the one jibe shows ~4° — still isn't fully
-  explained by anything tested so far.
+Reading:
 
-### Suggested next steps
+- **The size of the bias is about 7°** on the apparent angle, about twice the old 2.5–4° estimate. A constant ε cancels the mean bias and generalises from 2025 to 2026, leaving +3.8° out of sample.
+- **The angle table is not worth its parameters.** Out of sample it is no better than a constant (rms 14.8 vs 14.9).
+- **The wind-speed form is the only one that also reduces the spread**, in and out of sample. Spread beyond the 8.1° noise floor drops from ~10° to ~8° (ε ≈ 12.6° at 5 kn AWS, 7° at 10 kn, 5.8° at 15 kn). This supports a speed-dependent vane error (gravity-vs-aerodynamic deflection, upwash, or both), but modestly.
+- **Adding angle dependence on top of wind speed gains nothing.** The smooth form puts the angle slope at c = −0.9° per 90°, effectively zero. The binned form improves the in-sample residual table, but its bins jump around (90–135° drops to 0.8° while its neighbours sit at 7–8°), and out of sample it is no better than the speed-only form (13.5 vs 13.6). Upwind sailing also has higher apparent wind speed, so the two variables overlap in this data, and once speed is in the model nothing remains for angle.
+- **About 8° of per-event variation stays unexplained** beyond noise, so the error is not a fixed function of apparent angle and speed. Something that varies from trip to trip (sail trim or reefing, heel, sea state) is involved.
+- A correction is safe to apply in the sense that it improves every point of sail. It is not a calibration: individual true-wind readings would still be off by around ±8° at times.
 
-1. Fix the `calculate_true_wind()` leeway omission regardless — it's a real,
-   independently-confirmed defect. Either pass it a leeway/COG angle so it
-   can resolve `boat_speed_kn` into both body-frame components instead of
-   assuming zero athwartships velocity, or feed it STW instead of SOG if a
-   through-water speed source is available (this would make the existing
-   x-only logic correct as written).
-2. After that fix, re-run this same pre/post-maneuver TWD comparison on all
-   four events (plus new ones) to see how much of the gap remains.
-3. Collect a tack with deliberately near-zero leeway (if the conditions
-   allow finding one) — if the gap shrinks toward the jibe's ~4°, that
-   confirms leeway as the dominant driver despite Aug 5's inconsistent
-   scaling; if the gap stays large regardless, the driver is something else
-   entirely (short averaging-window artifacts, true wind not being as
-   steady as assumed during these particular maneuvers, GPS/compass
-   smoothing lag around the turn, etc.).
-4. Don't re-propose the AWS-scale-factor, AWA-offset, or heel-proportional
-   theories without new evidence — all three were tested against multiple
-   events and ruled out above.
+## What has been tested
+
+| Candidate | Verdict | Evidence |
+|---|---|---|
+| AWS scale error | ruled out | A fitted factor of ~1.75 would be obvious while sailing, and it differed between tacks and the one jibe tested. |
+| Fixed AWA offset (~40°) | ruled out | Would be blatantly wrong against telltales and sail trim. |
+| Instrument averaging/filter lag | ruled out | The vane's own averaging is ~5 s; the artifact persists for minutes. |
+| Heel-proportional error | ruled out | Heel flips sign on a tack just as the wind side does, so heel and side are indistinguishable in tack data; a heel-proportional fit is rejected, and heel acts at most as a proxy for sail load. |
+| Compass deviation | not supported | Adding a heading-dependent first harmonic to the fit across the 87 events changes the residual RMS from 12.88° to 12.80°. A constant heading offset cancels out of the gap by construction. |
+| Large sin/cos calibration error | bounded | The sensor's `ellipse` quality metric stays within ~5% of 1.00 (user measurement), which limits offset/gain/quadrature errors to about ±3°. |
+| Leeway/COG omission in `calculate_true_wind()` | real but minor | See below. Does not reduce the gap on the 2026-10-31 event (24.2° → 25.3°). |
+| Masthead flow distortion / mainsail upwash | plausible, unconfirmed | Magnitude is in the documented range and the sign matches, but sails-down evidence is a single case. |
+| Heeled-vane gravity deflection | partly consistent | The gap falls as wind speed rises, as a gravity-versus-aerodynamic-torque model predicts. The `a + b/AWS²` correction is the best model out of sample, but it removes only ~20% of the spread beyond noise. |
+| ADC non-linearity (ESP32 internal ADC) | untested | The firmware uses the ESP32 internal ADC. The Raymarine output (667–2000 mV after the divider) sits partly above the ADC's stated linear range. The planned MCP3202 board is the test. |
+
+### The leeway defect in `calculate_true_wind()`
+
+`calculate_true_wind()` in `src/utilities.rs` has no heading or COG parameter and
+subtracts `boat_speed_kn` only from the bow-axis component. That is correct for
+speed through water, but the callers pass SOG, whose direction is COG, not the
+bow direction. Whenever there is leeway, the sideways part of the boat velocity is
+dropped. It is a real defect and worth fixing, but it accounts for only a small
+and inconsistent share of the gap.
+
+### Traps
+
+- **Single-event pre/post comparisons are degenerate.** On a tack the heel sign,
+  the wind-side sign and (through wind pressure) heel magnitude all flip or move
+  together, so one-parameter fits to hand-picked pairs all fit equally well.
+  Several earlier "breakthroughs" were this degeneracy. Use the population
+  measurement.
+- **Hand-picked events are biased** toward large gaps. Do not compare a single
+  event with the population mean without allowing for that.
+- **Do not use days with a real wind rotation.** On 2026-09-06 the wind rotated
+  ~200° through the day (land to sea breeze); the constant-wind premise fails.
+- **`engine_on` is not a "sails down" proxy.** Motor-sailing to windward is
+  routine, and the motoring-only bins show large gaps for that reason.
+- **An earlier +8.9° figure (93 windows, 30-minute windows) could not be
+  reproduced.** Re-running a 30-minute-window split on the same data gave 44
+  windows and +13.8°. The sign is robust (39/44 positive), the magnitude depends
+  on the method, and the windowing details of the earlier run are lost. The
+  maneuver-pair numbers above supersede it.
+
+## Hardware context
+
+The wind reader is custom firmware (the `n2k_wind` PlatformIO project) driving a
+Raymarine ST50/ST60 masthead vane whose two hall sensors give sin and cos; the
+angle is `atan2(sin, cos)` after each channel is normalised by a self-calibrated
+min/max. Only PGN 130306 (apparent angle and speed) reaches the bus, so
+calibration quality (`ellipse`, raw channels) is invisible to this router.
+
+A board using an external MCP3202 ADC has been designed but is **not installed**
+(as of 2026-11-11). The boat still runs the original equipment.
+
+## Next steps
+
+1. **Keep the baseline clean.** Everything above is the original hardware. When
+   the new board is installed, note the date.
+2. **Re-measure after the change.** Run
+   `scripts/wind_split.py --compare-from <install date>` once there are enough new
+   tacks. With a tack-like baseline of about +18° (sd ~10°), ten new events detect
+   a shift of roughly 7° at two standard errors. Compare like with like: the same
+   \|TWA\| bins, since the TWS and point-of-sail mix differs from trip to trip.
+3. **Fix `calculate_true_wind()`** to resolve boat speed along its real direction
+   (leeway/COG angle) or to use speed through water if a log is fitted.
+4. **Consider an AWA correction**, applied to the apparent angle, either in the
+   firmware or at the router's `calculate_true_wind` call sites. On the baseline
+   the best candidate is `ε = 5.0° + 1.9°·(10/AWS)²` (see the prototype above). Refit
+   it on post-swap data if the new ADC changes the picture. After applying it, the
+   gap should go to zero in this same measurement. Any change to how true wind is
+   computed also changes the stored data, so record the deploy date and keep it
+   apart from the hardware-swap date.
+5. **Persist calibration quality.** `ellipse` and the raw sin/cos channels never
+   reach the DB, so ADC or calibration problems cannot be seen from the router.
