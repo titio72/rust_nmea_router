@@ -13,3 +13,4 @@ route.json
 rust_out
 .superpowers/
 config.json
+scripts/__pycache__/
