@@ -83,6 +83,14 @@ The supported messages are:
 23. 130312 Temperature
 24. 130313 Humidity
 25. 130314 Pressure
+26. 59392 ISO Acknowledgment (transmitted only: the bus explorer node's NAK to requests it cannot answer)
+27. 59904 ISO Request (decoded and transmitted: the bus explorer asks devices for their identity and answers requests to the router)
+28. 60928 ISO Address Claim (decoded and transmitted: device NAMEs; the router claims its own address)
+29. 126464 PGN List (transmitted only: the router's transmit/receive PGN lists, on request)
+30. 126993 Heartbeat (transmitted only: the router's heartbeat, every 60 s)
+31. 126996 Product Information (decoded and transmitted: device model and software version; the router's own, on request)
+
+Items 26-31 are ISO network management PGNs, used only by the bus explorer (`src/bus_explorer/`); they never count as navigation or environmental data.
 The application constantly monitors the status of the CAN bus, and, in case of failure, start retrying until reconnection. In case of repeated failure, each retry must be at least 5s apart.
 
 NMEA 2000 messages reference is available in pgns.json
@@ -183,6 +191,8 @@ The application converts NMEA2000 data to legacy NMEA0183 sentences and broadcas
 The application provides a REST API for programmatic access to trip data, vessel tracks, environmental metrics, and speed distributions. An HTML dashboard offers interactive visualization with Google Maps integration for trip tracks and real-time AIS target monitoring.
 
 - `/compass.html` — Compass Deviation page. Date range and minimum-speed filters; renders a polar chart with one radial segment per 10° heading sector, extending outward for positive mean deviation and inward for negative, sourced from `GET /api/compass_deviation`.
+
+- `/bus-explorer.html` — Bus Explorer page. Lists the devices seen on the NMEA2000 bus (source, manufacturer/model, class, software version, last heard, whether the router uses the device) with a click-to-expand PGN list per device, plus red/amber warnings when the source filter drops data or a required PGN is missing; polls `GET /api/bus/devices` every 2 s. See `docs/SOURCE_FILTER.md`.
 
 - `GET /api/twa_distribution` — query params `id` (trip id) or `start`/`end` (UTC datetime range); returns distance sailed (nautical miles) bucketed into 5° signed True Wind Angle buckets (-180..175, negative = port, positive = starboard), restricted to non-moored, non-motoring rows.
 - `GET /api/compass_deviation` — query params `start`/`end` (required, UTC datetime range) and `min_speed_kn` (optional, default 5.0); returns, for all 36 ten-degree heading sectors (0..350), the sample count and mean signed circular diff between `average_heading_deg` and `cog_deg` (degrees, positive = compass reads high), restricted to non-moored rows at or above the speed threshold. Backs `compass.html`; see `docs/ev1-compass-deviation-investigation.md` for the diff formula and method.

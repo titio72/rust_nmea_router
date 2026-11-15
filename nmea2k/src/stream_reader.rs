@@ -1,4 +1,4 @@
-use nmea2000::{FastPacket, Identifier};
+use nmea2000::Identifier;
 use embedded_can::ExtendedId;
 use std::collections::HashMap;
 
@@ -147,31 +147,34 @@ impl N2kStreamReader {
         // Parse as FastPacket
         let mut packet_data = [0u8; 8];
         packet_data.copy_from_slice(data);
-        let fast_packet = FastPacket(packet_data);
 
         let pgn = identifier.pgn();
         let source = identifier.source();
         let key = (pgn, source);
 
-        if fast_packet.is_first() {
-            // First frame - start new buffer
-            if let Some(total_len) = fast_packet.total_len() {
-                let mut buffer = FastPacketBuffer::new(total_len as usize);
-                buffer.add_frame(0, &packet_data);
+        // Byte 0 is a 3-bit sequence (bits 7..5) and a 5-bit frame counter (bits 4..0). The
+        // `nmea2000` crate's `FastPacket::frame_no` masks only 4 bits, so it would mistake frame
+        // 16 of a long message (e.g. 126996, 20 frames) for a new first frame.
+        let is_first = packet_data[0] & 0x1F == 0;
 
-                if buffer.is_complete() {
-                    // Single-frame fast packet
-                    let complete_data = buffer.get_complete_data();
-                    let message = N2kMessage::from_pgn(pgn, &complete_data);
-                    return Some(N2kFrame {
-                        identifier,
-                        message,
-                        is_fast_packet: true,
-                        data: complete_data,
-                    });
-                } else {
-                    self.fast_packet_buffers.insert(key, buffer);
-                }
+        if is_first {
+            // First frame - start new buffer
+            let total_len = packet_data[1];
+            let mut buffer = FastPacketBuffer::new(total_len as usize);
+            buffer.add_frame(0, &packet_data);
+
+            if buffer.is_complete() {
+                // Single-frame fast packet
+                let complete_data = buffer.get_complete_data();
+                let message = N2kMessage::from_pgn(pgn, &complete_data);
+                return Some(N2kFrame {
+                    identifier,
+                    message,
+                    is_fast_packet: true,
+                    data: complete_data,
+                });
+            } else {
+                self.fast_packet_buffers.insert(key, buffer);
             }
         } else if let Some(buffer) = self.fast_packet_buffers.get_mut(&key) {
             // Subsequent frame - add to existing buffer
@@ -195,28 +198,34 @@ impl N2kStreamReader {
     }
 
     fn is_fast_packet_pgn(&self, pgn: u32) -> bool {
-        matches!(
-            pgn,
-            126996
-                | 127233
-                | 127237
-                | 127489
-                | 127493
-                | 127505
-                | 128275
-                | 129029
-                | 129038
-                | 129039
-                | 129040
-                | 129041
-                | 129284
-                | 129540
-                | 129793
-                | 129794
-                | 129809
-                | 129810
-        )
+        is_fast_packet_pgn(pgn)
     }
+}
+
+/// Whether `pgn` is transmitted as a multi-frame fast packet.
+pub fn is_fast_packet_pgn(pgn: u32) -> bool {
+    matches!(
+        pgn,
+        126464
+            | 126996
+            | 127233
+            | 127237
+            | 127489
+            | 127493
+            | 127505
+            | 128275
+            | 129029
+            | 129038
+            | 129039
+            | 129040
+            | 129041
+            | 129284
+            | 129540
+            | 129793
+            | 129794
+            | 129809
+            | 129810
+    )
 }
 
 impl Default for N2kStreamReader {

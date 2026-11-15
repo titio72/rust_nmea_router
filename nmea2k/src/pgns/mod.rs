@@ -1,4 +1,10 @@
+pub mod pgn59392;
+pub mod pgn59904;
+pub mod pgn60928;
+pub mod pgn126464;
 pub mod pgn126992;
+pub mod pgn126993;
+pub mod pgn126996;
 pub mod pgn127250;
 pub mod pgn127251;
 pub mod pgn127257;
@@ -31,7 +37,13 @@ pub(crate) mod sentinel;
 
 // Re-export commonly used types
 pub use message::N2kMessage;
+pub use pgn59904::IsoRequest;
+pub use pgn59392::IsoAck;
+pub use pgn60928::{AddressClaim, N2kName};
+pub use pgn126464::{PgnList, PgnListFunction};
 pub use pgn126992::NMEASystemTime;
+pub use pgn126993::Heartbeat;
+pub use pgn126996::ProductInformation;
 pub use pgn127257::Attitude;
 pub use pgn127488::EngineRapidUpdate;
 pub use pgn129025::PositionRapidUpdate;

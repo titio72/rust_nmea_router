@@ -16,6 +16,51 @@ pub struct CanConfig {
     pub enabled: bool,
     #[serde(default)]
     pub source_filter: SourceFilterConfig,
+    #[serde(default)]
+    pub node: NodeConfig,
+}
+
+/// Largest value that fits the 21-bit unique number field of an NMEA2000 NAME.
+pub const MAX_UNIQUE_NUMBER: u32 = 0x1F_FFFF;
+
+/// Highest valid preferred source address (252-253 are reserved, 254 is "cannot claim", 255 is broadcast).
+pub const MAX_PREFERRED_ADDRESS: u8 = 251;
+
+/// The router's own identity on the NMEA2000 bus (used by the bus explorer).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeConfig {
+    /// `true`: claim an address, ask devices for their identity, answer requests and send a heartbeat.
+    /// `false`: the bus explorer is fully listen-only.
+    #[serde(default = "NodeConfig::default_transmit_enabled")]
+    pub transmit_enabled: bool,
+    /// Address tried first (0-251). The router never takes an address already in use.
+    #[serde(default = "NodeConfig::default_preferred_address")]
+    pub preferred_address: u8,
+    /// 21-bit unique number of the router NAME. Must differ from any other DIY node on the bus.
+    #[serde(default = "NodeConfig::default_unique_number")]
+    pub unique_number: u32,
+}
+
+impl NodeConfig {
+    fn default_transmit_enabled() -> bool {
+        true
+    }
+    fn default_preferred_address() -> u8 {
+        100
+    }
+    fn default_unique_number() -> u32 {
+        271828
+    }
+}
+
+impl Default for NodeConfig {
+    fn default() -> Self {
+        Self {
+            transmit_enabled: Self::default_transmit_enabled(),
+            preferred_address: Self::default_preferred_address(),
+            unique_number: Self::default_unique_number(),
+        }
+    }
 }
 
 impl CanConfig {
@@ -33,6 +78,7 @@ impl Default for CanConfig {
             interface: Self::default_interface(),
             enabled: Self::default_enabled(),
             source_filter: SourceFilterConfig::default(),
+            node: NodeConfig::default(),
         }
     }
 }
@@ -286,7 +332,15 @@ impl SourceFilterConfig {
             None => true, // No filter for this PGN, accept all sources
         }
     }
+
+    /// True if `pgn` is configured with source 255: rejected from every source on purpose.
+    pub fn blocks_every_source(&self, pgn: u32) -> bool {
+        self.pgn_source_map.get(&pgn) == Some(&REJECT_EVERY_SOURCE)
+    }
 }
+
+/// `pgn_source_map` value that rejects a PGN from every source (255 is never a real source).
+pub const REJECT_EVERY_SOURCE: u8 = 255;
 
 fn deserialize_bool_safe<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
@@ -601,6 +655,8 @@ impl Config {
             self.can.source_filter.pgn_source_map.remove(&pgn);
         }
 
+        self.validate_node();
+
         // Validate vessel status intervals
         self.validate_vessel_status_intervals();
 
@@ -609,6 +665,21 @@ impl Config {
         self.validate_health();
 
         Ok(())
+    }
+
+    fn validate_node(&mut self) {
+        let defaults = NodeConfig::default();
+        let node = &mut self.can.node;
+        if node.preferred_address > MAX_PREFERRED_ADDRESS {
+            warn!("Configuration warning: can.node.preferred_address ({}) is out of range (0-{}). Reverting to default {}.",
+                node.preferred_address, MAX_PREFERRED_ADDRESS, defaults.preferred_address);
+            node.preferred_address = defaults.preferred_address;
+        }
+        if node.unique_number > MAX_UNIQUE_NUMBER {
+            warn!("Configuration warning: can.node.unique_number ({}) does not fit 21 bits (max {}). Reverting to default {}.",
+                node.unique_number, MAX_UNIQUE_NUMBER, defaults.unique_number);
+            node.unique_number = defaults.unique_number;
+        }
     }
 
     fn validate_vessel_status_intervals(&mut self) {
@@ -816,7 +887,7 @@ impl Config {
     #[allow(dead_code)]
     pub fn new_default_instance() -> Self {
         Config {
-            can: CanConfig { interface: "vcan0".to_string(), enabled: true, source_filter: SourceFilterConfig::default() },
+            can: CanConfig { interface: "vcan0".to_string(), enabled: true, source_filter: SourceFilterConfig::default(), node: NodeConfig::default() },
             time: TimeConfig::default(),
             database: DatabaseConfig {
                 connection: DatabaseConnectionConfig::default(),
@@ -889,6 +960,61 @@ impl EnvironmentalConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn minimal_config_json(can: &str) -> String {
+        format!(
+            r#"{{
+            "can": {can},
+            "time": {{"skew_threshold_ms": 500}},
+            "database": {{
+                "connection": {{"host": "localhost", "port": 3306, "username": "nmea", "password": "nmea", "database_name": "nmea_router"}},
+                "vessel_status": {{"interval_moored_seconds": 1800, "interval_underway_seconds": 30}},
+                "environmental": {{"wind_speed_seconds": 30, "wind_direction_seconds": 30, "roll_seconds": 30, "pressure_seconds": 120, "cabin_temp_seconds": 300, "water_temp_seconds": 300, "humidity_seconds": 300}}
+            }}
+        }}"#
+        )
+    }
+
+    #[test]
+    fn node_defaults_when_absent() {
+        let json = minimal_config_json(r#"{"interface": "can0", "enabled": true}"#);
+        let config: Config = serde_json::from_str(&json).unwrap();
+        assert!(config.can.node.transmit_enabled);
+        assert_eq!(config.can.node.preferred_address, 100);
+        assert_eq!(config.can.node.unique_number, 271828);
+        assert!(config.can.node.unique_number <= MAX_UNIQUE_NUMBER);
+    }
+
+    #[test]
+    fn node_invalid_values_reverted() {
+        let json = minimal_config_json(
+            r#"{"interface": "can0", "enabled": true, "node": {"preferred_address": 252, "unique_number": 2097152}}"#,
+        );
+        let mut config: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(config.can.node.unique_number, 0x200000);
+        config.validate_and_fix().unwrap();
+        assert_eq!(config.can.node.preferred_address, 100);
+        assert_eq!(config.can.node.unique_number, 271828);
+        assert!(config.can.node.transmit_enabled);
+    }
+
+    #[test]
+    fn node_explicit_values_kept() {
+        let json = minimal_config_json(
+            r#"{"interface": "can0", "enabled": true, "node": {"transmit_enabled": false, "preferred_address": 120, "unique_number": 42}}"#,
+        );
+        let mut config: Config = serde_json::from_str(&json).unwrap();
+        config.validate_and_fix().unwrap();
+        assert!(!config.can.node.transmit_enabled);
+        assert_eq!(config.can.node.preferred_address, 120);
+        assert_eq!(config.can.node.unique_number, 42);
+
+        let round: CanConfig =
+            serde_json::from_str(&serde_json::to_string(&config.can).unwrap()).unwrap();
+        assert!(!round.node.transmit_enabled);
+        assert_eq!(round.node.preferred_address, 120);
+        assert_eq!(round.node.unique_number, 42);
+    }
 
     #[test]
     fn test_health_config_defaults() {
@@ -1061,6 +1187,17 @@ mod tests {
         // PGN 130312 has no filter, should accept all sources
         assert!(filter.should_accept(130312, 10));
         assert!(filter.should_accept(130312, 22));
+    }
+
+    #[test]
+    fn test_source_filter_blocks_every_source() {
+        let mut filter = SourceFilterConfig::default();
+        filter.pgn_source_map.insert(129025, REJECT_EVERY_SOURCE);
+        filter.pgn_source_map.insert(127488, 5);
+        assert!(filter.blocks_every_source(129025));
+        assert!(!filter.should_accept(129025, 22));
+        assert!(!filter.blocks_every_source(127488));
+        assert!(!filter.blocks_every_source(130312));
     }
 
     #[test]

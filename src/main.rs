@@ -9,6 +9,7 @@ use std::{
 use tracing::{error, info, warn};
 
 mod ais_target_cache;
+mod bus_explorer;
 mod app_metrics;
 mod config;
 mod db;
@@ -222,12 +223,16 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let ais_cache = ais_target_cache::new_ais_cache();
 
+    // Bus explorer registry: written by the router loop, read by the web layer.
+    let bus_registry = bus_explorer::new_shared_registry(std::time::Instant::now(), &config.can.node);
+
     // Start web server if enabled
     if config.web.enabled {
         let db_arc = vessel_db.clone(); // Clone the Arc, not the database
         let config_arc = Arc::new(config.clone());
         let ais_cache_web = ais_cache.clone();
         let health_web = health.clone();
+        let bus_registry_web = bus_registry.clone();
         let web_port = config.web.port;
 
         // Use channel to confirm web server started successfully
@@ -245,7 +250,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 };
                 rt.block_on(async {
-                    match web::start_web_server(db_arc, config_arc, ais_cache_web, web_port, udp_enabled, health_web, startup_tx).await {
+                    match web::start_web_server(db_arc, config_arc, ais_cache_web, web_port, udp_enabled, health_web, bus_registry_web, startup_tx).await {
                         Ok(()) => {}
                         Err(e) => {
                             warn!("Web server error: {}", e);
@@ -290,5 +295,5 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // CAN is enabled: hand over to the NMEA2000 processing loop, which never returns.
-    router_loop::run_can_pipeline(config, vessel_db, ais_cache, udp_broadcaster, health)
+    router_loop::run_can_pipeline(config, vessel_db, ais_cache, udp_broadcaster, health, bus_registry)
 }

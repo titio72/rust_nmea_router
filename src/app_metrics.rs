@@ -18,6 +18,12 @@ pub struct AppMetrics {
     pub env_reports: u64,
     /// Number of CAN bus errors encountered
     pub can_errors: u64,
+    /// Number of CAN frames the bus explorer transmitted
+    pub can_tx_frames: u64,
+    /// Number of failed CAN frame writes
+    pub can_tx_errors: u64,
+    /// Number of transmit attempts deferred because the CAN transmit queue was full
+    pub can_tx_backpressure: u64,
     pub gnss_time_skew: i64,
     pub gnss_time_skew_status: TimeSyncStatus
 }
@@ -33,6 +39,9 @@ impl AppMetrics {
             vessel_reports: 0,
             env_reports: 0,
             can_errors: 0,
+            can_tx_frames: 0,
+            can_tx_errors: 0,
+            can_tx_backpressure: 0,
             gnss_time_skew: 0,
             gnss_time_skew_status: TimeSyncStatus::NotInitialized,
         }
@@ -47,6 +56,9 @@ impl AppMetrics {
         self.vessel_reports = 0;
         self.env_reports = 0;
         self.can_errors = 0;
+        self.can_tx_frames = 0;
+        self.can_tx_errors = 0;
+        self.can_tx_backpressure = 0;
         self.gnss_time_skew = 0;
         // Note: Do not reset gnss_time_skew_status
     }
@@ -54,7 +66,7 @@ impl AppMetrics {
     /// Log current metrics to the info log
     pub fn log(&self) {
         info!(
-            "[Metrics] CAN frames: {}, CAN processed frames: {}, NMEA messages: {}, NMEA processed messages: {}, Vessel reports: {}, Env reports: {}, CAN errors: {}, GNSS time sync: {:?}/{} ms",
+            "[Metrics] CAN frames: {}, CAN processed frames: {}, NMEA messages: {}, NMEA processed messages: {}, Vessel reports: {}, Env reports: {}, CAN errors: {}, CAN TX frames: {}, CAN TX errors: {}, CAN TX backpressure: {}, GNSS time sync: {:?}/{} ms",
             self.can_frames,
             self.can_processed_frames,
             self.nmea_messages,
@@ -62,6 +74,9 @@ impl AppMetrics {
             self.vessel_reports,
             self.env_reports,
             self.can_errors,
+            self.can_tx_frames,
+            self.can_tx_errors,
+            self.can_tx_backpressure,
             self.gnss_time_skew_status,
             self.gnss_time_skew
         );
@@ -117,6 +132,9 @@ mod tests {
         assert_eq!(metrics.vessel_reports, 0);
         assert_eq!(metrics.env_reports, 0);
         assert_eq!(metrics.can_errors, 0);
+        assert_eq!(metrics.can_tx_frames, 0);
+        assert_eq!(metrics.can_tx_errors, 0);
+        assert_eq!(metrics.can_tx_backpressure, 0);
     }
     
     #[test]
@@ -127,6 +145,9 @@ mod tests {
         metrics.vessel_reports = 10;
         metrics.env_reports = 20;
         metrics.can_errors = 5;
+        metrics.can_tx_frames = 7;
+        metrics.can_tx_errors = 2;
+        metrics.can_tx_backpressure = 3;
         
         metrics.reset();
         
@@ -135,6 +156,9 @@ mod tests {
         assert_eq!(metrics.vessel_reports, 0);
         assert_eq!(metrics.env_reports, 0);
         assert_eq!(metrics.can_errors, 0);
+        assert_eq!(metrics.can_tx_frames, 0);
+        assert_eq!(metrics.can_tx_errors, 0);
+        assert_eq!(metrics.can_tx_backpressure, 0);
     }
     
     #[test]

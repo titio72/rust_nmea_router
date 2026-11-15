@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bus Explorer - NMEA Router</title>
+    <link rel="icon" type="image/png" href="/images/nmeasail.png">
+    <link rel="stylesheet" href="/shared.css">
+    <script src="/js/shared-theme.js?v=3"></script>
+    <style>
+        /* Status colours: readable on both the light and the dark card background. */
+        .bus-explorer { --be-ok: #1e8449; --be-warn: #b9650f; --be-bad: #c0392b; }
+        body.dark-theme .bus-explorer { --be-ok: #4cc27f; --be-warn: #f0a050; --be-bad: #ff6b6b; }
+
+        .be-title-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 6px 20px;
+            margin-bottom: 14px;
+        }
+        .be-title-row h2 { margin: 0; }
+        .be-summary { color: var(--text-secondary); font-size: 14px; }
+        .be-node { margin-left: auto; color: var(--text-secondary); font-size: 14px; }
+        .be-stale { color: var(--be-bad); font-weight: 600; font-size: 13px; }
+
+        .be-banner {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 7px 10px;
+            margin-bottom: 8px;
+            font-size: 13px;
+            border-left: 3px solid var(--be-bad);
+            background: rgba(214, 69, 69, 0.12);
+            color: var(--text-primary);
+            border-radius: 0 4px 4px 0;
+        }
+        .be-banner.amber {
+            border-left-color: var(--be-warn);
+            background: rgba(217, 130, 43, 0.12);
+        }
+        .be-banner svg { flex: none; margin-top: 1px; color: var(--be-bad); }
+        .be-banner.amber svg { color: var(--be-warn); }
+
+        .be-table-wrap { overflow-x: auto; }
+        .be-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        .be-table th, .be-table td {
+            text-align: left;
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .be-table th {
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            white-space: nowrap;
+        }
+        .be-dev-row { cursor: pointer; }
+        .be-dev-row:hover { background-color: rgba(52, 152, 219, 0.08); }
+        .be-dev-row:focus-visible { outline: 2px solid var(--primary-color); outline-offset: -2px; }
+        .be-dev-row.gone, .be-dev-row.moved { opacity: 0.55; }
+        .be-chevron {
+            display: inline-block;
+            width: 1em;
+            color: var(--text-secondary);
+            transition: transform 0.15s ease;
+        }
+        .be-dev-row.open .be-chevron { transform: rotate(90deg); }
+        .be-detail-row > td { background: var(--bg-secondary); padding: 12px 16px 16px 16px; }
+
+        .be-ok { color: var(--be-ok); font-weight: 600; }
+        .be-warn { color: var(--be-warn); font-weight: 600; }
+        .be-bad { color: var(--be-bad); font-weight: 600; }
+        .be-dim { color: var(--text-secondary); }
+        .be-num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+        .be-section-title {
+            margin: 0 0 6px 0;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+        }
+        /* PGN list: flex rows rather than a table, so they wrap instead of overflowing on a phone. */
+        .be-pgn-list { font-size: 13px; margin-bottom: 14px; }
+        .be-pgn-row { display: flex; flex-wrap: wrap; gap: 0 14px; padding: 3px 0; }
+        .be-pgn-row > span { min-width: 0; }
+        .be-pgn-head { font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-secondary); }
+        .be-pgn-num { flex: 0 0 60px; font-family: 'Courier New', monospace; }
+        .be-pgn-name { flex: 0 1 300px; min-width: 140px; }
+        .be-pgn-rate { flex: 0 0 90px; white-space: nowrap; }
+        .be-pgn-mark { flex: 0 0 90px; white-space: nowrap; }
+        .be-pgn-note { flex: 1 1 auto; }
+
+        .be-facts {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+            gap: 4px 24px;
+            font-size: 13px;
+        }
+        .be-fact { display: flex; gap: 8px; min-width: 0; }
+        .be-fact-label { color: var(--text-secondary); flex: none; min-width: 145px; }
+        .be-fact-value { min-width: 0; word-break: break-word; }
+
+        .be-message {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-secondary);
+            font-size: 15px;
+        }
+
+        @media (max-width: 760px) {
+            .bus-explorer.level-1-container { padding: 12px; }
+            .be-col-class, .be-col-sw { display: none; }
+            .be-table { font-size: 13px; }
+            .be-table th, .be-table td { padding: 8px 4px; }
+            .be-table th { white-space: normal; font-size: 11px; }
+            .be-table td.be-num { white-space: normal; }
+            .be-dev-row td:first-child { white-space: nowrap; }
+            .be-detail-row > td { padding: 10px 8px 14px 8px; }
+            .be-node { margin-left: 0; }
+            .be-pgn-head { display: none; }
+            .be-pgn-row { padding: 5px 0; border-bottom: 1px solid var(--border-color); }
+            .be-pgn-num { flex-basis: 52px; }
+            .be-pgn-name { flex: 1 1 140px; }
+            .be-pgn-rate, .be-pgn-mark { flex-basis: auto; }
+            .be-fact-label { min-width: 110px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- header injected by shared-theme.js -->
+    </div>
+    <div class="level-1-container bus-explorer">
+        <div class="be-title-row">
+            <h2>Bus Explorer</h2>
+            <span class="be-summary" id="beSummary">Loading…</span>
+            <span class="be-stale" id="beStale" role="status" hidden></span>
+            <span class="be-stale" id="beDisplayError" role="status" hidden></span>
+            <span class="be-node" id="beNode"></span>
+        </div>
+        <div id="beWarnings"></div>
+        <div id="beContent"></div>
+    </div>
+
+    <script>
+        const POLL_MS = 2000;
+        const FETCH_TIMEOUT_MS = 5000;
+
+        // Expanded rows, keyed by NAME when the device has one, otherwise by source address.
+        const expanded = new Set();
+        let lastSnapshot = null;
+        let lastOkAt = null;     // Date.now() of the last successful fetch
+        let lastError = null;    // message of the last failed fetch, or null
+        let displayError = null; // message of the last failed render, or null
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const app = document.getElementById('app');
+            app.innerHTML = createHeaderBar('bus-explorer');
+            initializeTheme();
+            poll();
+            setInterval(updateStatusLine, 1000);
+        });
+
+        // ---------------------------------------------------------------- helpers
+
+        /** Create an element; text goes in via textContent so device strings are never parsed as HTML. */
+        function el(tag, className, text) {
+            const e = document.createElement(tag);
+            if (className) e.className = className;
+            if (text !== undefined && text !== null) e.textContent = text;
+            return e;
+        }
+
+        function dash(value) {
+            return (value === null || value === undefined || value === '') ? '—' : String(value);
+        }
+
+        function plural(n, word) {
+            return `${n} ${word}${n === 1 ? '' : 's'}`;
+        }
+
+        function nameKey(n) {
+            return `n:${n.manufacturer_code}:${n.unique_number}:${n.industry_group}:${n.device_class}:${n.device_function}:${n.device_instance_lower}:${n.device_instance_upper}:${n.system_instance}`;
+        }
+
+        // The router's own row has a key of its own: a device conflicting with it shares its address.
+        function srcKey(d) { return d.is_self ? 'self' : `s:${d.source}`; }
+
+        function primaryKey(d) { return (d.name && !d.is_self) ? nameKey(d.name) : srcKey(d); }
+
+        /** Identifies one table row across refreshes, for restoring keyboard focus. */
+        function rowKey(d) { return `${primaryKey(d)}@${d.source}`; }
+
+        function isExpanded(d) {
+            return expanded.has(primaryKey(d)) || expanded.has(srcKey(d));
+        }
+
+        function toggleExpanded(d) {
+            if (isExpanded(d)) {
+                expanded.delete(primaryKey(d));
+                expanded.delete(srcKey(d));
+            } else {
+                expanded.add(primaryKey(d));
+            }
+            // The owner asked for this change: rebuild even if text is selected.
+            if (lastSnapshot) safeRender(lastSnapshot, true);
+        }
+
+        /** True when the owner has a non-empty text selection inside `container`. */
+        function hasSelectionIn(container) {
+            const sel = window.getSelection();
+            if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+            return container.contains(sel.getRangeAt(0).commonAncestorContainer);
+        }
+
+        /** Age in seconds as "0.4 s", "12 s", "5 min", "2 h". */
+        function formatAge(s) {
+            if (s === null || s === undefined) return '—';
+            if (s < 10) return `${s.toFixed(1)} s`;
+            if (s < 60) return `${Math.round(s)} s`;
+            if (s < 3600) return `${Math.floor(s / 60)} min`;
+            return `${Math.floor(s / 3600)} h`;
+        }
+
+        /** Rate as "N Hz" when the interval is below 1 s, otherwise "every N s". */
+        function formatRate(intervalS) {
+            if (intervalS === null || intervalS === undefined || intervalS <= 0) return '—';
+            if (intervalS < 1) {
+                const hz = 1 / intervalS;
+                return `${hz >= 10 ? Math.round(hz) : hz.toFixed(1)} Hz`;
+            }
+            const rounded = intervalS < 10 ? intervalS.toFixed(1) : String(Math.round(intervalS));
+            return `every ${rounded.replace(/\.0$/, '')} s`;
+        }
+
+        function identityText(d) {
+            switch (d.identity) {
+                case 'no_reply':  return 'unknown (asked, no reply)';
+                case 'not_asked': return d.status === 'address_conflict'
+                    ? 'unknown (not asked)'
+                    : 'unknown (listen-only)';
+                default:          return 'unknown (asking…)';
+            }
+        }
+
+        // ---------------------------------------------------------------- polling
+
+        /** Fetches one snapshot; a request that hangs for 5 s is aborted and counts as failed. */
+        async function fetchSnapshot() {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+            try {
+                const resp = await fetch('/api/bus/devices', {
+                    credentials: 'same-origin', cache: 'no-store', signal: controller.signal
+                });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const body = await resp.json();
+                if (body.status !== 'ok' || !body.data) throw new Error(body.error || 'bad response');
+                return body.data;
+            } catch (e) {
+                if (e && e.name === 'AbortError') throw new Error('no answer within 5 s');
+                throw e;
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+        async function poll() {
+            let snapshot = null;
+            try {
+                snapshot = await fetchSnapshot();
+                lastOkAt = Date.now();
+                lastError = null;
+            } catch (e) {
+                lastError = (e && e.message) ? e.message : 'request failed';
+                if (!lastSnapshot) {
+                    document.getElementById('beSummary').textContent = 'No data yet';
+                }
+            }
+            if (snapshot) {
+                lastSnapshot = snapshot;
+                safeRender(snapshot, false);
+            }
+            updateStatusLine();
+            setTimeout(poll, POLL_MS);
+        }
+
+        /** Renders; a failure is a page bug, reported as a display error, not a connection problem. */
+        function safeRender(snap, force) {
+            try {
+                render(snap, force);
+                displayError = null;
+            } catch (e) {
+                console.error('Bus explorer: rendering the snapshot failed', e);
+                displayError = (e && e.message) ? e.message : String(e);
+            }
+            updateStatusLine();
+        }
+
+        /** "N devices · updated N s ago" and the stale indicator; runs every second. */
+        function updateStatusLine() {
+            const stale = document.getElementById('beStale');
+            if (lastError) {
+                stale.hidden = false;
+                stale.textContent = lastOkAt
+                    ? `Connection problem (${lastError}), retrying — data is ${formatAge((Date.now() - lastOkAt) / 1000)} old`
+                    : `Cannot load bus data (${lastError}), retrying`;
+            } else {
+                stale.hidden = true;
+            }
+            const shown = document.getElementById('beDisplayError');
+            shown.hidden = !displayError;
+            shown.textContent = displayError ? `Display error (${displayError}) — see the browser console` : '';
+            if (!lastSnapshot) return;
+            const summary = document.getElementById('beSummary');
+            if (!lastSnapshot.can_enabled) {
+                summary.textContent = 'CAN disabled';
+                return;
+            }
+            const age = Math.max(0, Math.round((Date.now() - lastOkAt) / 1000));
+            summary.textContent = `${plural(lastSnapshot.devices.length, 'device')} · updated ${age} s ago`;
+        }
+
+        // ---------------------------------------------------------------- rendering
+
+        /**
+         * Rebuilds the page from `snap`. A section holding a text selection the owner is making
+         * (e.g. copying a serial number) is left alone unless `force`; the next poll catches up.
+         * Keyboard focus on a device row moves to the same row in the rebuilt table.
+         */
+        function render(snap, force) {
+            renderNode(snap);
+            const warnings = document.getElementById('beWarnings');
+            if (force || !hasSelectionIn(warnings)) renderWarnings(snap);
+            const content = document.getElementById('beContent');
+            if (!force && hasSelectionIn(content)) return;
+
+            const active = document.activeElement;
+            const focusKey = (active && content.contains(active)) ? active.dataset.key : null;
+            if (!snap.can_enabled) {
+                content.replaceChildren(el('div', 'be-message', 'CAN disabled — the router is not listening to the NMEA2000 bus (can.enabled is false).'));
+            } else if (snap.devices.length === 0) {
+                content.replaceChildren(el('div', 'be-message', 'No device heard on the bus yet.'));
+            } else {
+                content.replaceChildren(buildTable(snap.devices));
+            }
+            if (focusKey) {
+                const row = Array.from(content.querySelectorAll('.be-dev-row')).find(r => r.dataset.key === focusKey);
+                if (row) row.focus({ preventScroll: true });
+            }
+        }
+
+        function renderNode(snap) {
+            const node = snap.node;
+            let text = '';
+            if (snap.can_enabled && node) {
+                text = `Router node: ${node.state}`;
+                if (node.own_address !== null && node.own_address !== undefined) {
+                    text += ` · address ${node.own_address}`;
+                }
+            }
+            document.getElementById('beNode').textContent = text;
+        }
+
+        function renderWarnings(snap) {
+            const box = document.getElementById('beWarnings');
+            const list = snap.can_enabled ? (snap.warnings || []) : [];
+            const ordered = list.filter(w => w.level === 'red').concat(list.filter(w => w.level !== 'red'));
+            box.replaceChildren(...ordered.map(w => {
+                const b = el('div', w.level === 'red' ? 'be-banner' : 'be-banner amber');
+                const icon = el('span');
+                icon.innerHTML = ICON_MAP['warn'];   // static markup from shared-theme.js
+                b.appendChild(icon);
+                b.appendChild(el('span', null, w.message));
+                return b;
+            }));
+        }
+
+        function buildTable(devices) {
+            const wrap = el('div', 'be-table-wrap');
+            const table = el('table', 'be-table');
+            const head = el('tr');
+            [['Src', ''], ['Manufacturer / Model', ''], ['Class', 'be-col-class'], ['SW', 'be-col-sw'],
+             ['Last heard', ''], ['Router', '']].forEach(([label, cls]) => head.appendChild(el('th', cls, label)));
+            table.appendChild(el('thead')).appendChild(head);
+
+            const body = el('tbody');
+            devices.forEach(d => {
+                body.appendChild(buildDeviceRow(d));
+                if (isExpanded(d)) body.appendChild(buildDetailRow(d));
+            });
+            table.appendChild(body);
+            wrap.appendChild(table);
+            return wrap;
+        }
+
+        function buildDeviceRow(d) {
+            const open = isExpanded(d);
+            const moved = d.moved_to !== null && d.moved_to !== undefined;
+            const tr = el('tr', 'be-dev-row' + (open ? ' open' : '') + (d.status === 'gone' ? ' gone' : '') + (moved ? ' moved' : ''));
+            tr.dataset.key = rowKey(d);
+            tr.tabIndex = 0;
+            tr.setAttribute('role', 'button');
+            tr.setAttribute('aria-expanded', open ? 'true' : 'false');
+            tr.addEventListener('click', () => {
+                // The click that ends a drag-selection inside the row is not a toggle.
+                if (hasSelectionIn(tr)) return;
+                toggleExpanded(d);
+            });
+            tr.addEventListener('keydown', ev => {
+                if (ev.key === 'Enter' || ev.key === ' ') {
+                    ev.preventDefault();
+                    toggleExpanded(d);
+                }
+            });
+
+            const src = el('td', 'be-num');
+            src.appendChild(el('span', 'be-chevron', '▸'));
+            src.appendChild(document.createTextNode(String(d.source)));
+            tr.appendChild(src);
+
+            // Manufacturer / Model (partial identity is shown as far as it is known)
+            const who = el('td');
+            const parts = [d.manufacturer, d.model].filter(Boolean);
+            if (parts.length > 0) {
+                who.textContent = parts.join(' ');
+                if (d.identity !== 'known') who.appendChild(el('span', 'be-dim', ' · ' + identityText(d)));
+            } else {
+                who.className = 'be-dim';
+                who.textContent = identityText(d);
+            }
+            tr.appendChild(who);
+
+            tr.appendChild(el('td', 'be-col-class' + (d.device_class ? '' : ' be-dim'), dash(d.device_class)));
+            tr.appendChild(el('td', 'be-col-sw be-num' + (d.software_version ? '' : ' be-dim'), dash(d.software_version)));
+
+            const heard = el('td', 'be-num');
+            if (d.last_heard_s === null || d.last_heard_s === undefined) {
+                heard.className += ' be-dim';
+                heard.textContent = '—';
+            } else if (d.status === 'gone') {
+                heard.className += ' be-bad';
+                heard.textContent = `${formatAge(d.last_heard_s)} ago`;
+            } else {
+                heard.className += ' be-ok';
+                heard.textContent = formatAge(d.last_heard_s);
+            }
+            tr.appendChild(heard);
+
+            tr.appendChild(buildRouterCell(d, moved));
+            return tr;
+        }
+
+        function buildRouterCell(d, moved) {
+            if (d.status === 'address_conflict') return el('td', 'be-bad', 'address conflict');
+            if (moved) return el('td', 'be-warn', `moved to src ${d.moved_to}`);
+            switch (d.status) {
+                case 'in_use':   return el('td', 'be-ok', 'in use');
+                case 'not_used': return el('td', 'be-dim', 'not used');
+                case 'dropped':  return el('td', 'be-bad', 'dropped');
+                case 'gone':     return el('td', 'be-warn', 'gone');
+                default:         return el('td', 'be-dim', '—');   // the router itself
+            }
+        }
+
+        function buildDetailRow(d) {
+            const tr = el('tr', 'be-detail-row');
+            const td = el('td');
+            td.colSpan = 6;
+
+            if (!d.is_self) {
+                td.appendChild(el('h4', 'be-section-title', 'PGNs'));
+                td.appendChild(buildPgnTable(d));
+            }
+
+            td.appendChild(el('h4', 'be-section-title', 'NAME'));
+            td.appendChild(buildFacts(nameFacts(d.name)));
+
+            if (d.product) {
+                const title = el('h4', 'be-section-title', 'Product information');
+                title.style.marginTop = '14px';
+                td.appendChild(title);
+                td.appendChild(buildFacts(productFacts(d.product)));
+            }
+            tr.appendChild(td);
+            return tr;
+        }
+
+        function buildPgnTable(d) {
+            if (!d.pgns || d.pgns.length === 0) {
+                const none = el('div', 'be-dim', 'No PGN seen from this device.');
+                none.style.marginBottom = '14px';
+                return none;
+            }
+            const list = el('div', 'be-pgn-list');
+            const head = el('div', 'be-pgn-row be-pgn-head');
+            head.appendChild(el('span', 'be-pgn-num', 'PGN'));
+            head.appendChild(el('span', 'be-pgn-name', 'Name'));
+            head.appendChild(el('span', 'be-pgn-rate', 'Rate'));
+            head.appendChild(el('span', 'be-pgn-mark', 'Router'));
+            list.appendChild(head);
+
+            d.pgns.slice().sort((a, b) => a.pgn - b.pgn).forEach(p => {
+                const row = el('div', 'be-pgn-row');
+                row.appendChild(el('span', 'be-pgn-num', String(p.pgn)));
+                row.appendChild(el('span', 'be-pgn-name' + (p.name ? '' : ' be-dim'), p.name || '(unnamed)'));
+                row.appendChild(el('span', 'be-pgn-rate', formatRate(p.interval_s)));
+                if (p.blocked) {
+                    // Rejected from every source on purpose (configured source 255): not a problem.
+                    row.appendChild(el('span', 'be-pgn-mark be-dim', '⊘ blocked'));
+                } else if (!p.accepted) {
+                    row.appendChild(el('span', 'be-pgn-mark be-bad', '✗ dropped'));
+                } else if (p.used) {
+                    row.appendChild(el('span', 'be-pgn-mark be-ok', '✓ used'));
+                } else {
+                    row.appendChild(el('span', 'be-pgn-mark be-dim', 'not used'));
+                }
+                const others = p.also_accepted_from || [];
+                if (others.length > 0) {
+                    row.appendChild(el('span', 'be-pgn-note be-warn', `also accepted from src ${others.join(', ')}`));
+                }
+                list.appendChild(row);
+            });
+            return list;
+        }
+
+        function buildFacts(rows) {
+            const grid = el('div', 'be-facts');
+            rows.forEach(([label, value]) => {
+                const f = el('div', 'be-fact');
+                f.appendChild(el('span', 'be-fact-label', label));
+                f.appendChild(el('span', 'be-fact-value', dash(value)));
+                grid.appendChild(f);
+            });
+            return grid;
+        }
+
+        function nameFacts(n) {
+            if (!n) return [['Identity', 'NAME not received yet']];
+            return [
+                ['Unique number', n.unique_number],
+                ['Manufacturer', `${n.manufacturer} (${n.manufacturer_code})`],
+                ['Device function', `${n.device_function_name} (${n.device_function})`],
+                ['Device class', `${n.device_class_name} (${n.device_class})`],
+                ['Device instance', `${n.device_instance_lower} / ${n.device_instance_upper}`],
+                ['System instance', n.system_instance],
+                ['Industry group', n.industry_group],
+                ['Arbitrary address', n.arbitrary_address_capable ? 'capable' : 'not capable']
+            ];
+        }
+
+        function productFacts(p) {
+            return [
+                ['Model ID', p.model_id],
+                ['Software version', p.software_version],
+                ['Model version', p.model_version],
+                ['Serial code', p.serial_code],
+                ['Product code', p.product_code],
+                ['NMEA2000 version', p.nmea2000_version],
+                ['Certification level', p.certification_level],
+                ['Load equivalency', p.load_equivalency]
+            ];
+        }
+    </script>
+</body>
+</html>

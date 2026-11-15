@@ -9,6 +9,11 @@
         "126992": 22,
         "129029": 0
       }
+    },
+    "node": {
+      "transmit_enabled": true,
+      "preferred_address": 100,
+      "unique_number": 271828
     }
   },
   "logging": {

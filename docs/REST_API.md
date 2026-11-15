@@ -430,6 +430,64 @@ Recently seen AIS targets from the in-memory cache.
 
 ---
 
+### Get Bus Devices
+
+Snapshot of every device seen on the NMEA2000 bus (the bus explorer registry), with its identity, the PGNs it sends and whether the router uses them. Read-only: also served when `web.read_only` is true.
+
+**Endpoint**: `GET /api/bus/devices`
+
+**Response** (`data` is an object):
+```json
+{
+  "can_enabled": true,
+  "uptime_s": 3600.5,
+  "node": { "transmit_enabled": true, "own_address": 100, "state": "claimed" },
+  "warnings": [
+    {
+      "level": "red", "pgn": 129025, "configured_source": 12,
+      "actual_sources": [7], "message": "..."
+    }
+  ],
+  "devices": [
+    {
+      "source": 7, "is_self": false,
+      "status": "in_use", "last_heard_s": 0.4,
+      "manufacturer": "Raymarine", "model": "p70s", "device_class": "...", "device_function": "...",
+      "software_version": "1.2.3", "identity": "known", "moved_to": null,
+      "name": { "unique_number": 123456, "manufacturer_code": 1851, "manufacturer": "Raymarine",
+                "device_instance_lower": 0, "device_instance_upper": 0,
+                "device_function": 130, "device_function_name": "...",
+                "device_class": 60, "device_class_name": "...",
+                "system_instance": 0, "industry_group": 4, "arbitrary_address_capable": true },
+      "product": { "nmea2000_version": 2100, "product_code": 1234, "model_id": "p70s",
+                   "software_version": "1.2.3", "model_version": "...", "serial_code": "...",
+                   "certification_level": 1, "load_equivalency": 1 },
+      "pgns": [
+        { "pgn": 129025, "name": "Position, Rapid Update", "interval_s": 0.1, "last_seen_s": 0.1,
+          "accepted": true, "blocked": false, "used": true, "also_accepted_from": [] }
+      ]
+    }
+  ]
+}
+```
+- `can_enabled`: mirrors `can.enabled`. When `false` the router listens to nothing, so `devices` is empty.
+- `uptime_s`: seconds since the registry was created (router start).
+- `node.state`: the router's own NMEA2000 node state (`disabled`, `listening`, `claiming`, `claimed`, `cannot_claim` or `name_conflict`); `own_address` is `null` until an address is claimed.
+- `warnings`: configuration problems visible in the traffic (`level` is `red` or `amber`). Withheld until the router has been listening on the bus (CAN socket open) for 60 s, so the list is empty then. The exception is the red address-conflict warning, reported at once: `Another device is transmitting from the router's address N.` (`pgn` is 60928, `configured_source` is `null`, `actual_sources` is `[N]`).
+- `devices` are sorted by `source`. `status` is one of:
+  - `in_use`: at least one of its PGNs was accepted and used within 60 s;
+  - `not_used`: heard, but nothing it sends is used;
+  - `dropped`: within 60 s the filter rejected a PGN from it because `pgn_source_map` expects that PGN from another source (PGNs blocked with source 255 do not count);
+  - `gone`: nothing heard for more than 60 s;
+  - `self`: the router's own row, which has no `last_heard_s` and no `pgns`;
+  - `address_conflict`: another device heard within 60 s transmitting from the router's own address. It is listed right after the `self` row with the same `source`.
+- `identity` is `known`, `asking`, `no_reply` (asked four times, never answered) or `not_asked` (unknown, and the router does not ask: node state `disabled`, `cannot_claim` or `name_conflict`, or an `address_conflict` row, since the router never sends requests to its own address). `moved_to` is set when the same NAME later claimed another address.
+- `manufacturer`, `model`, `device_class`, `device_function`, `software_version`, `name`, `product` are `null` until the device has answered the identity requests; `pgn.name` is `null` for PGNs without a known name.
+- `pgn.accepted` is whether the filter accepted the last message of that PGN. `pgn.blocked` is `true` when it was rejected because `pgn_source_map` sets that PGN to 255 (rejected from every source on purpose).
+- Ages and intervals are seconds. `also_accepted_from` lists other sources whose same PGN was accepted and used within 60 s, only when this source's PGN is itself accepted and used (the router is mixing sources).
+
+---
+
 ## Trip Editing
 
 All endpoints in this section are **[write]**.

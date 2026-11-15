@@ -1,6 +1,9 @@
 use std::fmt;
 
+use super::pgn59904::IsoRequest;
+use super::pgn60928::AddressClaim;
 use super::pgn126992::NMEASystemTime;
+use super::pgn126996::ProductInformation;
 use super::pgn127250::VesselHeading;
 use super::pgn127251::RateOfTurn;
 use super::pgn127257::Attitude;
@@ -36,7 +39,10 @@ fn format_data_bytes(data: &[u8]) -> String {
 // Enum to hold any decoded message type
 #[derive(Debug, Clone)]
 pub enum N2kMessage {
+    IsoRequest(IsoRequest),
+    AddressClaim(AddressClaim),
     NMEASystemTime(NMEASystemTime),
+    ProductInformation(ProductInformation),
     VesselHeading(VesselHeading),
     RateOfTurn(RateOfTurn),
     Attitude(Attitude),
@@ -67,8 +73,17 @@ pub enum N2kMessage {
 impl N2kMessage {
     pub fn from_pgn(pgn: u32, data: &[u8]) -> Self {
         match pgn {
+            59904 => IsoRequest::from_bytes(data)
+                .map(N2kMessage::IsoRequest)
+                .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
+            60928 => AddressClaim::from_bytes(data)
+                .map(N2kMessage::AddressClaim)
+                .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
             126992 => NMEASystemTime::from_bytes(data)
                 .map(N2kMessage::NMEASystemTime)
+                .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
+            126996 => ProductInformation::from_bytes(data)
+                .map(N2kMessage::ProductInformation)
                 .unwrap_or(N2kMessage::Unknown(pgn, data.to_vec())),
             127250 => VesselHeading::from_bytes(data)
                 .map(N2kMessage::VesselHeading)
@@ -150,7 +165,10 @@ impl N2kMessage {
 impl fmt::Display for N2kMessage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            N2kMessage::IsoRequest(msg) => write!(f, "{}", msg),
+            N2kMessage::AddressClaim(msg) => write!(f, "{}", msg),
             N2kMessage::NMEASystemTime(msg) => write!(f, "{}", msg),
+            N2kMessage::ProductInformation(msg) => write!(f, "{}", msg),
             N2kMessage::VesselHeading(msg) => write!(f, "{}", msg),
             N2kMessage::RateOfTurn(msg) => write!(f, "{}", msg),
             N2kMessage::Attitude(msg) => write!(f, "{}", msg),
@@ -179,5 +197,36 @@ impl fmt::Display for N2kMessage {
                 write!(f, "      Raw data: [{}]", format_data_bytes(data))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_pgn_decodes_iso_request_and_address_claim() {
+        assert!(matches!(
+            N2kMessage::from_pgn(59904, &[0x14, 0xF0, 0x01]),
+            N2kMessage::IsoRequest(r) if r.requested_pgn == 126996
+        ));
+        assert!(matches!(
+            N2kMessage::from_pgn(60928, &[0x58, 0x87, 0xb0, 0x2f, 0x00, 0x82, 0xaa, 0xc0]),
+            N2kMessage::AddressClaim(c) if c.name.manufacturer_code == 381
+        ));
+        // Malformed frames fall back to Unknown rather than panicking
+        assert!(matches!(N2kMessage::from_pgn(60928, &[0u8; 7]), N2kMessage::Unknown(60928, _)));
+        assert!(matches!(N2kMessage::from_pgn(59904, &[0u8; 2]), N2kMessage::Unknown(59904, _)));
+    }
+
+    #[test]
+    fn from_pgn_decodes_product_information() {
+        let mut b = vec![0xFFu8; 134];
+        b[4..10].copy_from_slice(b"CORTEX");
+        assert!(matches!(
+            N2kMessage::from_pgn(126996, &b),
+            N2kMessage::ProductInformation(p) if p.model_id == "CORTEX"
+        ));
+        assert!(matches!(N2kMessage::from_pgn(126996, &[0u8; 133]), N2kMessage::Unknown(126996, _)));
     }
 }

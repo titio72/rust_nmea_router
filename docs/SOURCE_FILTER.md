@@ -68,6 +68,10 @@ To accept messages from all sources, use an empty map or omit the `source_filter
 }
 ```
 
+## Checking the filter
+
+Open the **Bus Explorer** page (`/bus-explorer.html`) to see which devices are on the bus and which PGNs each one sends. Every PGN row is marked as used by the router, dropped by the filter, blocked, or not used. "Blocked" is a PGN configured with source 255 (reject every source): a deliberate choice, so it is shown neutrally and never makes a device "dropped". When a PGN in `pgn_source_map` is silent from its configured source while another source sends it, the page shows a red banner such as "Position, Rapid Update (129025) arrives only from src 41, but the filter expects src 22 — it is being dropped." A configured source of 255 is never reported. Warnings appear once the router has been listening on the bus for 60 s. If one PGN is accepted from two sources at once, its row shows "also accepted from src N". See `docs/REST_API.md` (`GET /api/bus/devices`) for the data behind the page.
+
 ## Implementation Details
 
 - The filter is applied after CAN frame assembly but before message-specific processing

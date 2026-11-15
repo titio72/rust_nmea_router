@@ -26,6 +26,8 @@ use super::broadcast_manager::get_signalk_channels;
 
 const MIN_PASSWORD_LEN: usize = 12;
 
+// Each argument is an independent piece of shared state wired in from `main`.
+#[allow(clippy::too_many_arguments)]
 pub async fn start_web_server(
     db: Arc<RwLock<VesselDatabase>>,
     config: Arc<Config>,
@@ -33,6 +35,7 @@ pub async fn start_web_server(
     port: u16,
     udp_broadcast_available: bool,
     health: crate::health::HealthHandle,
+    bus_registry: crate::bus_explorer::SharedBusRegistry,
     startup_signal: std::sync::mpsc::Sender<Result<(), String>>,
 ) -> Result<(), crate::error::AppError> {
     match config.web.auth_password.as_deref() {
@@ -92,6 +95,7 @@ pub async fn start_web_server(
         land_mask,
         udp_broadcast_available,
         health: health.clone(),
+        bus_registry,
     };
 
     tokio::spawn(async {

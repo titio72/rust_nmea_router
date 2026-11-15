@@ -22,6 +22,7 @@ use crate::environmental_status_handler::EnvironmentalStatusHandler;
 use crate::frame_filter::{should_process_frame_by_id, should_process_n2k_message};
 use crate::health::{DbKind, HealthHandle, Stream};
 use crate::ais_target_cache::AisTargetCache;
+use crate::bus_explorer::{BusExplorer, SharedBusRegistry, TxReport};
 use crate::signalk_broadcaster::SignalKBroadcaster;
 use crate::time_monitor::TimeSyncStatus;
 use crate::udp_broadcaster::UdpBroadcaster;
@@ -35,6 +36,31 @@ fn read_db(vessel_db: &Arc<RwLock<VesselDatabase>>) -> std::sync::RwLockReadGuar
         warn!("VesselDatabase RwLock was poisoned; recovering inner value");
         poisoned.into_inner()
     })
+}
+
+/// Minimum spacing between two "CAN write failed" warnings.
+const TX_WARN_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Adds one transmit report to the metrics. Backpressure is counted apart from errors: it only
+/// delays frames, it never loses them.
+fn record_tx(metrics: &mut AppMetrics, report: &TxReport) {
+    metrics.can_tx_frames += report.written;
+    if report.backpressure {
+        metrics.can_tx_backpressure += 1;
+    }
+    if report.failure.is_some() {
+        metrics.can_tx_errors += 1;
+    }
+}
+
+/// Rate limiter for the transmit-failure warning: true (and records `now`) at most once per
+/// [`TX_WARN_INTERVAL`].
+fn tx_warn_due(last: &mut Option<Instant>, now: Instant) -> bool {
+    if last.is_some_and(|t| now.saturating_duration_since(t) < TX_WARN_INTERVAL) {
+        return false;
+    }
+    *last = Some(now);
+    true
 }
 
 /// Map an assembled message to the stream the health monitor tracks, if any.
@@ -115,6 +141,10 @@ pub struct RouterLoop {
     health: HealthHandle,
     // Last observed moored state, used by "Auto On" to detect moored -> moving edges
     last_moored: Option<bool>,
+    // Bus explorer: observes every frame, transmits the router's own node traffic
+    bus_explorer: BusExplorer,
+    // When the last "CAN write failed" warning was logged (rate limit)
+    last_tx_warn: Option<Instant>,
 }
 
 /// Records the latest moored state and reports whether it just flipped from moored to
@@ -144,6 +174,7 @@ impl RouterLoop {
         metrics_logger: MetricsLogger,
         db_health_check: HealthCheckManager,
         health: HealthHandle,
+        bus_explorer: BusExplorer,
     ) -> Self {
         Self {
             socket,
@@ -163,6 +194,8 @@ impl RouterLoop {
             db_health_check,
             health,
             last_moored: None,
+            bus_explorer,
+            last_tx_warn: None,
         }
     }
 
@@ -171,13 +204,20 @@ impl RouterLoop {
     pub fn run(&mut self) -> ! {
         loop {
             self.health.record_heartbeat(Instant::now());
+            // Bus explorer transmit, at the top so it runs on every iteration: the `continue`s
+            // below for filtered frames skip the periodic section at the bottom, and the node
+            // needs a steady cadence (claim settle timing, stall detection).
+            self.transmit_outgoing(Instant::now());
             match CanBus::read_nmea2k_frame(&self.socket) {
                 Ok((extended_id, data)) => {
                     self.metrics.can_frames += 1;
                     self.health.record_frame(Instant::now());
 
                     let id = Identifier::from_can_id(extended_id);
-                    if !should_process_frame_by_id(&self.config, id) {
+                    let accepted = should_process_frame_by_id(&self.config, id);
+                    // The explorer sees every frame, including the ones the filter drops.
+                    self.bus_explorer.on_frame(extended_id, &data, accepted, Instant::now());
+                    if !accepted {
                         continue;
                     }
 
@@ -185,6 +225,7 @@ impl RouterLoop {
 
                     if let Some(n2k_frame) = self.reader.process_frame(extended_id, &data) {
                         self.metrics.nmea_messages += 1;
+                        self.bus_explorer.on_decoded(&n2k_frame, Instant::now());
 
                         if !should_process_n2k_message(&self.config, &n2k_frame.message) {
                             continue;
@@ -323,6 +364,27 @@ impl RouterLoop {
  
     // ── Private helpers ──────────────────────────────────────────────────────
 
+    /// Writes the bus explorer's outgoing frames. A full transmit queue (`ENOBUFS`/`WouldBlock`)
+    /// is backpressure: the explorer keeps the frames and retries on the next iteration. Any other
+    /// write error is counted, warned about at most once a minute, and drops the queued frames; it
+    /// never reopens the socket. The 10 ms write timeout bounds a write on a full socket buffer.
+    fn transmit_outgoing(&mut self, now: Instant) {
+        let socket = &self.socket;
+        let report = self
+            .bus_explorer
+            .transmit(now, |f| CanBus::write_nmea2k_frame(socket, f.id, &f.data));
+        record_tx(&mut self.metrics, &report);
+        if let Some((e, dropped)) = &report.failure {
+            if tx_warn_due(&mut self.last_tx_warn, now) {
+                warn!(
+                    "CAN write failed ({}); dropped {} queued frame(s). Further write errors are \
+                     counted in the metrics and logged at most once a minute",
+                    e, dropped
+                );
+            }
+        }
+    }
+
     fn update_signalk_time_sync_status(&mut self, sync: &crate::time_monitor::TimeSyncStatusAndSkew) {
         let status_str = match sync.status {
             TimeSyncStatus::Synchronized => "synced".to_string(),
@@ -441,6 +503,7 @@ pub fn run_can_pipeline(
     ais_target_cache: Arc<Mutex<AisTargetCache>>,
     udp_broadcaster: UdpBroadcaster,
     health: HealthHandle,
+    bus_registry: SharedBusRegistry,
 ) -> ! {
     let interface = &config.can.interface;
     info!("Opening CAN interface: {}", interface);
@@ -507,6 +570,9 @@ pub fn run_can_pipeline(
         config.signalk.vessel_uuid.clone(),
     );
 
+    // Created last, right before the loop starts reading: the node's 2 s listen window starts here.
+    let bus_explorer = BusExplorer::new(bus_registry, &config.can.node, Instant::now());
+
     RouterLoop::new(
         socket,
         reader,
@@ -524,8 +590,43 @@ pub fn run_can_pipeline(
         metrics_logger,
         db_health_check,
         health,
+        bus_explorer,
     )
     .run()
+}
+
+#[cfg(test)]
+mod transmit_tests {
+    use super::{record_tx, tx_warn_due, TX_WARN_INTERVAL};
+    use crate::app_metrics::AppMetrics;
+    use crate::bus_explorer::TxReport;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn backpressure_is_not_an_error() {
+        let mut metrics = AppMetrics::new();
+        record_tx(&mut metrics, &TxReport { written: 5, backpressure: true, failure: None });
+        assert_eq!((metrics.can_tx_frames, metrics.can_tx_backpressure, metrics.can_tx_errors), (5, 1, 0));
+    }
+
+    #[test]
+    fn failure_is_counted_as_error() {
+        let mut metrics = AppMetrics::new();
+        let failure = Some((std::io::Error::from_raw_os_error(100), 15));
+        record_tx(&mut metrics, &TxReport { written: 5, backpressure: false, failure });
+        assert_eq!((metrics.can_tx_frames, metrics.can_tx_backpressure, metrics.can_tx_errors), (5, 0, 1));
+    }
+
+    #[test]
+    fn tx_warning_rate_limited_to_once_a_minute() {
+        let t0 = Instant::now();
+        let mut last = None;
+        assert!(tx_warn_due(&mut last, t0));
+        assert!(!tx_warn_due(&mut last, t0 + Duration::from_secs(1)));
+        assert!(!tx_warn_due(&mut last, t0 + TX_WARN_INTERVAL - Duration::from_millis(1)));
+        assert!(tx_warn_due(&mut last, t0 + TX_WARN_INTERVAL));
+        assert!(!tx_warn_due(&mut last, t0 + TX_WARN_INTERVAL + Duration::from_secs(1)));
+    }
 }
 
 #[cfg(test)]

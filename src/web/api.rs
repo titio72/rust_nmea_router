@@ -21,6 +21,8 @@ use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn, Span};
 
 use crate::ais_target_cache::{AisTargetCache, AisTargetData};
+use crate::bus_explorer::snapshot::{build_snapshot, BusSnapshot};
+use crate::bus_explorer::SharedBusRegistry;
 use crate::config::Config;
 use crate::db::operations::sync::{
     classify_uuids_to_push, compute_uuids_to_push, SyncManifestPayload, SyncManifestResult,
@@ -54,6 +56,8 @@ pub struct AppState {
     pub udp_broadcast_available: bool,
     /// Shared health monitor; evaluated on every `/api/health` request.
     pub health: crate::health::HealthHandle,
+    /// NMEA2000 device registry written by the CAN loop; read by `/api/bus/devices`.
+    pub bus_registry: SharedBusRegistry,
 }
 
 impl AppState {
@@ -1033,6 +1037,21 @@ pub async fn get_health(State(state): State<AppState>) -> impl IntoResponse {
     let status = StatusCode::from_u16(report.http_status_code())
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (status, Json(report))
+}
+
+/// GET /api/bus/devices — every device seen on the NMEA2000 bus, with identity, PGNs and status.
+pub async fn get_bus_devices(State(state): State<AppState>) -> Json<ApiResponse<BusSnapshot>> {
+    // The guard is dropped at the end of the block, before the response is returned.
+    let snapshot = {
+        let reg = state.bus_registry.lock().unwrap_or_else(|e| e.into_inner());
+        build_snapshot(
+            &reg,
+            &state.config.can.source_filter,
+            state.config.can.enabled,
+            std::time::Instant::now(),
+        )
+    };
+    Json(ApiResponse::ok(snapshot))
 }
 
 pub async fn get_tracking_status(
@@ -2256,6 +2275,7 @@ pub fn create_api_router(state: AppState) -> Router {
         .route("/heatmap", get(get_heatmap))
         .route("/nav_analysis", get(get_nav_analysis))
         .route("/ais_targets", get(get_ais_targets))
+        .route("/bus/devices", get(get_bus_devices))
         .route("/config/read_only", get(get_read_only))
         .route("/config/capabilities", get(get_capabilities))
         .route("/sync/status", get(get_sync_status))
@@ -2360,7 +2380,22 @@ mod tests {
         create_test_app_with_cache(crate::ais_target_cache::new_ais_cache())
     }
 
+    /// A fresh bus registry that is not listening on the bus yet, so every warning is withheld.
+    fn fresh_bus_registry() -> SharedBusRegistry {
+        crate::bus_explorer::new_shared_registry(
+            std::time::Instant::now(),
+            &crate::config::NodeConfig::default(),
+        )
+    }
+
     fn create_test_app_with_cache(ais_cache: Arc<std::sync::Mutex<AisTargetCache>>) -> Router {
+        create_test_app_with(ais_cache, fresh_bus_registry())
+    }
+
+    fn create_test_app_with(
+        ais_cache: Arc<std::sync::Mutex<AisTargetCache>>,
+        bus_registry: SharedBusRegistry,
+    ) -> Router {
         let db = create_test_db();
         let config = crate::config::Config::new_default_instance();
         let signalk_broadcast = Arc::new(SignalKBroadcastChannels::new());
@@ -2371,6 +2406,7 @@ mod tests {
             backup_in_progress: Arc::new(AtomicBool::new(false)),
             jwt_secret: Arc::new(JwtSecret::generate()),
             ais_cache,
+            bus_registry,
             poller_status: Arc::new(std::sync::Mutex::new(
                 crate::forecast_poller::ForecastPollerStatus::default(),
             )),
@@ -3088,6 +3124,48 @@ mod tests {
         }
     }
 
+    async fn get_json(app: Router, uri: &str) -> (StatusCode, serde_json::Value) {
+        let response = app
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_get_bus_devices_empty() {
+        // Served in both modes: the endpoint is read-only.
+        for app in [create_test_app(), create_test_app_read_only()] {
+            let (status, json) = get_json(app, "/bus/devices").await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(json["status"], "ok");
+            assert!(json["data"]["devices"].as_array().unwrap().is_empty());
+            // Not listening on the bus yet: the registry raises no warnings.
+            assert!(json["data"]["warnings"].as_array().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_bus_devices_lists_device() {
+        let registry = fresh_bus_registry();
+        registry
+            .lock()
+            .unwrap()
+            .observe_message(5, 129025, true, std::time::Instant::now());
+        let app = create_test_app_with(crate::ais_target_cache::new_ais_cache(), registry);
+        let (status, json) = get_json(app, "/bus/devices").await;
+        assert_eq!(status, StatusCode::OK);
+        let devices = json["data"]["devices"].as_array().unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0]["source"], 5);
+        assert_eq!(devices[0]["status"], "not_used");
+        assert_eq!(devices[0]["pgns"][0]["blocked"], false);
+    }
+
     #[tokio::test]
     async fn test_get_tracking_status() {
         let app = create_test_app();
@@ -3435,6 +3513,7 @@ mod tests {
         let config = Arc::new(crate::config::Config::load_for_context(None).unwrap());
         let signalk_broadcast = Arc::new(SignalKBroadcastChannels::new());
         let state = AppState {
+            bus_registry: fresh_bus_registry(),
             db: db.clone(),
             config,
             signalk_broadcast,
@@ -3470,6 +3549,7 @@ mod tests {
                 crate::forecast_poller::ForecastPollerStatus::default(),
             )),
             polars,
+            bus_registry: fresh_bus_registry(),
             land_mask: None,
             udp_broadcast_available: true,
             health: crate::health::HealthHandle::new(crate::config::HealthConfig::default(), true, std::time::Instant::now()),
@@ -4300,6 +4380,7 @@ mod tests {
         config.web.read_only = true;
         let signalk_broadcast = Arc::new(SignalKBroadcastChannels::new());
         let state = AppState {
+            bus_registry: fresh_bus_registry(),
             db: Arc::new(RwLock::new(db)),
             config: Arc::new(config),
             signalk_broadcast,

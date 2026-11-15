@@ -42,6 +42,8 @@
 pub mod pgns;
 pub mod stream_reader;
 pub mod message_handler;
+pub mod n2k_id;
+pub mod fast_packet_writer;
 
 /// CAN bus I/O.
 ///
@@ -56,7 +58,8 @@ pub mod canbus;
 pub mod canbus;
 
 // Re-export commonly used types
-pub use stream_reader::{N2kStreamReader, N2kFrame};
+pub use stream_reader::{N2kStreamReader, N2kFrame, is_fast_packet_pgn};
+pub use fast_packet_writer::encode_fast_packet;
 pub use message_handler::MessageHandler;
 pub use pgns::N2kMessage;
 pub use canbus as CanBus;

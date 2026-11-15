@@ -341,6 +341,7 @@ Notable configuration sections:
 | `signalk` | `enabled`, `rate_limit_ms`, `vessel_uuid` |
 | `udp` | `enabled`, `address`, `bind_address` |
 | `source_filter` | Per-PGN source address whitelist |
+| `can.node` | Router identity on the bus (bus explorer): `transmit_enabled`, `preferred_address`, `unique_number` |
 | `logging` | `directory`, `file_prefix`, `level` |
 
 ---

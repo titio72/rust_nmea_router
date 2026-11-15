@@ -91,7 +91,13 @@ For real CAN interface:
 
 ```bash
 sudo ip link set can0 up type can bitrate 250000
+sudo ip link set can0 txqueuelen 100
 ```
+
+The longer transmit queue matters when `can.node.transmit_enabled` is on: the bus explorer answers
+Product Information requests with a 20-frame fast packet, and Linux defaults to a 10-frame queue.
+With the default queue the router still works, but the reply goes out more slowly, across several
+loop iterations (counted as `CAN TX backpressure` in the metrics log).
 
 ## Configuration
 

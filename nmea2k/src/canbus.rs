@@ -8,6 +8,7 @@ pub use crate::stream_reader::N2kFrame;
 pub use socketcan::CanSocket;
 
 const CAN_CONNECTION_RETRY_INTERVAL_SECS: u64 = 5; // Interval between CAN connection retries
+const CAN_WRITE_TIMEOUT_MS: u64 = 10; // Longest a frame write may block
 
 /// Opens a CAN socket with automatic retry on failure
 ///
@@ -46,6 +47,13 @@ pub fn configure_nmea2k_socket(socket: &mut CanSocket) -> Result<(), Box<dyn Err
     // Set read timeout to prevent blocking indefinitely
     // This allows metrics logging and health checks to run even with no CAN activity
     socket.set_read_timeout(Duration::from_millis(500))?;
+    // The write timeout bounds how long a write may block on a full socket send buffer. A full
+    // device/qdisc queue (txqueuelen, default 10 frames) returns ENOBUFS immediately instead;
+    // callers handle that as backpressure. Transmitting is optional, so failing to set the
+    // timeout is logged, not fatal.
+    if let Err(e) = socket.set_write_timeout(Duration::from_millis(CAN_WRITE_TIMEOUT_MS)) {
+        warn!("Could not set the CAN write timeout ({}); writes may block", e);
+    }
     Ok(())
 }
 
@@ -71,6 +79,29 @@ pub fn read_nmea2k_frame(socket: &CanSocket) -> Result<(ExtendedId, Vec<u8>), st
     let data = frame.data().to_vec();
 
     Ok((extended_id, data))
+}
+
+/// Writes one NMEA2000 frame (29-bit extended identifier, up to 8 data bytes) to the bus
+///
+/// # Arguments
+/// * `socket` - The CAN socket to write to
+/// * `id` - The 29-bit extended identifier
+/// * `data` - The frame payload, at most 8 bytes
+///
+/// # Returns
+/// `InvalidInput` when `data` is longer than 8 bytes, otherwise the result of the socket write
+pub fn write_nmea2k_frame(
+    socket: &CanSocket,
+    id: ExtendedId,
+    data: &[u8],
+) -> Result<(), std::io::Error> {
+    let frame = socketcan::CanFrame::new(id, data).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "CAN data frame payload must be at most 8 bytes",
+        )
+    })?;
+    socket.write_frame(&frame)
 }
 
 #[cfg(test)]

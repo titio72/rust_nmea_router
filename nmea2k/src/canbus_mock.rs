@@ -39,7 +39,8 @@ pub fn open_can_socket_with_retry(interface: &str) -> CanSocket {
     }
 }
 
-/// Applies the NMEA2000 read timeout to a mock socket. Cannot fail.
+/// Applies the NMEA2000 read timeout to a mock socket. Cannot fail. There is no write timeout:
+/// mock writes never block.
 ///
 /// # Arguments
 /// * `socket` - The mock CAN socket to configure
@@ -72,6 +73,29 @@ pub fn read_nmea2k_frame(socket: &CanSocket) -> Result<(ExtendedId, Vec<u8>), st
         std::io::ErrorKind::WouldBlock,
         "mock CAN interface never receives frames",
     ))
+}
+
+/// Accepts a frame and discards it, validating the length the way the Linux backend does.
+///
+/// # Arguments
+/// * `socket` - The mock CAN socket (unused: nothing is ever transmitted)
+/// * `id` - The 29-bit extended identifier (unused)
+/// * `data` - The frame payload, at most 8 bytes
+///
+/// # Returns
+/// `InvalidInput` when `data` is longer than 8 bytes, otherwise `Ok(())`
+pub fn write_nmea2k_frame(
+    _socket: &CanSocket,
+    _id: ExtendedId,
+    data: &[u8],
+) -> Result<(), std::io::Error> {
+    if data.len() > 8 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "CAN data frame payload must be at most 8 bytes",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -113,5 +137,19 @@ mod tests {
             start.elapsed() >= TEST_TIMEOUT,
             "read must block so the caller's loop does not spin"
         );
+    }
+
+    #[test]
+    fn write_accepts_up_to_8_bytes() {
+        let id = ExtendedId::new(0x18EE_FF01).expect("valid 29-bit id");
+        assert!(write_nmea2k_frame(&test_socket(), id, &[0u8; 8]).is_ok());
+    }
+
+    #[test]
+    fn write_rejects_9_bytes() {
+        let id = ExtendedId::new(0x18EE_FF01).expect("valid 29-bit id");
+        let error = write_nmea2k_frame(&test_socket(), id, &[0u8; 9])
+            .expect_err("a CAN data frame cannot carry 9 bytes");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

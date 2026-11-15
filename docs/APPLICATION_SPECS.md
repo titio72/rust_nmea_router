@@ -171,6 +171,19 @@ External Systems:
 | 126992 | NMEASystemTime | System date and time | 1s |
 | 127488 | EngineRapidUpdate | RPM, boost, tilt/trim | 100ms |
 
+#### Network Management Messages
+
+Used only by the bus explorer (`src/bus_explorer/`), which keeps the device registry and makes the router a polite NMEA2000 node. Never treated as navigation or environmental data.
+
+| PGN | Message Type | Description | Update Rate |
+|-----|--------------|-------------|-------------|
+| 59392 | IsoAck | ISO Acknowledgment; transmitted only, as a NAK to requests the router cannot answer | on request |
+| 59904 | IsoRequest | ISO Request; decoded (requests to the router) and transmitted (identity requests) | on demand |
+| 60928 | AddressClaim | ISO Address Claim carrying the 64-bit NAME; decoded, and transmitted for the router's own address | on startup / on request |
+| 126464 | PgnList | Transmit/receive PGN lists; transmitted only, on request | on request |
+| 126993 | Heartbeat | Heartbeat interval and sequence counter; transmitted only | 60s |
+| 126996 | ProductInformation | Model ID, software/model version, serial code; decoded, and transmitted for the router on request | on request |
+
 ### 3. Adaptive Database Persistence
 
 The system intelligently adjusts data collection frequency based on vessel activity:
@@ -964,6 +977,25 @@ CREATE TABLE trips (
   - PGN not in map: Accept from all sources
 - **Use Case**: Filter duplicate sensors
 
+#### Bus Node Identity (`can.node`)
+
+```json
+{
+  "can": {
+    "node": {
+      "transmit_enabled": true,
+      "preferred_address": 100,
+      "unique_number": 271828
+    }
+  }
+}
+```
+
+- **transmit_enabled** (default `true`): the router claims an address on the bus, asks devices for their identity, answers requests addressed to it and sends a heartbeat. With `false` the bus explorer is fully listen-only and the router never transmits.
+- **preferred_address** (default `100`, range 0-251): address tried first. The router never takes an address already in use on the bus; if the preferred one is taken it picks the next free one.
+- **unique_number** (default `271828`, range 0-2097151): 21-bit unique number of the router's NAME. It must differ from any other DIY node on the bus.
+- **Validation**: out-of-range values are reverted to the defaults with a warning.
+
 #### Logging
 
 ```json
@@ -1712,8 +1744,9 @@ sudo ip link set up vcan0
 # Find CAN interface
 ip link show
 
-# Configure bitrate and bring up
+# Configure bitrate and transmit queue, then bring up
 sudo ip link set can0 type can bitrate 250000
+sudo ip link set can0 txqueuelen 100
 sudo ip link set up can0
 
 # Make persistent (systemd)
@@ -1725,8 +1758,23 @@ Name=can0
 BitRate=250000
 EOF
 
+# Persistent transmit queue length
+cat << EOF | sudo tee /etc/systemd/network/80-can.link
+[Match]
+OriginalName=can0
+
+[Link]
+TransmitQueueLength=100
+EOF
+
 sudo systemctl enable systemd-networkd
 ```
+
+`txqueuelen 100` is recommended because the bus explorer (`can.node.transmit_enabled`) answers
+Product Information requests with a 20-frame fast packet, and Linux defaults to a 10-frame transmit
+queue. When the queue is full, writes fail with `ENOBUFS`. The router treats that as backpressure:
+it keeps the unsent frames and sends them on the next loop iterations. That is slower, but a message
+is never truncated.
 
 #### 4. Build Application
 

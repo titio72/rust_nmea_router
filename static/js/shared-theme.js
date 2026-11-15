@@ -203,6 +203,7 @@ function createHeaderBar(currentPage, showConnectionStatus = false) {
         { href: '/navigation-areas.html', label: 'Navigation Areas', page: 'navigation-areas', roHidden: true },
         { href: '/plan.html', label: 'Planning', page: 'planning', roHidden: true },
         { href: '/signalk-browser.html', label: 'SignalK Browser', page: 'signalk-browser', roHidden: true },
+        { href: '/bus-explorer.html', label: 'Bus Explorer', page: 'bus-explorer', roHidden: true },
         { href: '/backup.html', label: 'Backup', page: 'backup', roHidden: true }
     ];
 
