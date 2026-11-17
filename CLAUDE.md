@@ -102,10 +102,30 @@ These apply to all code, AI-generated or otherwise. Full detail lives in AGENTS.
 ## Production Deployment
 
 ```bash
-sudo ./install.sh          # Installs to /opt/nmea_router, /etc/nmea_router, /var/log/nmea_router
+sudo ./install.sh          # Builds (in a source checkout), installs to /usr/local/bin, /opt/nmea_router, /etc/nmea_router, /var/log/nmea_router
+sudo ./deploy.sh           # stop service → install.sh → start service
+./remote_deploy.sh         # cross-build armv7, rsync to the boat, run deploy.sh there
 sudo systemctl enable nmea_router.service
 sudo systemctl start nmea_router.service
 ```
+
+The deployment chain is `remote_deploy.sh` → (remote) `deploy.sh` → `install.sh` → `download_libs.sh`. `install.sh` builds only when `Cargo.toml` is present; the remote staging dir has no sources and installs the cross-built binary.
+
+### Mandatory: keep docs, install and deployment in sync
+
+Before declaring any task done, check whether the change touches the shipped footprint and update **every** affected file in the same change:
+
+| If the change… | Update |
+|---|---|
+| adds/renames/removes a frontend library (anything under `static/libs/`, which is gitignored) or patches one | `download_libs.sh` (pinned version URL; patches idempotent) |
+| references a new static asset | make sure it exists in git under `static/` or is fetched by `download_libs.sh` — never reference a file that is neither |
+| adds a new top-level runtime file (data file, schema, migration, CSV, GeoJSON…) | `install.sh` (copy step) **and** `remote_deploy.sh` (rsync list) |
+| adds a new binary, script dir, or changes install paths/service unit | `install.sh`, `deploy.sh`, `remote_deploy.sh`, `uninstall.sh`, `nmea_router.service` |
+| changes config structs | `config.example.json` and the config docs |
+| changes behaviour, API, pages, or deployment | `README.md`, `AGENTS.md`, the relevant `docs/*.md` (`REST_API.md`, `APPLICATION_SPECS.md`, `SYSTEMD_SETUP.md`…) |
+| adds a schema change | a `schema_migration_*.sql` file plus `schema.sql`, and note how it is applied on deploy |
+
+In the final summary, state explicitly which of these were updated, or that none applied and why.
 
 ## Git Rules
 - Do NOT run `git commit` or `git push` at any point.

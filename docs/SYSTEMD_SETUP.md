@@ -1,6 +1,6 @@
 # Running NMEA Router as a systemd Service
 
-> **Recommended approach**: use `sudo ./install.sh` from the project root — it builds the release binary, installs it to `/opt/nmea_router`, copies config to `/etc/nmea_router`, sets up the log directory `/var/log/nmea_router`, and registers the systemd unit. The manual steps below are for reference or customisation only.
+> **Recommended approach**: use `sudo ./install.sh` from the project root — from a source checkout it runs `cargo build --release` as the invoking user, installs the binary to `/usr/local/bin/nmea_router` and the UI to `/opt/nmea_router/static` (fetching frontend libraries via `download_libs.sh`), copies config to `/etc/nmea_router`, sets up the log directory `/var/log/nmea_router`, and registers the systemd unit. Without a `Cargo.toml` (the staging dir `remote_deploy.sh` creates on the boat) it installs the prebuilt `target/release/nmea_router` as-is. `sudo ./deploy.sh` wraps it with a service stop/start. The manual steps below are for reference or customisation only.
 
 ## Prerequisites
 

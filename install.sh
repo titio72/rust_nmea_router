@@ -45,6 +45,25 @@ echo -e "${YELLOW}Creating configuration directory...${NC}"
 mkdir -p "$CONFIG_DIR"
 echo -e "${GREEN}✓ Created $CONFIG_DIR${NC}"
 
+# Build the release binary when run from a source checkout. remote_deploy.sh
+# stages a cross-compiled binary without sources (no Cargo.toml), so there we
+# install the prebuilt binary as-is. Build as the invoking user so root never
+# owns files under target/ and the user's own toolchain (rustup) is used.
+if [ -f "Cargo.toml" ]; then
+    echo -e "${YELLOW}Building release binary (as $ACTUAL_USER)...${NC}"
+    if ! sudo -u "$ACTUAL_USER" bash -lc "cd '$PWD' && cargo build --release --bin nmea_router"; then
+        echo -e "${RED}Error: cargo build failed (is cargo on $ACTUAL_USER's login PATH?)${NC}"
+        echo -e "${RED}  Run 'cargo build --release' yourself and re-run this script.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Build complete${NC}"
+fi
+
+if [ ! -f "target/release/nmea_router" ]; then
+    echo -e "${RED}Error: target/release/nmea_router not found${NC}"
+    exit 1
+fi
+
 # Copy binary
 echo -e "${YELLOW}Installing binary...${NC}"
 cp target/release/nmea_router "$BINARY_PATH"
